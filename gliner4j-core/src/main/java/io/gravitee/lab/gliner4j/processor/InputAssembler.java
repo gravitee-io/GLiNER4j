@@ -34,6 +34,7 @@ public class InputAssembler {
   private final long[] cachedSchemaIds;
   private final TokenMapping[] cachedSchemaMappings;
   private final long[] cachedSepIds;
+  private final long[] schemaPrefixIds;
   private final int numFields;
   private final List<String> fieldNames;
 
@@ -77,6 +78,33 @@ public class InputAssembler {
     // Pre-tokenize [SEP_TEXT] separator
     var sepResult = tokenizer.tokenizeWithIds("[SEP_TEXT]");
     this.cachedSepIds = sepResult.ids();
+
+    // Build concatenated prefix for buffer reuse in runtime
+    this.schemaPrefixIds =
+      new long[cachedSchemaIds.length + cachedSepIds.length];
+    System.arraycopy(
+      cachedSchemaIds,
+      0,
+      schemaPrefixIds,
+      0,
+      cachedSchemaIds.length
+    );
+    System.arraycopy(
+      cachedSepIds,
+      0,
+      schemaPrefixIds,
+      cachedSchemaIds.length,
+      cachedSepIds.length
+    );
+  }
+
+  /**
+   * Returns the concatenated schema + separator token IDs that form the constant prefix of every input.
+   *
+   * @return the prefix token IDs
+   */
+  public long[] getSchemaPrefixIds() {
+    return schemaPrefixIds;
   }
 
   /**
