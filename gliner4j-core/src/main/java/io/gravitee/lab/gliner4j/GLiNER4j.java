@@ -49,7 +49,6 @@ public class GLiNER4j implements AutoCloseable {
   private final List<EntityDefinition> entities;
   private final DjlTokenizerWrapper tokenizer;
   private final GLiNER4jRuntime runtime;
-  private final SchemaEncoder schemaEncoder;
   private final InputAssembler inputAssembler;
   private final WhitespaceTokenSplitter splitter;
   private final SpanDecoder spanDecoder;
@@ -59,14 +58,12 @@ public class GLiNER4j implements AutoCloseable {
     List<EntityDefinition> entities,
     DjlTokenizerWrapper tokenizer,
     GLiNER4jRuntime runtime,
-    SchemaEncoder schemaEncoder,
     InputAssembler inputAssembler
   ) {
     this.config = config;
     this.entities = List.copyOf(entities);
     this.tokenizer = tokenizer;
     this.runtime = runtime;
-    this.schemaEncoder = schemaEncoder;
     this.inputAssembler = inputAssembler;
     this.splitter = new WhitespaceTokenSplitter();
     this.spanDecoder = new SpanDecoder();
@@ -90,17 +87,10 @@ public class GLiNER4j implements AutoCloseable {
     var tokenizer = new DjlTokenizerWrapper(modelDir);
     var runtime = new GLiNER4jRuntime(modelDir);
     var schemaEncoder = new SchemaEncoder(entities);
-    var inputAssembler = new InputAssembler(tokenizer);
+    var inputAssembler = new InputAssembler(tokenizer, schemaEncoder);
 
     log.info("GLiNER4j model loaded successfully");
-    return new GLiNER4j(
-      config,
-      entities,
-      tokenizer,
-      runtime,
-      schemaEncoder,
-      inputAssembler
-    );
+    return new GLiNER4j(config, entities, tokenizer, runtime, inputAssembler);
   }
 
   /**
@@ -132,7 +122,7 @@ public class GLiNER4j implements AutoCloseable {
     }
 
     // 2. Assemble full token sequence
-    var input = inputAssembler.assemble(schemaEncoder, textEncoder);
+    var input = inputAssembler.assemble(textEncoder);
 
     // 3. Run encoder
     var hiddenStates = runtime.runEncoder(

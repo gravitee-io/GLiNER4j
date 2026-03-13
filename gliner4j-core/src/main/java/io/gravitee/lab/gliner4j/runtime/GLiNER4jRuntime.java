@@ -46,6 +46,7 @@ public class GLiNER4jRuntime implements AutoCloseable {
       this.env = OrtEnvironment.getEnvironment();
       var opts = new OrtSession.SessionOptions();
       opts.setIntraOpNumThreads(Runtime.getRuntime().availableProcessors());
+      opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
 
       log.info("Loading encoder.onnx...");
       this.encoderSession =
