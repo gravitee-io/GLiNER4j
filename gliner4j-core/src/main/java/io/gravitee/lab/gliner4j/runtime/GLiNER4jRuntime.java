@@ -19,6 +19,8 @@ import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.LongBuffer;
 import java.nio.file.Path;
 import java.util.Map;
@@ -36,6 +38,13 @@ public class GLiNER4jRuntime implements AutoCloseable {
   private final OrtSession spanRepSession;
   private final OrtSession scoringHeadSession;
 
+  // Pre-allocated encoder buffers (single-thread assumption — not thread-safe)
+  private long[] schemaPrefixIds;
+  private int schemaPrefixLen;
+  private LongBuffer encoderIdsBuf;
+  private LongBuffer encoderMaskBuf;
+  private int encoderBufCapacity;
+
   /**
    * Creates ONNX runtime sessions for all three model files.
    *
@@ -44,23 +53,46 @@ public class GLiNER4jRuntime implements AutoCloseable {
   public GLiNER4jRuntime(Path modelDir) {
     try {
       this.env = OrtEnvironment.getEnvironment();
-      var opts = new OrtSession.SessionOptions();
-      opts.setIntraOpNumThreads(Runtime.getRuntime().availableProcessors());
+      int numCpus = Runtime.getRuntime().availableProcessors();
 
       log.info("Loading encoder.onnx...");
-      this.encoderSession =
-        env.createSession(modelDir.resolve("encoder.onnx").toString(), opts);
+      try (
+        var opts = createSessionOptions(
+          numCpus,
+          modelDir,
+          "encoder_optimized.onnx"
+        )
+      ) {
+        this.encoderSession =
+          env.createSession(modelDir.resolve("encoder.onnx").toString(), opts);
+      }
 
       log.info("Loading span_rep.onnx...");
-      this.spanRepSession =
-        env.createSession(modelDir.resolve("span_rep.onnx").toString(), opts);
+      try (
+        var opts = createSessionOptions(
+          numCpus,
+          modelDir,
+          "span_rep_optimized.onnx"
+        )
+      ) {
+        this.spanRepSession =
+          env.createSession(modelDir.resolve("span_rep.onnx").toString(), opts);
+      }
 
       log.info("Loading scoring_head.onnx...");
-      this.scoringHeadSession =
-        env.createSession(
-          modelDir.resolve("scoring_head.onnx").toString(),
-          opts
-        );
+      try (
+        var opts = createSessionOptions(
+          numCpus,
+          modelDir,
+          "scoring_head_optimized.onnx"
+        )
+      ) {
+        this.scoringHeadSession =
+          env.createSession(
+            modelDir.resolve("scoring_head.onnx").toString(),
+            opts
+          );
+      }
 
       log.info("All ONNX sessions loaded successfully");
     } catch (OrtException e) {
@@ -69,6 +101,32 @@ public class GLiNER4jRuntime implements AutoCloseable {
         e
       );
     }
+  }
+
+  private static OrtSession.SessionOptions createSessionOptions(
+    int numCpus,
+    Path modelDir,
+    String optimizedFileName
+  ) throws OrtException {
+    var opts = new OrtSession.SessionOptions();
+    opts.setIntraOpNumThreads(numCpus);
+    opts.setInterOpNumThreads(2);
+    opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+    opts.setOptimizedModelFilePath(
+      modelDir.resolve(optimizedFileName).toString()
+    );
+    return opts;
+  }
+
+  /**
+   * Initializes reusable encoder buffers with the schema prefix that is constant across requests.
+   *
+   * @param schemaPrefix the concatenated schema + separator token IDs
+   */
+  public void initEncoderBuffers(long[] schemaPrefix) {
+    this.schemaPrefixIds = schemaPrefix;
+    this.schemaPrefixLen = schemaPrefix.length;
+    this.encoderBufCapacity = 0;
   }
 
   /**
@@ -80,16 +138,41 @@ public class GLiNER4jRuntime implements AutoCloseable {
    */
   public float[][][] runEncoder(long[] inputIds, long[] attentionMask) {
     try {
-      var idsTensor = OnnxTensor.createTensor(
-        env,
-        LongBuffer.wrap(inputIds),
-        new long[] { 1, inputIds.length }
-      );
-      var maskTensor = OnnxTensor.createTensor(
-        env,
-        LongBuffer.wrap(attentionMask),
-        new long[] { 1, attentionMask.length }
-      );
+      int seqLen = inputIds.length;
+      LongBuffer idsBuf;
+      LongBuffer maskBuf;
+
+      if (schemaPrefixIds != null) {
+        // Reuse pre-allocated direct buffers, growing on demand
+        if (seqLen > encoderBufCapacity) {
+          encoderBufCapacity = seqLen + 64; // slight over-allocate
+          encoderIdsBuf = allocateDirectLongBuffer(encoderBufCapacity);
+          encoderMaskBuf = allocateDirectLongBuffer(encoderBufCapacity);
+          // Pre-fill schema prefix into ids buffer
+          encoderIdsBuf.put(schemaPrefixIds).rewind();
+          // Pre-fill mask with 1s for entire capacity
+          for (int i = 0; i < encoderBufCapacity; i++) {
+            encoderMaskBuf.put(i, 1L);
+          }
+        }
+        // Write text suffix after the cached schema prefix
+        encoderIdsBuf.limit(encoderBufCapacity).position(schemaPrefixLen);
+        encoderIdsBuf.put(inputIds, schemaPrefixLen, seqLen - schemaPrefixLen);
+        encoderIdsBuf.rewind().limit(seqLen);
+
+        // Mask is pre-filled with 1s, just set the limit
+        encoderMaskBuf.rewind().limit(seqLen);
+
+        idsBuf = encoderIdsBuf;
+        maskBuf = encoderMaskBuf;
+      } else {
+        idsBuf = allocateDirectLongBuffer(inputIds);
+        maskBuf = allocateDirectLongBuffer(attentionMask);
+      }
+
+      var shape = new long[] { 1, seqLen };
+      var idsTensor = OnnxTensor.createTensor(env, idsBuf, shape);
+      var maskTensor = OnnxTensor.createTensor(env, maskBuf, shape);
 
       try (
         var result = encoderSession.run(
@@ -154,7 +237,7 @@ public class GLiNER4jRuntime implements AutoCloseable {
       var fieldsTensor = OnnxTensor.createTensor(env, schemaEmbFields);
       var countTensor = OnnxTensor.createTensor(
         env,
-        LongBuffer.wrap(new long[] { count }),
+        allocateDirectLongBuffer(new long[] { count }),
         new long[] {}
       );
 
@@ -190,6 +273,22 @@ public class GLiNER4jRuntime implements AutoCloseable {
     } catch (OrtException e) {
       throw new RuntimeException("ScoringHead inference failed", e);
     }
+  }
+
+  private static LongBuffer allocateDirectLongBuffer(long[] data) {
+    return ByteBuffer
+      .allocateDirect(data.length * Long.BYTES)
+      .order(ByteOrder.nativeOrder())
+      .asLongBuffer()
+      .put(data)
+      .rewind();
+  }
+
+  private static LongBuffer allocateDirectLongBuffer(int capacity) {
+    return ByteBuffer
+      .allocateDirect(capacity * Long.BYTES)
+      .order(ByteOrder.nativeOrder())
+      .asLongBuffer();
   }
 
   @Override

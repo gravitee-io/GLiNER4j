@@ -15,7 +15,6 @@
  */
 package io.gravitee.lab.gliner4j.tokenizer;
 
-import ai.djl.huggingface.tokenizers.Encoding;
 import ai.djl.huggingface.tokenizers.HuggingFaceTokenizer;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -71,74 +70,15 @@ public class DjlTokenizerWrapper implements AutoCloseable {
   }
 
   /**
-   * Converts subword token strings to their vocabulary IDs.
+   * Tokenizes a word into subwords and returns both tokens and IDs in a single call.
+   * Avoids the double-encoding overhead of calling tokenize() + convertTokensToIds() separately.
    *
-   * @param tokens list of subword tokens
-   * @return array of token IDs
+   * @param word the word to tokenize
+   * @return tokenization result with both token strings and vocabulary IDs
    */
-  public long[] convertTokensToIds(List<String> tokens) {
-    var ids = new long[tokens.size()];
-    for (int i = 0; i < tokens.size(); i++) {
-      ids[i] = tokenizer.encode(tokens.get(i), false, false).getIds()[0];
-    }
-    return ids;
-  }
-
-  /**
-   * Encodes a pre-tokenized list of words. Each word is tokenized into subwords,
-   * and the full sequence of IDs is returned along with word-to-subword mappings.
-   *
-   * @param words the pre-tokenized words
-   * @return encoding with IDs and word mappings
-   */
-  public Encoding encode(List<String> words) {
-    var allTokens = new ArrayList<String>();
-    var wordIds = new ArrayList<Integer>();
-    for (int w = 0; w < words.size(); w++) {
-      var subwords = tokenize(words.get(w));
-      for (var sw : subwords) {
-        allTokens.add(sw);
-        wordIds.add(w);
-      }
-    }
-    // Encode the full flat token list to get proper IDs
-    var sb = new StringBuilder();
-    for (int i = 0; i < allTokens.size(); i++) {
-      if (i > 0) sb.append(" ");
-      sb.append(allTokens.get(i));
-    }
-    return tokenizer.encode(sb.toString(), false, false);
-  }
-
-  /**
-   * Encodes a raw string (not pre-tokenized).
-   *
-   * @param text the text to encode
-   * @return encoding with IDs
-   */
-  public Encoding encodeRaw(String text) {
-    return tokenizer.encode(text, false, false);
-  }
-
-  /**
-   * Gets the token ID for a single token string.
-   *
-   * @param token the token string
-   * @return the token ID
-   */
-  public long tokenToId(String token) {
-    var encoding = tokenizer.encode(token, false, false);
-    var ids = encoding.getIds();
-    if (ids.length == 1) {
-      return ids[0];
-    }
-    // For special tokens that encode to exactly themselves
-    for (int i = 0; i < encoding.getTokens().length; i++) {
-      if (encoding.getTokens()[i].equals(token)) {
-        return ids[i];
-      }
-    }
-    return ids[0];
+  public TokenizationResult tokenizeWithIds(String word) {
+    var encoding = tokenizer.encode(word, false, false);
+    return new TokenizationResult(encoding.getTokens(), encoding.getIds());
   }
 
   @Override

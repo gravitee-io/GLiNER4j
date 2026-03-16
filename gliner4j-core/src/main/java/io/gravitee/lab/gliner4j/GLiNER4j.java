@@ -49,7 +49,6 @@ public class GLiNER4j implements AutoCloseable {
   private final List<EntityDefinition> entities;
   private final DjlTokenizerWrapper tokenizer;
   private final GLiNER4jRuntime runtime;
-  private final SchemaEncoder schemaEncoder;
   private final InputAssembler inputAssembler;
   private final WhitespaceTokenSplitter splitter;
   private final SpanDecoder spanDecoder;
@@ -59,14 +58,12 @@ public class GLiNER4j implements AutoCloseable {
     List<EntityDefinition> entities,
     DjlTokenizerWrapper tokenizer,
     GLiNER4jRuntime runtime,
-    SchemaEncoder schemaEncoder,
     InputAssembler inputAssembler
   ) {
     this.config = config;
     this.entities = List.copyOf(entities);
     this.tokenizer = tokenizer;
     this.runtime = runtime;
-    this.schemaEncoder = schemaEncoder;
     this.inputAssembler = inputAssembler;
     this.splitter = new WhitespaceTokenSplitter();
     this.spanDecoder = new SpanDecoder();
@@ -90,17 +87,13 @@ public class GLiNER4j implements AutoCloseable {
     var tokenizer = new DjlTokenizerWrapper(modelDir);
     var runtime = new GLiNER4jRuntime(modelDir);
     var schemaEncoder = new SchemaEncoder(entities);
-    var inputAssembler = new InputAssembler(tokenizer);
+    var inputAssembler = new InputAssembler(tokenizer, schemaEncoder);
+
+    // Pre-allocate encoder buffers with the constant schema prefix
+    runtime.initEncoderBuffers(inputAssembler.getSchemaPrefixIds());
 
     log.info("GLiNER4j model loaded successfully");
-    return new GLiNER4j(
-      config,
-      entities,
-      tokenizer,
-      runtime,
-      schemaEncoder,
-      inputAssembler
-    );
+    return new GLiNER4j(config, entities, tokenizer, runtime, inputAssembler);
   }
 
   /**
@@ -132,7 +125,7 @@ public class GLiNER4j implements AutoCloseable {
     }
 
     // 2. Assemble full token sequence
-    var input = inputAssembler.assemble(schemaEncoder, textEncoder);
+    var input = inputAssembler.assemble(textEncoder);
 
     // 3. Run encoder
     var hiddenStates = runtime.runEncoder(
@@ -166,32 +159,24 @@ public class GLiNER4j implements AutoCloseable {
     var spanRep4d = runtime.runSpanRep(textEmbs3d, spanIdx);
     var spanRep = spanRep4d[0]; // [textLen][maxWidth][hidden]
 
-    // 7. Run scoring head with count=1 to get count prediction
-    var firstResult = runtime.runScoringHead(
+    // 7. Run scoring head once with maxCount — countLogits is independent of the count input
+    var scoringResult = runtime.runScoringHead(
       spanRep,
       embeddings.schemaEmbP,
       embeddings.schemaEmbFields,
-      1L
+      (long) config.getMaxCount()
     );
 
     // 8. Predict count from logits
-    int predCount = argmax(firstResult.countLogits()[0]);
+    int predCount = argmax(scoringResult.countLogits()[0]);
     log.debug("Predicted count: {}", predCount);
     if (predCount == 0) {
       return Map.of();
     }
 
-    // 9. Run scoring head with predicted count
-    var finalResult = runtime.runScoringHead(
-      spanRep,
-      embeddings.schemaEmbP,
-      embeddings.schemaEmbFields,
-      predCount
-    );
-
-    // 10. Decode spans
+    // 9. Decode spans (SpanDecoder uses spanScores[0] only)
     var spans = spanDecoder.decode(
-      finalResult.spanScores(),
+      scoringResult.spanScores(),
       input.fieldNames(),
       input.wordStartChars(),
       input.wordEndChars(),
@@ -200,7 +185,7 @@ public class GLiNER4j implements AutoCloseable {
       threshold
     );
 
-    // 11. Group by type
+    // 10. Group by type
     return spans
       .stream()
       .collect(
