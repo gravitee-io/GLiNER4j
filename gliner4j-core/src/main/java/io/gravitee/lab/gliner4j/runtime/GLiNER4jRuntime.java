@@ -307,6 +307,39 @@ public class GLiNER4jRuntime implements AutoCloseable {
     }
   }
 
+  /**
+   * Runs the encoder model without buffer caching — used for per-call entity overrides
+   * where the schema prefix differs from the one cached at load time.
+   *
+   * @param inputIds token IDs [seqLen]
+   * @param attentionMask attention mask [seqLen]
+   * @return last hidden state [1][seqLen][hiddenSize]
+   */
+  public float[][][] runEncoderFull(long[] inputIds, long[] attentionMask) {
+    try {
+      int seqLen = inputIds.length;
+      var idsBuf = allocateDirectLongBuffer(inputIds);
+      var maskBuf = allocateDirectLongBuffer(attentionMask);
+
+      var shape = new long[] { 1, seqLen };
+      var idsTensor = OnnxTensor.createTensor(env, idsBuf, shape);
+      var maskTensor = OnnxTensor.createTensor(env, maskBuf, shape);
+
+      try (
+        var result = encoderSession.run(
+          Map.of("input_ids", idsTensor, "attention_mask", maskTensor)
+        )
+      ) {
+        return (float[][][]) result.get(0).getValue();
+      } finally {
+        idsTensor.close();
+        maskTensor.close();
+      }
+    } catch (OrtException e) {
+      throw new RuntimeException("Encoder inference failed", e);
+    }
+  }
+
   private static LongBuffer allocateDirectLongBuffer(long[] data) {
     return ByteBuffer
       .allocateDirect(data.length * Long.BYTES)
