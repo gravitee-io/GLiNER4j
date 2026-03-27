@@ -18,7 +18,7 @@
 version: "3"
 
 vars:
-  HF_MODEL: "fastino-ai/gliner2-base"
+  HF_MODEL: "fastino/gliner2-base-v1"
   HF_LOCAL_DIR: "models/gliner2-base-hf"
   ONNX_OUTPUT_DIR: "models/gliner2-base-onnx"
 
@@ -53,19 +53,19 @@ tasks:
         msg: "mvn not found. Install Maven: https://maven.apache.org/install.html"
 
   model:export:
-    desc: Export PyTorch model to ONNX format (encoder, span_rep, scoring_head)
+    desc: Export PyTorch model to ONNX format (base + optional variants)
     deps:
       - model:download
       - check:uv
     cmds:
-      - uv run scripts/export_onnx.py --model-path {{.HF_LOCAL_DIR}} --output-dir {{.ONNX_OUTPUT_DIR}}
+      - uv run scripts/export_onnx.py --model-path {{.HF_LOCAL_DIR}} --output-dir {{.ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default ""}}
     sources:
       - scripts/export_onnx.py
       - "{{.HF_LOCAL_DIR}}/**/*"
     generates:
-      - "{{.ONNX_OUTPUT_DIR}}/encoder.onnx"
-      - "{{.ONNX_OUTPUT_DIR}}/span_rep.onnx"
-      - "{{.ONNX_OUTPUT_DIR}}/scoring_head.onnx"
+      - "{{.ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
+      - "{{.ONNX_OUTPUT_DIR}}/onnx/span_rep.onnx"
+      - "{{.ONNX_OUTPUT_DIR}}/onnx/scoring_head.onnx"
       - "{{.ONNX_OUTPUT_DIR}}/gliner4j_config.json"
       - "{{.ONNX_OUTPUT_DIR}}/tokenizer.json"
 
@@ -111,6 +111,7 @@ tasks:
         msg: "ONNX model directory not found. Run: task model:export"
     cmds:
       - uv run --with huggingface-hub hf upload {{.HF_REPO}} {{.ONNX_OUTPUT_DIR}} --commit-message "Upload ONNX model files"
+      - uv run --with huggingface-hub hf upload {{.HF_REPO}} MODEL_CARD.md README.md --commit-message "Upload model card"
 
   benchmark:
     desc: Run JMH benchmarks

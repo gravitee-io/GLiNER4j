@@ -1,0 +1,72 @@
+---
+language:
+  - en
+license: apache-2.0
+library_name: onnx
+tags:
+  - ner
+  - named-entity-recognition
+  - gliner
+  - gliner2
+  - java
+  - onnx-runtime
+pipeline_tag: token-classification
+base_model: fastino-ai/gliner2-base
+---
+
+# GLiNER4j ONNX
+
+ONNX export of [fastino-ai/gliner2-base](https://huggingface.co/fastino-ai/gliner2-base) for Java inference via [ONNX Runtime](https://onnxruntime.ai/).
+
+Part of the [gliner4j](https://github.com/gravitee-io/gliner4j) project.
+
+## Model Architecture
+
+The model is split into 3 ONNX modules for modular inference:
+
+| File | Description |
+|------|-------------|
+| `encoder.onnx` | DebertaV2 transformer encoder |
+| `span_rep.onnx` | Span representation layer |
+| `scoring_head.onnx` | Count-aware scoring head |
+
+Optimized variants (`*_optimized.onnx`) are also provided.
+
+## Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| Hidden size | 768 |
+| Max span width | 8 |
+| Max count | 20 |
+| Span mode | SpanMarkerV0 |
+| Token pooling | first |
+| ONNX opset | 17 |
+
+## Usage
+
+Use with [gliner4j](https://github.com/gravitee-io/gliner4j), a Java library for GLiNER2 inference via ONNX Runtime.
+
+## Benchmarks
+
+Measured with JMH (average time, 15 iterations):
+
+#### 4 Entity Types
+
+| Batch Size | Avg Latency (ms/op) | Per-Text (ms) | Throughput (texts/s) |
+|:----------:|:--------------------:|:--------------:|:--------------------:|
+| 1 | 26.5 | 26.5 | ~37.7 |
+| 4 | 143.5 | 35.9 | ~27.9 |
+| 8 | 286.6 | 35.8 | ~27.9 |
+
+#### 8 Entity Types
+
+| Batch Size | Avg Latency (ms/op) | Per-Text (ms) | Throughput (texts/s) |
+|:----------:|:--------------------:|:--------------:|:--------------------:|
+| 1 | 34.1 | 34.1 | ~29.3 |
+| 4 | 174.6 | 43.7 | ~22.9 |
+| 8 | 339.2 | 42.4 | ~23.6 |
+
+## License
+
+Apache License 2.0

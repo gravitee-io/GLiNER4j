@@ -70,22 +70,42 @@ public class GLiNER4j implements AutoCloseable {
   }
 
   /**
-   * Loads a GLiNER model and pre-computes schema encoding for the given entities.
+   * Loads a GLiNER model using the default "onnx" variant.
    *
-   * @param modelDir path to the directory containing ONNX models and tokenizer files
+   * @param modelDir path to the root model directory
    * @param entities the entity types to extract
    * @return a ready-to-use GLiNER4j instance
    */
   public static GLiNER4j load(Path modelDir, List<EntityDefinition> entities) {
+    return load(modelDir, entities, GLiNER4jRuntime.DEFAULT_VARIANT);
+  }
+
+  /**
+   * Loads a GLiNER model with a specific ONNX variant.
+   *
+   * <p>The model directory should contain shared files (config, tokenizer) at the root
+   * and ONNX model files in variant subfolders (e.g. "onnx", "onnx_fp16", "onnx_quantized").
+   *
+   * @param modelDir path to the root model directory
+   * @param entities the entity types to extract
+   * @param variant  ONNX variant folder name (e.g. "onnx", "onnx_fp16", "onnx_quantized")
+   * @return a ready-to-use GLiNER4j instance
+   */
+  public static GLiNER4j load(
+    Path modelDir,
+    List<EntityDefinition> entities,
+    String variant
+  ) {
     log.info(
-      "Loading GLiNER4j model from {} with {} entities",
+      "Loading GLiNER4j model from {} (variant={}) with {} entities",
       modelDir,
+      variant,
       entities.size()
     );
 
     var config = GLiNER4jConfig.load(modelDir);
     var tokenizer = new DjlTokenizerWrapper(modelDir);
-    var runtime = new GLiNER4jRuntime(modelDir);
+    var runtime = new GLiNER4jRuntime(modelDir, variant);
     var schemaEncoder = new SchemaEncoder(entities);
     var inputAssembler = new InputAssembler(tokenizer, schemaEncoder);
 

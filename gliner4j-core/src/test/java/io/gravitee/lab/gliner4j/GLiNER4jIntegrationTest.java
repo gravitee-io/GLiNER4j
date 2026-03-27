@@ -36,7 +36,7 @@ class GLiNER4jIntegrationTest {
   private static final Path MODEL_DIR = Path.of("models/gliner2-base-onnx");
 
   static boolean modelDirExists() {
-    return Files.exists(MODEL_DIR.resolve("encoder.onnx"));
+    return Files.exists(MODEL_DIR.resolve("onnx/encoder.onnx"));
   }
 
   @Test

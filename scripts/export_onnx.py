@@ -31,23 +31,33 @@
 #     "urllib3>=2.0",
 #     "requests>=2.31",
 #     "onnxscript>=0.1",
+#     "onnxconverter-common>=1.14",
 # ]
 # ///
 """GLiNER2 → ONNX export script for gliner4j.
 
-Exports a GLiNER2 PyTorch model into 3 ONNX models:
+Exports a GLiNER2 PyTorch model into 3 ONNX models organized by variant:
+  - onnx/              Base FP32 models
+  - onnx_fp16/         FP16 converted models (optional)
+  - onnx_quantized/    INT8 dynamically-quantized models (optional)
+
+Each variant folder contains:
   - encoder.onnx:      Transformer encoder (input_ids → last_hidden_state)
   - span_rep.onnx:     Span representation layer
   - scoring_head.onnx: Count-aware scoring head
 
+Shared files (config, tokenizer) live at the output root.
+
 Usage:
     uv run scripts/export_onnx.py --model-path fastino-ai/gliner2-base --output-dir models/out
+    uv run scripts/export_onnx.py --model-path fastino-ai/gliner2-base --output-dir models/out --variants fp16 quantized
 """
 
 from __future__ import annotations
 
 import json
 import sys
+from enum import Enum
 from pathlib import Path
 from typing import Annotated
 
@@ -738,6 +748,58 @@ def _print_verify(
 
 
 # ===========================================================================
+# Variant Conversion
+# ===========================================================================
+
+ONNX_MODEL_FILES = ("encoder.onnx", "span_rep.onnx", "scoring_head.onnx")
+
+
+class Variant(str, Enum):
+    """ONNX model variants that can be generated from the base export."""
+
+    fp16 = "fp16"
+    quantized = "quantized"
+
+
+def _convert_to_fp16(base_dir: Path, output_dir: Path) -> None:
+    """Convert base ONNX models to FP16.
+
+    Args:
+        base_dir: Directory containing base FP32 ONNX models.
+        output_dir: Directory to write FP16 models.
+    """
+    from onnxconverter_common import float16
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for name in ONNX_MODEL_FILES:
+        model = onnx.load(str(base_dir / name))
+        model_fp16 = float16.convert_float_to_float16(model, keep_io_types=True)
+        onnx.save(model_fp16, str(output_dir / name))
+        size_mb = (output_dir / name).stat().st_size / 1e6
+        console.print(f"  [green]✓[/green] {name} ({size_mb:.1f} MB)")
+
+
+def _convert_to_quantized(base_dir: Path, output_dir: Path) -> None:
+    """Convert base ONNX models to INT8 dynamic quantization.
+
+    Args:
+        base_dir: Directory containing base FP32 ONNX models.
+        output_dir: Directory to write quantized models.
+    """
+    from onnxruntime.quantization import QuantType, quantize_dynamic
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for name in ONNX_MODEL_FILES:
+        quantize_dynamic(
+            model_input=base_dir / name,
+            model_output=output_dir / name,
+            weight_type=QuantType.QInt8,
+        )
+        size_mb = (output_dir / name).stat().st_size / 1e6
+        console.print(f"  [green]✓[/green] {name} ({size_mb:.1f} MB)")
+
+
+# ===========================================================================
 # CLI
 # ===========================================================================
 
@@ -756,13 +818,23 @@ def export(
     verify: Annotated[
         bool, typer.Option("--verify/--no-verify", help="Run verification after export")
     ] = True,
+    variants: Annotated[
+        list[Variant] | None,
+        typer.Option("--variant", help="Additional variants to generate (fp16, quantized)"),
+    ] = None,
 ) -> None:
-    """Export a GLiNER2 PyTorch model to 3 ONNX models for gliner4j."""
+    """Export a GLiNER2 PyTorch model to ONNX models for gliner4j.
+
+    Base FP32 models are always exported to {output_dir}/onnx/.
+    Additional variants (fp16, quantized) are placed in {output_dir}/onnx_{variant}/.
+    Config and tokenizer are written to {output_dir}/ (shared across variants).
+    """
     # Import directly from gliner2.model to avoid __init__ pulling in api_client
     from gliner2.model import Extractor  # noqa: E402
 
     out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
+    base_dir = out / "onnx"
+    base_dir.mkdir(parents=True, exist_ok=True)
 
     # Step 1: Load model
     console.print(f"\n[bold]Loading model from {model_path}...[/bold]")
@@ -779,42 +851,66 @@ def export(
         f"counting_layer={counting_layer}, token_pooling={token_pooling}"
     )
 
-    # Step 2–4: Export ONNX models
-    console.print(f"\n[bold]Exporting ONNX models (opset={opset})...[/bold]")
+    # Step 2–4: Export base ONNX models to onnx/ subfolder
+    console.print(f"\n[bold]Exporting ONNX models to {base_dir} (opset={opset})...[/bold]")
 
     with torch.no_grad():
-        _export_encoder(model, out, opset, hidden_size)
-        _export_span_rep(model, out, opset, hidden_size, max_width)
-        _export_scoring_head(model, out, opset, hidden_size, max_width, counting_layer)
+        _export_encoder(model, base_dir, opset, hidden_size)
+        _export_span_rep(model, base_dir, opset, hidden_size, max_width)
+        _export_scoring_head(model, base_dir, opset, hidden_size, max_width, counting_layer)
 
-    # Step 5: Write config
+    # Step 5: Write config to root
     console.print(f"\n[bold]Writing config and tokenizer...[/bold]")
     _write_config(model, out, counting_layer, token_pooling, hidden_size, max_width)
 
-    # Step 6: Copy tokenizer
+    # Step 6: Copy tokenizer to root
     _copy_tokenizer(model, out)
 
-    # Step 7: Verification
+    # Step 7: Verification of base models
     if verify:
-        console.print(f"\n[bold]Verifying ONNX models...[/bold]")
+        console.print(f"\n[bold]Verifying base ONNX models...[/bold]")
         all_ok = True
-        all_ok &= _verify_encoder(model, out, hidden_size)
-        all_ok &= _verify_span_rep(model, out, hidden_size, max_width)
-        all_ok &= _verify_scoring_head(model, out, hidden_size, max_width, counting_layer)
+        all_ok &= _verify_encoder(model, base_dir, hidden_size)
+        all_ok &= _verify_span_rep(model, base_dir, hidden_size, max_width)
+        all_ok &= _verify_scoring_head(model, base_dir, hidden_size, max_width, counting_layer)
 
         if all_ok:
-            console.print("\n[bold green]All verifications passed![/bold green]")
+            console.print("\n[bold green]Base model verifications passed![/bold green]")
         else:
             console.print("\n[bold red]Some verifications failed![/bold red]")
             raise typer.Exit(code=1)
 
-    console.print(f"\n[bold]Output files in {out}:[/bold]")
-    for f in sorted(out.iterdir()):
-        size = f.stat().st_size
-        if size > 1e6:
-            console.print(f"  {f.name} ({size / 1e6:.1f} MB)")
+    # Step 8: Generate additional variants
+    if variants:
+        for variant in variants:
+            variant_dir = out / f"onnx_{variant.value}"
+            console.print(f"\n[bold]Generating {variant.value} variant → {variant_dir}...[/bold]")
+            if variant == Variant.fp16:
+                _convert_to_fp16(base_dir, variant_dir)
+            elif variant == Variant.quantized:
+                _convert_to_quantized(base_dir, variant_dir)
+
+    # Summary
+    console.print(f"\n[bold]Output structure in {out}:[/bold]")
+    _print_tree(out)
+
+
+def _print_tree(root: Path, prefix: str = "  ") -> None:
+    """Print a simple directory tree.
+
+    Args:
+        root: Root directory to display.
+        prefix: Indentation prefix.
+    """
+    entries = sorted(root.iterdir(), key=lambda p: (not p.is_dir(), p.name))
+    for entry in entries:
+        if entry.is_dir():
+            console.print(f"{prefix}[bold]{entry.name}/[/bold]")
+            _print_tree(entry, prefix + "  ")
         else:
-            console.print(f"  {f.name} ({size / 1e3:.1f} KB)")
+            size = entry.stat().st_size
+            label = f"{size / 1e6:.1f} MB" if size > 1e6 else f"{size / 1e3:.1f} KB"
+            console.print(f"{prefix}{entry.name} ({label})")
 
 
 if __name__ == "__main__":
