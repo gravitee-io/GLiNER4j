@@ -38,15 +38,19 @@ task test
 ## Uploading to HuggingFace
 
 ```bash
-# Login (one-time)
-uv run --with huggingface-hub hf login
-
-# Create a private repo
-uv run --with huggingface-hub hf repos create gliner4j-onnx --private
-
-# Upload the ONNX model
 task hf-upload HF_REPO=<your-username>/gliner4j-onnx
 ```
+
+> **Note:** This requires a HuggingFace account and a pre-existing repository. To set up:
+>
+> ```bash
+> # Authenticate (pick one)
+> export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxx"  # env var (recommended for CI)
+> uv run --with huggingface-hub hf auth login  # interactive (one-time)
+>
+> # Create a private repo
+> uv run --with huggingface-hub hf repos create gliner4j-onnx --private
+> ```
 
 ## Benchmarks
 
