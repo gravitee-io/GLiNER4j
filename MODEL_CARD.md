@@ -20,17 +20,48 @@ ONNX export of [fastino-ai/gliner2-base](https://huggingface.co/fastino-ai/gline
 
 Part of the [gliner4j](https://github.com/gravitee-io/gliner4j) project.
 
+## Repository Structure
+
+```
+├── gliner4j_config.json        # Shared model configuration
+├── tokenizer.json              # Shared HuggingFace tokenizer
+├── tokenizer_config.json
+├── onnx/                       # Base FP32 (~830 MB)
+│   ├── encoder.onnx
+│   ├── span_rep.onnx
+│   └── scoring_head.onnx
+├── onnx_fp16/                  # FP16 (~416 MB, ~50% smaller)
+│   ├── encoder.onnx
+│   ├── span_rep.onnx
+│   └── scoring_head.onnx
+└── onnx_quantized/             # INT8 dynamic quantization (~208 MB, ~75% smaller)
+    ├── encoder.onnx
+    ├── span_rep.onnx
+    └── scoring_head.onnx
+```
+
 ## Model Architecture
 
 The model is split into 3 ONNX modules for modular inference:
 
-| File | Description |
-|------|-------------|
+| Module | Description |
+|--------|-------------|
 | `encoder.onnx` | DebertaV2 transformer encoder |
 | `span_rep.onnx` | Span representation layer |
 | `scoring_head.onnx` | Count-aware scoring head |
 
-Optimized variants (`*_optimized.onnx`) are also provided.
+## Variants
+
+| Variant | Folder | Precision | Size | Use case |
+|---------|--------|-----------|------|----------|
+| Base | `onnx/` | FP32 | ~830 MB | Maximum accuracy |
+| FP16 | `onnx_fp16/` | FP16 | ~416 MB | Good accuracy/size trade-off |
+| Quantized | `onnx_quantized/` | INT8 | ~208 MB | Smallest footprint, fastest on CPU |
+
+To download a specific variant only:
+```bash
+huggingface-cli download <repo> --include "onnx_fp16/*" "*.json"
+```
 
 ## Configuration
 
@@ -46,6 +77,17 @@ Optimized variants (`*_optimized.onnx`) are also provided.
 ## Usage
 
 Use with [gliner4j](https://github.com/gravitee-io/gliner4j), a Java library for GLiNER2 inference via ONNX Runtime.
+
+```java
+// Base FP32 (default)
+var gliner = GLiNER4j.load(modelDir, entities);
+
+// FP16 variant
+var gliner = GLiNER4j.load(modelDir, entities, "onnx_fp16");
+
+// Quantized variant
+var gliner = GLiNER4j.load(modelDir, entities, "onnx_quantized");
+```
 
 ## Benchmarks
 
