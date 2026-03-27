@@ -45,51 +45,83 @@ public class GLiNER4jRuntime implements AutoCloseable {
   private LongBuffer encoderMaskBuf;
   private int encoderBufCapacity;
 
+  /** Default ONNX variant folder name (base FP32). */
+  public static final String DEFAULT_VARIANT = "onnx";
+
   /**
-   * Creates ONNX runtime sessions for all three model files.
+   * Creates ONNX runtime sessions using the default "onnx" variant.
    *
-   * @param modelDir path to directory containing encoder.onnx, span_rep.onnx, scoring_head.onnx
+   * @param modelDir root model directory containing variant subfolders
    */
   public GLiNER4jRuntime(Path modelDir) {
+    this(modelDir, DEFAULT_VARIANT);
+  }
+
+  /**
+   * Creates ONNX runtime sessions for a specific model variant.
+   *
+   * <p>ONNX files are loaded from {@code modelDir/variant/} and runtime-optimized
+   * graphs are cached to {@code modelDir/variant_optimized/}.
+   *
+   * @param modelDir root model directory containing variant subfolders and shared config
+   * @param variant  variant folder name (e.g. "onnx", "onnx_fp16", "onnx_quantized")
+   */
+  public GLiNER4jRuntime(Path modelDir, String variant) {
     try {
       this.env = OrtEnvironment.getEnvironment();
       int numCpus = Runtime.getRuntime().availableProcessors();
+
+      var variantDir = modelDir.resolve(variant);
+      var cacheDir = modelDir.resolve(variant + "_optimized");
+      cacheDir.toFile().mkdirs();
+
+      log.info(
+        "Loading ONNX models from {} (cache: {})",
+        variantDir,
+        cacheDir
+      );
 
       log.info("Loading encoder.onnx...");
       try (
         var opts = createSessionOptions(
           numCpus,
-          modelDir,
-          "encoder_optimized.onnx"
+          cacheDir,
+          "encoder.onnx"
         )
       ) {
         this.encoderSession =
-          env.createSession(modelDir.resolve("encoder.onnx").toString(), opts);
+          env.createSession(
+            variantDir.resolve("encoder.onnx").toString(),
+            opts
+          );
       }
 
       log.info("Loading span_rep.onnx...");
       try (
         var opts = createSessionOptions(
           numCpus,
-          modelDir,
-          "span_rep_optimized.onnx"
+          cacheDir,
+          "span_rep.onnx"
         )
       ) {
         this.spanRepSession =
-          env.createSession(modelDir.resolve("span_rep.onnx").toString(), opts);
+          env.createSession(
+            variantDir.resolve("span_rep.onnx").toString(),
+            opts
+          );
       }
 
       log.info("Loading scoring_head.onnx...");
       try (
         var opts = createSessionOptions(
           numCpus,
-          modelDir,
-          "scoring_head_optimized.onnx"
+          cacheDir,
+          "scoring_head.onnx"
         )
       ) {
         this.scoringHeadSession =
           env.createSession(
-            modelDir.resolve("scoring_head.onnx").toString(),
+            variantDir.resolve("scoring_head.onnx").toString(),
             opts
           );
       }
@@ -97,7 +129,7 @@ public class GLiNER4jRuntime implements AutoCloseable {
       log.info("All ONNX sessions loaded successfully");
     } catch (OrtException e) {
       throw new RuntimeException(
-        "Failed to load ONNX models from " + modelDir,
+        "Failed to load ONNX models from " + modelDir + "/" + variant,
         e
       );
     }

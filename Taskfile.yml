@@ -1,0 +1,124 @@
+#
+# Copyright © 2015 The Gravitee team (http://gravitee.io)
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# https://taskfile.dev
+version: "3"
+
+vars:
+  HF_MODEL: "fastino/gliner2-base-v1"
+  HF_LOCAL_DIR: "models/gliner2-base-hf"
+  ONNX_OUTPUT_DIR: "models/gliner2-base-onnx"
+
+tasks:
+  default:
+    desc: Download model and export to ONNX (all variants)
+    cmds:
+      - task: model:download
+      - task: model:export
+        vars:
+          EXPORT_ARGS: "--variant fp16 --variant quantized"
+
+  model:download:
+    desc: Download GLiNER2 model from HuggingFace
+    deps:
+      - check:uv
+    cmds:
+      - uv run --with huggingface-hub hf download {{.HF_MODEL}} --local-dir {{.HF_LOCAL_DIR}}
+    status:
+      - test -d {{.HF_LOCAL_DIR}}/model.safetensors || test -f {{.HF_LOCAL_DIR}}/config.json
+
+  check:uv:
+    desc: Verify uv is installed
+    internal: true
+    preconditions:
+      - sh: command -v uv
+        msg: "uv not found. Install from: https://docs.astral.sh/uv/getting-started/installation/"
+
+  check:maven:
+    desc: Verify Maven is available
+    internal: true
+    preconditions:
+      - sh: command -v mvn
+        msg: "mvn not found. Install Maven: https://maven.apache.org/install.html"
+
+  model:export:
+    desc: Export PyTorch model to ONNX format (base + optional variants)
+    deps:
+      - model:download
+      - check:uv
+    cmds:
+      - uv run scripts/export_onnx.py --model-path {{.HF_LOCAL_DIR}} --output-dir {{.ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default ""}}
+    sources:
+      - scripts/export_onnx.py
+      - "{{.HF_LOCAL_DIR}}/**/*"
+    generates:
+      - "{{.ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
+      - "{{.ONNX_OUTPUT_DIR}}/onnx/span_rep.onnx"
+      - "{{.ONNX_OUTPUT_DIR}}/onnx/scoring_head.onnx"
+      - "{{.ONNX_OUTPUT_DIR}}/gliner4j_config.json"
+      - "{{.ONNX_OUTPUT_DIR}}/tokenizer.json"
+
+  model:clean:
+    desc: Remove downloaded and exported model files
+    prompt: This will delete all model files. Continue?
+    cmds:
+      - rm -rf {{.HF_LOCAL_DIR}}
+      - rm -rf {{.ONNX_OUTPUT_DIR}}
+
+  format:
+    desc: Apply license headers and format code
+    deps:
+      - check:maven
+    cmds:
+      - mvn license:format prettier:write
+
+  build:
+    desc: Build the Java project with Maven
+    deps:
+      - check:maven
+      - format
+    cmds:
+      - mvn clean install -DskipTests
+
+  test:
+    desc: Run tests
+    deps:
+      - check:maven
+      - format
+    cmds:
+      - mvn test
+
+  hf-upload:
+    desc: Upload ONNX model directory to HuggingFace Hub
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -d {{.ONNX_OUTPUT_DIR}}/onnx
+        msg: "ONNX model directory not found. Run: task model:export"
+    cmds:
+      - uv run --with huggingface-hub hf upload {{.HF_REPO}} {{.ONNX_OUTPUT_DIR}} . --commit-message "Upload ONNX model files (all variants)"
+      - uv run --with huggingface-hub hf upload {{.HF_REPO}} MODEL_CARD.md README.md --commit-message "Upload model card"
+
+  benchmark:
+    desc: Run JMH benchmarks
+    deps:
+      - check:maven
+    cmds:
+      - mvn -pl gliner4j-benchmark package -DskipTests
+      - java -jar gliner4j-benchmark/target/benchmarks.jar
