@@ -127,6 +127,60 @@ public class GLiNER4j implements AutoCloseable {
   }
 
   /**
+   * Extracts entities from the given text using per-call entity definitions and the default threshold.
+   *
+   * @param text the input text to analyze
+   * @param entities the entity types to extract (overrides the entities provided at load time)
+   * @return map of entity type to list of detected spans
+   */
+  public Map<String, List<EntitySpan>> extract(
+    String text,
+    List<EntityDefinition> entities
+  ) {
+    return extract(text, entities, config.getDefaultThreshold());
+  }
+
+  /**
+   * Extracts entities from the given text using per-call entity definitions and a custom threshold.
+   *
+   * @param text the input text to analyze
+   * @param entities the entity types to extract (overrides the entities provided at load time)
+   * @param threshold minimum confidence score (0..1) for span inclusion
+   * @return map of entity type to list of detected spans
+   */
+  public Map<String, List<EntitySpan>> extract(
+    String text,
+    List<EntityDefinition> entities,
+    float threshold
+  ) {
+    if (text == null || text.isBlank()) {
+      return Map.of();
+    }
+
+    // Build a fresh schema encoder and input assembler for the override entities
+    var schemaEncoder = new SchemaEncoder(entities);
+    var overrideAssembler = new InputAssembler(tokenizer, schemaEncoder);
+
+    // Split text into words with char offsets
+    var textEncoder = new TextEncoder(text, splitter);
+    if (textEncoder.getTextLen() == 0) {
+      return Map.of();
+    }
+
+    // Assemble full token sequence with the override schema
+    var input = overrideAssembler.assemble(textEncoder);
+
+    // Run encoder without buffer cache (schema prefix differs from load-time)
+    var hiddenStates = runtime.runEncoderFull(
+      input.inputIds(),
+      input.attentionMask()
+    );
+
+    // Steps 4-10 are identical to the default extract path
+    return extractFromHiddenStates(hiddenStates, input, text, threshold);
+  }
+
+  /**
    * Extracts entities from the given text using the specified threshold.
    *
    * @param text the input text to analyze
@@ -147,12 +201,22 @@ public class GLiNER4j implements AutoCloseable {
     // 2. Assemble full token sequence
     var input = inputAssembler.assemble(textEncoder);
 
-    // 3. Run encoder
+    // 3. Run encoder (uses cached schema prefix buffer)
     var hiddenStates = runtime.runEncoder(
       input.inputIds(),
       input.attentionMask()
     );
 
+    // 4-10. Extract embeddings, score spans, decode, and group
+    return extractFromHiddenStates(hiddenStates, input, text, threshold);
+  }
+
+  private Map<String, List<EntitySpan>> extractFromHiddenStates(
+    float[][][] hiddenStates,
+    PreprocessedInput input,
+    String text,
+    float threshold
+  ) {
     // 4. Extract embeddings from hidden states
     var embeddings = extractEmbeddings(hiddenStates[0], input);
 
@@ -169,7 +233,6 @@ public class GLiNER4j implements AutoCloseable {
           spanIdx[0][idx][0] = i;
           spanIdx[0][idx][1] = endPos;
         }
-        // else stays (0, 0) — safe default
       }
     }
 
@@ -177,9 +240,9 @@ public class GLiNER4j implements AutoCloseable {
     var textEmbs3d = new float[1][textLen][config.getHiddenSize()];
     System.arraycopy(embeddings.textEmbs, 0, textEmbs3d[0], 0, textLen);
     var spanRep4d = runtime.runSpanRep(textEmbs3d, spanIdx);
-    var spanRep = spanRep4d[0]; // [textLen][maxWidth][hidden]
+    var spanRep = spanRep4d[0];
 
-    // 7. Run scoring head once with maxCount — countLogits is independent of the count input
+    // 7. Run scoring head once with maxCount
     var scoringResult = runtime.runScoringHead(
       spanRep,
       embeddings.schemaEmbP,
@@ -194,7 +257,7 @@ public class GLiNER4j implements AutoCloseable {
       return Map.of();
     }
 
-    // 9. Decode spans (SpanDecoder uses spanScores[0] only)
+    // 9. Decode spans
     var spans = spanDecoder.decode(
       scoringResult.spanScores(),
       input.fieldNames(),
