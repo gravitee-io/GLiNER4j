@@ -28,6 +28,9 @@ import io.gravitee.lab.gliner4j.tokenizer.TokenMapping;
 import io.gravitee.lab.gliner4j.tokenizer.WhitespaceTokenSplitter;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 
@@ -313,57 +316,87 @@ public class GLiNER4j implements AutoCloseable {
       maxNumSpans
     );
 
-    // 7. Per-text: run scoring_head and decode (scoring_head has no batch dim)
+    // 7. Per-text: run scoring_head and decode in parallel via virtual threads
+    //    OrtSession.run() is thread-safe; scoring_head creates fresh tensors per call
+    @SuppressWarnings("unchecked")
+    var futures = new Future[nonEmptyCount];
     var results = new ArrayList<Map<String, List<EntitySpan>>>(batchSize);
     for (int i = 0; i < batchSize; i++) {
       results.add(Map.of());
     }
 
-    for (int s = 0; s < nonEmptyCount; s++) {
-      int origIdx = batchIndices[s];
-      var input = inputs[origIdx];
-      int textLen = textLens[s];
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      for (int s = 0; s < nonEmptyCount; s++) {
+        final int si = s;
+        futures[si] =
+          executor.submit(() -> {
+            int origIdx = batchIndices[si];
+            var input = inputs[origIdx];
+            int textLen = textLens[si];
 
-      // Extract the per-text span_rep slice [textLen][maxWidth][hiddenSize]
-      var spanRep = new float[textLen][maxWidth][hiddenSize];
-      for (int i = 0; i < textLen; i++) {
-        System.arraycopy(batchSpanRep4d[s][i], 0, spanRep[i], 0, maxWidth);
+            // Extract the per-text span_rep slice [textLen][maxWidth][hiddenSize]
+            var spanRep = new float[textLen][maxWidth][hiddenSize];
+            for (int i = 0; i < textLen; i++) {
+              System.arraycopy(
+                batchSpanRep4d[si][i],
+                0,
+                spanRep[i],
+                0,
+                maxWidth
+              );
+            }
+
+            var scoringResult = runtime.runScoringHead(
+              spanRep,
+              schemaEmbs.schemaEmbP(),
+              schemaEmbs.schemaEmbFields(),
+              (long) config.getMaxCount()
+            );
+
+            int predCount = argmax(scoringResult.countLogits()[0]);
+            if (predCount == 0) {
+              return Map.<String, List<EntitySpan>>of();
+            }
+
+            var spans = spanDecoder.decode(
+              scoringResult.spanScores(),
+              input.fieldNames(),
+              input.wordStartChars(),
+              input.wordEndChars(),
+              texts.get(origIdx),
+              textLen,
+              threshold
+            );
+
+            return spans
+              .stream()
+              .collect(
+                Collectors.groupingBy(
+                  EntitySpan::type,
+                  LinkedHashMap::new,
+                  Collectors.toList()
+                )
+              );
+          });
       }
 
-      var scoringResult = runtime.runScoringHead(
-        spanRep,
-        schemaEmbs.schemaEmbP(),
-        schemaEmbs.schemaEmbFields(),
-        (long) config.getMaxCount()
-      );
-
-      int predCount = argmax(scoringResult.countLogits()[0]);
-      if (predCount == 0) {
-        continue;
+      // Collect results preserving original order
+      for (int s = 0; s < nonEmptyCount; s++) {
+        try {
+          int origIdx = batchIndices[s];
+          @SuppressWarnings("unchecked")
+          var result = (Map<String, List<EntitySpan>>) futures[s].get();
+          results.set(origIdx, result);
+        } catch (ExecutionException e) {
+          throw new RuntimeException(
+            "Scoring head failed for batch slot " + s,
+            e.getCause()
+          );
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw new RuntimeException("Batch scoring interrupted", e);
+        }
       }
-
-      var spans = spanDecoder.decode(
-        scoringResult.spanScores(),
-        input.fieldNames(),
-        input.wordStartChars(),
-        input.wordEndChars(),
-        texts.get(origIdx),
-        textLen,
-        threshold
-      );
-
-      results.set(
-        origIdx,
-        spans
-          .stream()
-          .collect(
-            Collectors.groupingBy(
-              EntitySpan::type,
-              LinkedHashMap::new,
-              Collectors.toList()
-            )
-          )
-      );
     }
 
     return results;

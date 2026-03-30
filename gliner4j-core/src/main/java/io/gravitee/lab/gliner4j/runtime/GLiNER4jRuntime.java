@@ -88,7 +88,14 @@ public class GLiNER4jRuntime implements AutoCloseable {
       log.info("Loading ONNX models from {} (cache: {})", variantDir, cacheDir);
 
       log.info("Loading encoder.onnx...");
-      try (var opts = createSessionOptions(numCpus, cacheDir, "encoder.onnx")) {
+      try (
+        var opts = createSessionOptions(
+          numCpus,
+          Math.max(2, numCpus / 2),
+          cacheDir,
+          "encoder.onnx"
+        )
+      ) {
         this.encoderSession =
           env.createSession(
             variantDir.resolve("encoder.onnx").toString(),
@@ -98,7 +105,12 @@ public class GLiNER4jRuntime implements AutoCloseable {
 
       log.info("Loading span_rep.onnx...");
       try (
-        var opts = createSessionOptions(numCpus, cacheDir, "span_rep.onnx")
+        var opts = createSessionOptions(
+          numCpus,
+          Math.max(2, numCpus / 2),
+          cacheDir,
+          "span_rep.onnx"
+        )
       ) {
         this.spanRepSession =
           env.createSession(
@@ -107,9 +119,12 @@ public class GLiNER4jRuntime implements AutoCloseable {
           );
       }
 
+      // Scoring head uses SEQUENTIAL mode with fewer threads per call —
+      // concurrency comes from virtual threads during batch processing
+      int scoringIntraThreads = Math.max(2, numCpus / 4);
       log.info("Loading scoring_head.onnx...");
       try (
-        var opts = createSessionOptions(numCpus, cacheDir, "scoring_head.onnx")
+        var opts = createScoringSessionOptions(scoringIntraThreads, cacheDir)
       ) {
         this.scoringHeadSession =
           env.createSession(
@@ -128,16 +143,33 @@ public class GLiNER4jRuntime implements AutoCloseable {
   }
 
   private static OrtSession.SessionOptions createSessionOptions(
-    int numCpus,
+    int intraOpThreads,
+    int interOpThreads,
     Path modelDir,
     String optimizedFileName
   ) throws OrtException {
     var opts = new OrtSession.SessionOptions();
-    opts.setIntraOpNumThreads(numCpus);
-    opts.setInterOpNumThreads(2);
+    opts.setIntraOpNumThreads(intraOpThreads);
+    opts.setInterOpNumThreads(interOpThreads);
+    opts.setExecutionMode(OrtSession.SessionOptions.ExecutionMode.PARALLEL);
     opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
     opts.setOptimizedModelFilePath(
       modelDir.resolve(optimizedFileName).toString()
+    );
+    return opts;
+  }
+
+  private static OrtSession.SessionOptions createScoringSessionOptions(
+    int intraOpThreads,
+    Path modelDir
+  ) throws OrtException {
+    var opts = new OrtSession.SessionOptions();
+    opts.setIntraOpNumThreads(intraOpThreads);
+    opts.setInterOpNumThreads(1);
+    opts.setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL);
+    opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+    opts.setOptimizedModelFilePath(
+      modelDir.resolve("scoring_head.onnx").toString()
     );
     return opts;
   }
