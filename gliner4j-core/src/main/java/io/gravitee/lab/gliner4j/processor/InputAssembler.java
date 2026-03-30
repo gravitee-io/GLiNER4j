@@ -18,7 +18,7 @@ package io.gravitee.lab.gliner4j.processor;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
 import io.gravitee.lab.gliner4j.tokenizer.TokenMapping;
 import io.gravitee.lab.gliner4j.tokenizer.TokenMapping.SegmentType;
-import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -52,9 +52,11 @@ public class InputAssembler {
     this.numFields = schemaEncoder.getNumFields();
     this.fieldNames = schemaEncoder.getFieldNames();
 
-    // Pre-tokenize schema tokens
-    var schemaIdsList = new ArrayList<Long>();
-    var schemaMappingsList = new ArrayList<TokenMapping>();
+    // Pre-tokenize schema tokens into primitive arrays
+    int schemaCapacity = schemaEncoder.getSchemaTokens().size() * 2;
+    var schemaIds = new long[schemaCapacity];
+    var schemaMappings = new TokenMapping[schemaCapacity];
+    int schemaPos = 0;
     int entityIdx = -1;
 
     for (int i = 0; i < schemaEncoder.getSchemaTokens().size(); i++) {
@@ -64,16 +66,20 @@ public class InputAssembler {
       }
       var result = tokenizer.tokenizeWithIds(token);
       for (long id : result.ids()) {
-        schemaIdsList.add(id);
-        schemaMappingsList.add(
-          new TokenMapping(SegmentType.SCHEMA, i, entityIdx)
-        );
+        if (schemaPos >= schemaIds.length) {
+          schemaIds = Arrays.copyOf(schemaIds, schemaIds.length * 2);
+          schemaMappings =
+            Arrays.copyOf(schemaMappings, schemaMappings.length * 2);
+        }
+        schemaIds[schemaPos] = id;
+        schemaMappings[schemaPos] =
+          new TokenMapping(SegmentType.SCHEMA, i, entityIdx);
+        schemaPos++;
       }
     }
 
-    this.cachedSchemaIds =
-      schemaIdsList.stream().mapToLong(Long::longValue).toArray();
-    this.cachedSchemaMappings = schemaMappingsList.toArray(new TokenMapping[0]);
+    this.cachedSchemaIds = Arrays.copyOf(schemaIds, schemaPos);
+    this.cachedSchemaMappings = Arrays.copyOf(schemaMappings, schemaPos);
 
     // Pre-tokenize [SEP_TEXT] separator
     var sepResult = tokenizer.tokenizeWithIds("[SEP_TEXT]");
@@ -114,46 +120,63 @@ public class InputAssembler {
    * @return a PreprocessedInput ready for the ONNX model
    */
   public PreprocessedInput assemble(TextEncoder textEncoder) {
-    // Estimate capacity: schema + sep + text subwords
+    // Estimate capacity: schema + sep + text subwords (avg ~2 subwords per word)
     int estimatedSize =
       cachedSchemaIds.length +
       cachedSepIds.length +
       textEncoder.getTextLen() *
       2;
-    var allSubwordIds = new ArrayList<Long>(estimatedSize);
-    var allMappings = new ArrayList<TokenMapping>(estimatedSize);
+    var ids = new long[estimatedSize];
+    var mappings = new TokenMapping[estimatedSize];
+    int pos = 0;
 
     // 1. Append cached schema tokens
-    for (int i = 0; i < cachedSchemaIds.length; i++) {
-      allSubwordIds.add(cachedSchemaIds[i]);
-      allMappings.add(cachedSchemaMappings[i]);
-    }
+    System.arraycopy(cachedSchemaIds, 0, ids, 0, cachedSchemaIds.length);
+    System.arraycopy(
+      cachedSchemaMappings,
+      0,
+      mappings,
+      0,
+      cachedSchemaMappings.length
+    );
+    pos = cachedSchemaIds.length;
 
     // 2. Append cached [SEP_TEXT] separator
+    var sepMapping = new TokenMapping(SegmentType.SEP, -1, -1);
     for (long id : cachedSepIds) {
-      allSubwordIds.add(id);
-      allMappings.add(new TokenMapping(SegmentType.SEP, -1, -1));
+      ids[pos] = id;
+      mappings[pos] = sepMapping;
+      pos++;
     }
 
     // 3. Tokenize text words (per-request)
     for (int w = 0; w < textEncoder.getTextLen(); w++) {
       var word = textEncoder.getWords().get(w);
       var result = tokenizer.tokenizeWithIds(word);
+      var textMapping = new TokenMapping(SegmentType.TEXT, w, -1);
       for (long id : result.ids()) {
-        allSubwordIds.add(id);
-        allMappings.add(new TokenMapping(SegmentType.TEXT, w, -1));
+        if (pos >= ids.length) {
+          ids = Arrays.copyOf(ids, ids.length * 2);
+          mappings = Arrays.copyOf(mappings, mappings.length * 2);
+        }
+        ids[pos] = id;
+        mappings[pos] = textMapping;
+        pos++;
       }
     }
 
-    // Build arrays
-    var inputIds = allSubwordIds.stream().mapToLong(Long::longValue).toArray();
-    var attentionMask = new long[inputIds.length];
-    java.util.Arrays.fill(attentionMask, 1L);
+    // Trim to exact size
+    var inputIds = pos == ids.length ? ids : Arrays.copyOf(ids, pos);
+    var finalMappings = pos == mappings.length
+      ? mappings
+      : Arrays.copyOf(mappings, pos);
+    var attentionMask = new long[pos];
+    Arrays.fill(attentionMask, 1L);
 
     return new PreprocessedInput(
       inputIds,
       attentionMask,
-      allMappings.toArray(new TokenMapping[0]),
+      finalMappings,
       textEncoder.getWordStartChars(),
       textEncoder.getWordEndChars(),
       textEncoder.getTextLen(),
