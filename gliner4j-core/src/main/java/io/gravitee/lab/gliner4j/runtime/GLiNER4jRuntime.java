@@ -59,39 +59,77 @@ public class GLiNER4jRuntime implements AutoCloseable {
   public static final String DEFAULT_VARIANT = "onnx";
 
   /**
-   * Creates ONNX runtime sessions using the default "onnx" variant.
+   * Creates ONNX runtime sessions using the default "onnx" variant and auto-detected resources.
    *
    * @param modelDir root model directory containing variant subfolders
    */
   public GLiNER4jRuntime(Path modelDir) {
-    this(modelDir, DEFAULT_VARIANT);
+    this(modelDir, DEFAULT_VARIANT, RuntimeConfig.defaults());
   }
 
   /**
-   * Creates ONNX runtime sessions for a specific model variant.
-   *
-   * <p>ONNX files are loaded from {@code modelDir/variant/} and runtime-optimized
-   * graphs are cached to {@code modelDir/variant_optimized/}.
+   * Creates ONNX runtime sessions for a specific model variant with auto-detected resources.
    *
    * @param modelDir root model directory containing variant subfolders and shared config
    * @param variant  variant folder name (e.g. "onnx", "onnx_fp16", "onnx_quantized")
    */
   public GLiNER4jRuntime(Path modelDir, String variant) {
+    this(modelDir, variant, RuntimeConfig.defaults());
+  }
+
+  /**
+   * Creates ONNX runtime sessions for a specific model variant with explicit resource control.
+   *
+   * <p>ONNX files are loaded from {@code modelDir/variant/} and runtime-optimized
+   * graphs are cached to {@code modelDir/variant_optimized/} (unless disabled via config).
+   *
+   * @param modelDir      root model directory containing variant subfolders and shared config
+   * @param variant       variant folder name (e.g. "onnx", "onnx_fp16", "onnx_quantized")
+   * @param runtimeConfig resource control configuration for ORT sessions
+   */
+  public GLiNER4jRuntime(
+    Path modelDir,
+    String variant,
+    RuntimeConfig runtimeConfig
+  ) {
     try {
       this.env = OrtEnvironment.getEnvironment();
       int numCpus = Runtime.getRuntime().availableProcessors();
 
-      var variantDir = modelDir.resolve(variant);
-      var cacheDir = modelDir.resolve(variant + "_optimized");
-      cacheDir.toFile().mkdirs();
+      // Resolve thread counts: explicit config wins, else auto-calculate
+      int encoderIntra = runtimeConfig.getEncoderIntraOpThreads() != null
+        ? runtimeConfig.getEncoderIntraOpThreads()
+        : numCpus;
+      int encoderInter = runtimeConfig.getEncoderInterOpThreads() != null
+        ? runtimeConfig.getEncoderInterOpThreads()
+        : Math.max(2, numCpus / 2);
+      int scoringIntra = runtimeConfig.getScoringIntraOpThreads() != null
+        ? runtimeConfig.getScoringIntraOpThreads()
+        : Math.max(2, numCpus / 4);
+      int scoringInter = runtimeConfig.getScoringInterOpThreads() != null
+        ? runtimeConfig.getScoringInterOpThreads()
+        : 1;
 
-      log.info("Loading ONNX models from {} (cache: {})", variantDir, cacheDir);
+      var variantDir = modelDir.resolve(variant);
+      Path cacheDir = null;
+      if (runtimeConfig.isOptimizedModelCacheEnabled()) {
+        cacheDir = modelDir.resolve(variant + "_optimized");
+        cacheDir.toFile().mkdirs();
+      }
+
+      log.info(
+        "Loading ONNX models from {} (cache: {})",
+        variantDir,
+        cacheDir != null ? cacheDir : "disabled"
+      );
 
       log.info("Loading encoder.onnx...");
       try (
         var opts = createSessionOptions(
-          numCpus,
-          Math.max(2, numCpus / 2),
+          encoderIntra,
+          encoderInter,
+          OrtSession.SessionOptions.ExecutionMode.PARALLEL,
+          runtimeConfig.getOptimizationLevel(),
           cacheDir,
           "encoder.onnx"
         )
@@ -106,8 +144,10 @@ public class GLiNER4jRuntime implements AutoCloseable {
       log.info("Loading span_rep.onnx...");
       try (
         var opts = createSessionOptions(
-          numCpus,
-          Math.max(2, numCpus / 2),
+          encoderIntra,
+          encoderInter,
+          OrtSession.SessionOptions.ExecutionMode.PARALLEL,
+          runtimeConfig.getOptimizationLevel(),
           cacheDir,
           "span_rep.onnx"
         )
@@ -121,10 +161,16 @@ public class GLiNER4jRuntime implements AutoCloseable {
 
       // Scoring head uses SEQUENTIAL mode with fewer threads per call —
       // concurrency comes from virtual threads during batch processing
-      int scoringIntraThreads = Math.max(2, numCpus / 4);
       log.info("Loading scoring_head.onnx...");
       try (
-        var opts = createScoringSessionOptions(scoringIntraThreads, cacheDir)
+        var opts = createSessionOptions(
+          scoringIntra,
+          scoringInter,
+          OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL,
+          runtimeConfig.getOptimizationLevel(),
+          cacheDir,
+          "scoring_head.onnx"
+        )
       ) {
         this.scoringHeadSession =
           env.createSession(
@@ -145,32 +191,21 @@ public class GLiNER4jRuntime implements AutoCloseable {
   private static OrtSession.SessionOptions createSessionOptions(
     int intraOpThreads,
     int interOpThreads,
-    Path modelDir,
-    String optimizedFileName
+    OrtSession.SessionOptions.ExecutionMode executionMode,
+    OrtSession.SessionOptions.OptLevel optLevel,
+    Path cacheDir,
+    String modelFileName
   ) throws OrtException {
     var opts = new OrtSession.SessionOptions();
     opts.setIntraOpNumThreads(intraOpThreads);
     opts.setInterOpNumThreads(interOpThreads);
-    opts.setExecutionMode(OrtSession.SessionOptions.ExecutionMode.PARALLEL);
-    opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
-    opts.setOptimizedModelFilePath(
-      modelDir.resolve(optimizedFileName).toString()
-    );
-    return opts;
-  }
-
-  private static OrtSession.SessionOptions createScoringSessionOptions(
-    int intraOpThreads,
-    Path modelDir
-  ) throws OrtException {
-    var opts = new OrtSession.SessionOptions();
-    opts.setIntraOpNumThreads(intraOpThreads);
-    opts.setInterOpNumThreads(1);
-    opts.setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL);
-    opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
-    opts.setOptimizedModelFilePath(
-      modelDir.resolve("scoring_head.onnx").toString()
-    );
+    opts.setExecutionMode(executionMode);
+    opts.setOptimizationLevel(optLevel);
+    if (cacheDir != null) {
+      opts.setOptimizedModelFilePath(
+        cacheDir.resolve(modelFileName).toString()
+      );
+    }
     return opts;
   }
 

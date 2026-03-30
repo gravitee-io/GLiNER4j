@@ -21,6 +21,7 @@ import io.gravitee.lab.gliner4j.processor.PreprocessedInput;
 import io.gravitee.lab.gliner4j.processor.SchemaEncoder;
 import io.gravitee.lab.gliner4j.processor.TextEncoder;
 import io.gravitee.lab.gliner4j.runtime.GLiNER4jRuntime;
+import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
@@ -73,21 +74,23 @@ public class GLiNER4j implements AutoCloseable {
   }
 
   /**
-   * Loads a GLiNER model using the default "onnx" variant.
+   * Loads a GLiNER model using the default "onnx" variant and auto-detected resources.
    *
    * @param modelDir path to the root model directory
    * @param entities the entity types to extract
    * @return a ready-to-use GLiNER4j instance
    */
   public static GLiNER4j load(Path modelDir, List<EntityDefinition> entities) {
-    return load(modelDir, entities, GLiNER4jRuntime.DEFAULT_VARIANT);
+    return load(
+      modelDir,
+      entities,
+      GLiNER4jRuntime.DEFAULT_VARIANT,
+      RuntimeConfig.defaults()
+    );
   }
 
   /**
-   * Loads a GLiNER model with a specific ONNX variant.
-   *
-   * <p>The model directory should contain shared files (config, tokenizer) at the root
-   * and ONNX model files in variant subfolders (e.g. "onnx", "onnx_fp16", "onnx_quantized").
+   * Loads a GLiNER model with a specific ONNX variant and auto-detected resources.
    *
    * @param modelDir path to the root model directory
    * @param entities the entity types to extract
@@ -99,6 +102,48 @@ public class GLiNER4j implements AutoCloseable {
     List<EntityDefinition> entities,
     String variant
   ) {
+    return load(modelDir, entities, variant, RuntimeConfig.defaults());
+  }
+
+  /**
+   * Loads a GLiNER model using the default "onnx" variant with explicit resource control.
+   *
+   * @param modelDir      path to the root model directory
+   * @param entities      the entity types to extract
+   * @param runtimeConfig resource control configuration for ORT sessions
+   * @return a ready-to-use GLiNER4j instance
+   */
+  public static GLiNER4j load(
+    Path modelDir,
+    List<EntityDefinition> entities,
+    RuntimeConfig runtimeConfig
+  ) {
+    return load(
+      modelDir,
+      entities,
+      GLiNER4jRuntime.DEFAULT_VARIANT,
+      runtimeConfig
+    );
+  }
+
+  /**
+   * Loads a GLiNER model with a specific ONNX variant and explicit resource control.
+   *
+   * <p>The model directory should contain shared files (config, tokenizer) at the root
+   * and ONNX model files in variant subfolders (e.g. "onnx", "onnx_fp16", "onnx_quantized").
+   *
+   * @param modelDir      path to the root model directory
+   * @param entities      the entity types to extract
+   * @param variant       ONNX variant folder name (e.g. "onnx", "onnx_fp16", "onnx_quantized")
+   * @param runtimeConfig resource control configuration for ORT sessions
+   * @return a ready-to-use GLiNER4j instance
+   */
+  public static GLiNER4j load(
+    Path modelDir,
+    List<EntityDefinition> entities,
+    String variant,
+    RuntimeConfig runtimeConfig
+  ) {
     log.info(
       "Loading GLiNER4j model from {} (variant={}) with {} entities",
       modelDir,
@@ -108,7 +153,7 @@ public class GLiNER4j implements AutoCloseable {
 
     var config = GLiNER4jConfig.load(modelDir);
     var tokenizer = new DjlTokenizerWrapper(modelDir);
-    var runtime = new GLiNER4jRuntime(modelDir, variant);
+    var runtime = new GLiNER4jRuntime(modelDir, variant, runtimeConfig);
     var schemaEncoder = new SchemaEncoder(entities);
     var inputAssembler = new InputAssembler(tokenizer, schemaEncoder);
 
