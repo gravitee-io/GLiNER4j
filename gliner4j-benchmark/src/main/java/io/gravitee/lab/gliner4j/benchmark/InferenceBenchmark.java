@@ -96,9 +96,7 @@ public class InferenceBenchmark {
   }
 
   @Benchmark
-  public void extract(Blackhole bh) {
-    for (var text : batch) {
-      bh.consume(gliner.extract(text));
-    }
+  public void extractBatch(Blackhole bh) {
+    bh.consume(gliner.extractBatch(batch));
   }
 }
