@@ -23,6 +23,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.LongBuffer;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 
@@ -45,46 +46,90 @@ public class GLiNER4jRuntime implements AutoCloseable {
   private LongBuffer encoderMaskBuf;
   private int encoderBufCapacity;
 
+  // Pre-allocated batch encoder buffers (single-thread assumption)
+  private LongBuffer batchEncoderIdsBuf;
+  private LongBuffer batchEncoderMaskBuf;
+  private int batchEncoderBufCapacity;
+
+  // Pre-allocated span index buffer (single-thread assumption)
+  private LongBuffer spanIdxBuf;
+  private int spanIdxBufCapacity;
+
   /** Default ONNX variant folder name (base FP32). */
   public static final String DEFAULT_VARIANT = "onnx";
 
   /**
-   * Creates ONNX runtime sessions using the default "onnx" variant.
+   * Creates ONNX runtime sessions using the default "onnx" variant and auto-detected resources.
    *
    * @param modelDir root model directory containing variant subfolders
    */
   public GLiNER4jRuntime(Path modelDir) {
-    this(modelDir, DEFAULT_VARIANT);
+    this(modelDir, DEFAULT_VARIANT, RuntimeConfig.defaults());
   }
 
   /**
-   * Creates ONNX runtime sessions for a specific model variant.
-   *
-   * <p>ONNX files are loaded from {@code modelDir/variant/} and runtime-optimized
-   * graphs are cached to {@code modelDir/variant_optimized/}.
+   * Creates ONNX runtime sessions for a specific model variant with auto-detected resources.
    *
    * @param modelDir root model directory containing variant subfolders and shared config
    * @param variant  variant folder name (e.g. "onnx", "onnx_fp16", "onnx_quantized")
    */
   public GLiNER4jRuntime(Path modelDir, String variant) {
+    this(modelDir, variant, RuntimeConfig.defaults());
+  }
+
+  /**
+   * Creates ONNX runtime sessions for a specific model variant with explicit resource control.
+   *
+   * <p>ONNX files are loaded from {@code modelDir/variant/} and runtime-optimized
+   * graphs are cached to {@code modelDir/variant_optimized/} (unless disabled via config).
+   *
+   * @param modelDir      root model directory containing variant subfolders and shared config
+   * @param variant       variant folder name (e.g. "onnx", "onnx_fp16", "onnx_quantized")
+   * @param runtimeConfig resource control configuration for ORT sessions
+   */
+  public GLiNER4jRuntime(
+    Path modelDir,
+    String variant,
+    RuntimeConfig runtimeConfig
+  ) {
     try {
       this.env = OrtEnvironment.getEnvironment();
       int numCpus = Runtime.getRuntime().availableProcessors();
 
+      // Resolve thread counts: explicit config wins, else auto-calculate
+      int encoderIntra = runtimeConfig.getEncoderIntraOpThreads() != null
+        ? runtimeConfig.getEncoderIntraOpThreads()
+        : numCpus;
+      int encoderInter = runtimeConfig.getEncoderInterOpThreads() != null
+        ? runtimeConfig.getEncoderInterOpThreads()
+        : Math.max(2, numCpus / 2);
+      int scoringIntra = runtimeConfig.getScoringIntraOpThreads() != null
+        ? runtimeConfig.getScoringIntraOpThreads()
+        : Math.max(2, numCpus / 4);
+      int scoringInter = runtimeConfig.getScoringInterOpThreads() != null
+        ? runtimeConfig.getScoringInterOpThreads()
+        : 1;
+
       var variantDir = modelDir.resolve(variant);
-      var cacheDir = modelDir.resolve(variant + "_optimized");
-      cacheDir.toFile().mkdirs();
+      Path cacheDir = null;
+      if (runtimeConfig.isOptimizedModelCacheEnabled()) {
+        cacheDir = modelDir.resolve(variant + "_optimized");
+        cacheDir.toFile().mkdirs();
+      }
 
       log.info(
         "Loading ONNX models from {} (cache: {})",
         variantDir,
-        cacheDir
+        cacheDir != null ? cacheDir : "disabled"
       );
 
       log.info("Loading encoder.onnx...");
       try (
         var opts = createSessionOptions(
-          numCpus,
+          encoderIntra,
+          encoderInter,
+          OrtSession.SessionOptions.ExecutionMode.PARALLEL,
+          runtimeConfig.getOptimizationLevel(),
           cacheDir,
           "encoder.onnx"
         )
@@ -99,7 +144,10 @@ public class GLiNER4jRuntime implements AutoCloseable {
       log.info("Loading span_rep.onnx...");
       try (
         var opts = createSessionOptions(
-          numCpus,
+          encoderIntra,
+          encoderInter,
+          OrtSession.SessionOptions.ExecutionMode.PARALLEL,
+          runtimeConfig.getOptimizationLevel(),
           cacheDir,
           "span_rep.onnx"
         )
@@ -111,10 +159,15 @@ public class GLiNER4jRuntime implements AutoCloseable {
           );
       }
 
+      // Scoring head uses SEQUENTIAL mode with fewer threads per call —
+      // concurrency comes from virtual threads during batch processing
       log.info("Loading scoring_head.onnx...");
       try (
         var opts = createSessionOptions(
-          numCpus,
+          scoringIntra,
+          scoringInter,
+          OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL,
+          runtimeConfig.getOptimizationLevel(),
           cacheDir,
           "scoring_head.onnx"
         )
@@ -136,17 +189,23 @@ public class GLiNER4jRuntime implements AutoCloseable {
   }
 
   private static OrtSession.SessionOptions createSessionOptions(
-    int numCpus,
-    Path modelDir,
-    String optimizedFileName
+    int intraOpThreads,
+    int interOpThreads,
+    OrtSession.SessionOptions.ExecutionMode executionMode,
+    OrtSession.SessionOptions.OptLevel optLevel,
+    Path cacheDir,
+    String modelFileName
   ) throws OrtException {
     var opts = new OrtSession.SessionOptions();
-    opts.setIntraOpNumThreads(numCpus);
-    opts.setInterOpNumThreads(2);
-    opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
-    opts.setOptimizedModelFilePath(
-      modelDir.resolve(optimizedFileName).toString()
-    );
+    opts.setIntraOpNumThreads(intraOpThreads);
+    opts.setInterOpNumThreads(interOpThreads);
+    opts.setExecutionMode(executionMode);
+    opts.setOptimizationLevel(optLevel);
+    if (cacheDir != null) {
+      opts.setOptimizedModelFilePath(
+        cacheDir.resolve(modelFileName).toString()
+      );
+    }
     return opts;
   }
 
@@ -182,10 +241,10 @@ public class GLiNER4jRuntime implements AutoCloseable {
           encoderMaskBuf = allocateDirectLongBuffer(encoderBufCapacity);
           // Pre-fill schema prefix into ids buffer
           encoderIdsBuf.put(schemaPrefixIds).rewind();
-          // Pre-fill mask with 1s for entire capacity
-          for (int i = 0; i < encoderBufCapacity; i++) {
-            encoderMaskBuf.put(i, 1L);
-          }
+          // Pre-fill mask with 1s for entire capacity (bulk put)
+          var ones = new long[encoderBufCapacity];
+          Arrays.fill(ones, 1L);
+          encoderMaskBuf.put(ones).rewind();
         }
         // Write text suffix after the cached schema prefix
         encoderIdsBuf.limit(encoderBufCapacity).position(schemaPrefixLen);
@@ -249,6 +308,96 @@ public class GLiNER4jRuntime implements AutoCloseable {
   }
 
   /**
+   * Runs the span representation model using a flat span index buffer.
+   *
+   * @param textEmbs text embeddings [1][textLen][hiddenSize]
+   * @param spanIdxFlat flat span indices [numSpans*2] laid out as [start0,end0,start1,end1,...]
+   * @param numSpans number of spans
+   * @return span representations [1][textLen][maxWidth][hiddenSize]
+   */
+  public float[][][][] runSpanRepFlat(
+    float[][][] textEmbs,
+    long[] spanIdxFlat,
+    int numSpans
+  ) {
+    try {
+      int totalElements = numSpans * 2;
+      if (totalElements > spanIdxBufCapacity) {
+        spanIdxBufCapacity = totalElements + 128;
+        spanIdxBuf = allocateDirectLongBuffer(spanIdxBufCapacity);
+      }
+      spanIdxBuf.clear().limit(totalElements);
+      spanIdxBuf.put(spanIdxFlat, 0, totalElements).rewind();
+
+      var embTensor = OnnxTensor.createTensor(env, textEmbs);
+      var idxTensor = OnnxTensor.createTensor(
+        env,
+        spanIdxBuf,
+        new long[] { 1, numSpans, 2 }
+      );
+
+      try (
+        var result = spanRepSession.run(
+          Map.of("token_embeddings", embTensor, "span_idx", idxTensor)
+        )
+      ) {
+        return (float[][][][]) result.get(0).getValue();
+      } finally {
+        embTensor.close();
+        idxTensor.close();
+      }
+    } catch (OrtException e) {
+      throw new RuntimeException("SpanRep inference failed", e);
+    }
+  }
+
+  /**
+   * Runs the span representation model in batch mode.
+   *
+   * @param textEmbs padded text embeddings [batchSize][maxTextLen][hiddenSize]
+   * @param spanIdxFlat flat span indices [batchSize*maxNumSpans*2]
+   * @param batchSize number of texts in the batch
+   * @param maxNumSpans max number of spans per text (maxTextLen * maxWidth)
+   * @return span representations [batchSize][maxTextLen][maxWidth][hiddenSize]
+   */
+  public float[][][][] runSpanRepBatch(
+    float[][][] textEmbs,
+    long[] spanIdxFlat,
+    int batchSize,
+    int maxNumSpans
+  ) {
+    try {
+      int totalElements = batchSize * maxNumSpans * 2;
+      if (totalElements > spanIdxBufCapacity) {
+        spanIdxBufCapacity = totalElements + 256;
+        spanIdxBuf = allocateDirectLongBuffer(spanIdxBufCapacity);
+      }
+      spanIdxBuf.clear().limit(totalElements);
+      spanIdxBuf.put(spanIdxFlat, 0, totalElements).rewind();
+
+      var embTensor = OnnxTensor.createTensor(env, textEmbs);
+      var idxTensor = OnnxTensor.createTensor(
+        env,
+        spanIdxBuf,
+        new long[] { batchSize, maxNumSpans, 2 }
+      );
+
+      try (
+        var result = spanRepSession.run(
+          Map.of("token_embeddings", embTensor, "span_idx", idxTensor)
+        )
+      ) {
+        return (float[][][][]) result.get(0).getValue();
+      } finally {
+        embTensor.close();
+        idxTensor.close();
+      }
+    } catch (OrtException e) {
+      throw new RuntimeException("Batched SpanRep inference failed", e);
+    }
+  }
+
+  /**
    * Runs the scoring head model.
    *
    * @param spanRep span representations [textLen][maxWidth][hiddenSize]
@@ -304,6 +453,64 @@ public class GLiNER4jRuntime implements AutoCloseable {
       }
     } catch (OrtException e) {
       throw new RuntimeException("ScoringHead inference failed", e);
+    }
+  }
+
+  /**
+   * Runs the encoder model in batch mode — all inputs are padded to maxSeqLen and
+   * processed in a single ONNX call with shape [batchSize, maxSeqLen].
+   *
+   * @param inputIds token IDs per text [batchSize][varying seqLen]
+   * @param attentionMask attention masks per text [batchSize][varying seqLen]
+   * @param maxSeqLen the padded sequence length (longest in the batch)
+   * @return last hidden states [batchSize][maxSeqLen][hiddenSize]
+   */
+  public float[][][] runEncoderBatch(
+    long[][] inputIds,
+    long[][] attentionMask,
+    int maxSeqLen
+  ) {
+    try {
+      int batchSize = inputIds.length;
+      int totalElements = batchSize * maxSeqLen;
+
+      // Reuse pre-allocated direct buffers, growing on demand
+      if (totalElements > batchEncoderBufCapacity) {
+        batchEncoderBufCapacity = totalElements + 256;
+        batchEncoderIdsBuf = allocateDirectLongBuffer(batchEncoderBufCapacity);
+        batchEncoderMaskBuf = allocateDirectLongBuffer(batchEncoderBufCapacity);
+      }
+      batchEncoderIdsBuf.clear().limit(totalElements);
+      batchEncoderMaskBuf.clear().limit(totalElements);
+
+      var zeroPad = new long[maxSeqLen]; // default-initialized to 0
+      for (int b = 0; b < batchSize; b++) {
+        int seqLen = inputIds[b].length;
+        int padLen = maxSeqLen - seqLen;
+        batchEncoderIdsBuf.put(inputIds[b]);
+        if (padLen > 0) batchEncoderIdsBuf.put(zeroPad, 0, padLen);
+        batchEncoderMaskBuf.put(attentionMask[b]);
+        if (padLen > 0) batchEncoderMaskBuf.put(zeroPad, 0, padLen);
+      }
+      batchEncoderIdsBuf.rewind();
+      batchEncoderMaskBuf.rewind();
+
+      var shape = new long[] { batchSize, maxSeqLen };
+      var idsTensor = OnnxTensor.createTensor(env, batchEncoderIdsBuf, shape);
+      var maskTensor = OnnxTensor.createTensor(env, batchEncoderMaskBuf, shape);
+
+      try (
+        var result = encoderSession.run(
+          Map.of("input_ids", idsTensor, "attention_mask", maskTensor)
+        )
+      ) {
+        return (float[][][]) result.get(0).getValue();
+      } finally {
+        idsTensor.close();
+        maskTensor.close();
+      }
+    } catch (OrtException e) {
+      throw new RuntimeException("Batched encoder inference failed", e);
     }
   }
 

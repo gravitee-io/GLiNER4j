@@ -120,5 +120,5 @@ tasks:
     deps:
       - check:maven
     cmds:
-      - mvn -pl gliner4j-benchmark package -DskipTests
-      - java -jar gliner4j-benchmark/target/benchmarks.jar
+      - mvn -pl gliner4j-benchmark -am package -DskipTests
+      - java -jar gliner4j-benchmark/target/gliner4j-benchmark.jar

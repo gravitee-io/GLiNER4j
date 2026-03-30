@@ -107,7 +107,18 @@
                 <configuration>
                     <excludes>
                         <exclude>**/*.txt</exclude>
+                        <exclude>models/**</exclude>
                     </excludes>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>com.hubspot.maven.plugins</groupId>
+                <artifactId>prettier-maven-plugin</artifactId>
+                <configuration>
+                    <inputGlobs>
+                        <inputGlob>src/main/java/**/*.java</inputGlob>
+                        <inputGlob>src/test/java/**/*.java</inputGlob>
+                    </inputGlobs>
                 </configuration>
             </plugin>
         </plugins>

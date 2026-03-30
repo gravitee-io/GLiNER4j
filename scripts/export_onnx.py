@@ -440,9 +440,9 @@ def _export_span_rep(
             input_names=["token_embeddings", "span_idx"],
             output_names=["span_rep"],
             dynamic_axes={
-                "token_embeddings": {1: "text_len"},
-                "span_idx": {1: "num_spans"},
-                "span_rep": {1: "text_len"},
+                "token_embeddings": {0: "batch", 1: "text_len"},
+                "span_idx": {0: "batch", 1: "num_spans"},
+                "span_rep": {0: "batch", 1: "text_len"},
             },
         )
     else:
@@ -455,8 +455,8 @@ def _export_span_rep(
             input_names=["token_embeddings"],
             output_names=["span_rep"],
             dynamic_axes={
-                "token_embeddings": {1: "text_len"},
-                "span_rep": {1: "text_len"},
+                "token_embeddings": {0: "batch", 1: "text_len"},
+                "span_rep": {0: "batch", 1: "text_len"},
             },
         )
 

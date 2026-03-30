@@ -21,6 +21,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -31,6 +32,8 @@ import lombok.extern.slf4j.Slf4j;
 public class DjlTokenizerWrapper implements AutoCloseable {
 
   private final HuggingFaceTokenizer tokenizer;
+  private final ConcurrentHashMap<String, TokenizationResult> tokenCache =
+    new ConcurrentHashMap<>();
 
   /**
    * Loads a HuggingFace tokenizer from the model directory.
@@ -77,6 +80,10 @@ public class DjlTokenizerWrapper implements AutoCloseable {
    * @return tokenization result with both token strings and vocabulary IDs
    */
   public TokenizationResult tokenizeWithIds(String word) {
+    return tokenCache.computeIfAbsent(word, this::tokenizeUncached);
+  }
+
+  private TokenizationResult tokenizeUncached(String word) {
     var encoding = tokenizer.encode(word, false, false);
     return new TokenizationResult(encoding.getTokens(), encoding.getIds());
   }
