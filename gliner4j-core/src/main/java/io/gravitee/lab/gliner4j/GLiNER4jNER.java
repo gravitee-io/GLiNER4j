@@ -243,6 +243,9 @@ public class GLiNER4jNER implements AutoCloseable {
    * @return list of results, one per input text (same order)
    */
   public List<Map<String, List<EntitySpan>>> extractBatch(List<String> texts) {
+    if (texts == null) {
+      return List.of();
+    }
     return extractBatch(texts, config.getDefaultThreshold());
   }
 
@@ -257,6 +260,9 @@ public class GLiNER4jNER implements AutoCloseable {
     List<String> texts,
     float threshold
   ) {
+    if (texts == null) {
+      return List.of();
+    }
     int batchSize = texts.size();
 
     // 1. Preprocess all texts and find max sequence length
