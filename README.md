@@ -2,8 +2,17 @@
 
 Java library for running [GLiNER2](https://github.com/fastino-ai/GLiNER2) Named Entity Recognition models using ONNX Runtime.
 
+## Features
+
+- ONNX-based inference with configurable runtime options (thread pools, graph optimization, model caching)
+- Entity descriptions for improved extraction accuracy
+- Per-call entity override for dynamic use cases
+- Batch processing with parallelized scoring
+- Support for ONNX model variants (default, fp16, quantized)
+
 ## Prerequisites
 
+- Java 21+
 - [Task](https://taskfile.dev) - task runner
 - [Maven](https://maven.apache.org/install.html) - Java build tool
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) - Python package manager (for model download/export/upload)
@@ -11,7 +20,7 @@ Java library for running [GLiNER2](https://github.com/fastino-ai/GLiNER2) Named 
 ## Quick Start
 
 ```bash
-# Download the model and export to ONNX
+# Download the model and export to ONNX (all variants)
 task
 
 # Build the project
@@ -25,13 +34,13 @@ task test
 
 | Task | Description |
 |------|-------------|
-| `task` | Download model and export to ONNX |
-| `task build` | Format code and build the project |
-| `task test` | Format code and run tests |
+| `task` | Download model and export to ONNX (all variants) |
+| `task build` | Build the Java project (formats code first) |
+| `task test` | Run tests (formats code first) |
 | `task format` | Apply license headers and format code |
 | `task benchmark` | Run JMH benchmarks |
 | `task model:download` | Download GLiNER2 model from HuggingFace |
-| `task model:export` | Export PyTorch model to ONNX format |
+| `task model:export` | Export PyTorch model to ONNX format (base + optional variants) |
 | `task model:clean` | Remove downloaded and exported model files |
 | `task hf-upload HF_REPO=<user/repo>` | Upload ONNX model to HuggingFace Hub |
 
