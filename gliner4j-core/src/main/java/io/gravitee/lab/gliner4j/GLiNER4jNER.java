@@ -25,6 +25,7 @@ import io.gravitee.lab.gliner4j.runtime.GLiNER4jNERRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
+import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
 import io.gravitee.lab.gliner4j.tokenizer.TokenMapping;
 import io.gravitee.lab.gliner4j.tokenizer.WhitespaceTokenSplitter;
@@ -57,6 +58,7 @@ public class GLiNER4jNER implements AutoCloseable {
   private final InputAssembler inputAssembler;
   private final WhitespaceTokenSplitter splitter;
   private final SpanDecoder spanDecoder;
+  private final GLiNER4jTelemetry telemetry;
 
   private GLiNER4jNER(
     GLiNER4jConfig config,
@@ -72,6 +74,7 @@ public class GLiNER4jNER implements AutoCloseable {
     this.inputAssembler = inputAssembler;
     this.splitter = new WhitespaceTokenSplitter();
     this.spanDecoder = new SpanDecoder();
+    this.telemetry = new GLiNER4jTelemetry();
   }
 
   /**
@@ -206,7 +209,9 @@ public class GLiNER4jNER implements AutoCloseable {
     List<EntityDefinition> entities,
     float threshold
   ) {
+    long startNanos = System.nanoTime();
     if (text == null || text.isBlank()) {
+      telemetry.recordExtract(0.0, 1, 0);
       return Map.of();
     }
 
@@ -217,6 +222,7 @@ public class GLiNER4jNER implements AutoCloseable {
     // Split text into words with char offsets
     var textEncoder = new TextEncoder(text, splitter);
     if (textEncoder.getTextLen() == 0) {
+      telemetry.recordExtract(0.0, 1, 0);
       return Map.of();
     }
 
@@ -230,7 +236,11 @@ public class GLiNER4jNER implements AutoCloseable {
     );
 
     // Steps 4-10 are identical to the default extract path
-    return extractFromHiddenStates(hiddenStates, input, text, threshold);
+    var result = extractFromHiddenStates(hiddenStates, input, text, threshold);
+    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
+    long entityCount = result.values().stream().mapToLong(List::size).sum();
+    telemetry.recordExtract(durationMs, 1, entityCount);
+    return result;
   }
 
   /**
@@ -263,6 +273,7 @@ public class GLiNER4jNER implements AutoCloseable {
     if (texts == null) {
       return List.of();
     }
+    long startNanos = System.nanoTime();
     int batchSize = texts.size();
 
     // 1. Preprocess all texts and find max sequence length
@@ -294,6 +305,8 @@ public class GLiNER4jNER implements AutoCloseable {
       for (int i = 0; i < batchSize; i++) {
         emptyResults.add(Map.of());
       }
+      double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
+      telemetry.recordExtract(durationMs, batchSize, 0);
       return emptyResults;
     }
 
@@ -455,6 +468,12 @@ public class GLiNER4jNER implements AutoCloseable {
       }
     }
 
+    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
+    long totalEntities = results
+      .stream()
+      .mapToLong(m -> m.values().stream().mapToLong(List::size).sum())
+      .sum();
+    telemetry.recordExtract(durationMs, batchSize, totalEntities);
     return results;
   }
 
@@ -466,13 +485,16 @@ public class GLiNER4jNER implements AutoCloseable {
    * @return map of entity type to list of detected spans
    */
   public Map<String, List<EntitySpan>> extract(String text, float threshold) {
+    long startNanos = System.nanoTime();
     if (text == null || text.isBlank()) {
+      telemetry.recordExtract(0.0, 1, 0);
       return Map.of();
     }
 
     // 1. Split text into words with char offsets
     var textEncoder = new TextEncoder(text, splitter);
     if (textEncoder.getTextLen() == 0) {
+      telemetry.recordExtract(0.0, 1, 0);
       return Map.of();
     }
 
@@ -486,7 +508,11 @@ public class GLiNER4jNER implements AutoCloseable {
     );
 
     // 4-10. Extract embeddings, score spans, decode, and group
-    return extractFromHiddenStates(hiddenStates, input, text, threshold);
+    var result = extractFromHiddenStates(hiddenStates, input, text, threshold);
+    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
+    long entityCount = result.values().stream().mapToLong(List::size).sum();
+    telemetry.recordExtract(durationMs, 1, entityCount);
+    return result;
   }
 
   private Map<String, List<EntitySpan>> extractFromHiddenStates(

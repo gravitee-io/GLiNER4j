@@ -24,6 +24,7 @@ import io.gravitee.lab.gliner4j.runtime.GLiNER4jClassifierRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
+import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
 import io.gravitee.lab.gliner4j.tokenizer.WhitespaceTokenSplitter;
 import java.nio.file.Path;
@@ -57,6 +58,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
   private final GLiNER4jClassifierRuntime runtime;
   private final InputAssembler inputAssembler;
   private final WhitespaceTokenSplitter splitter;
+  private final GLiNER4jTelemetry telemetry;
 
   private GLiNER4jClassifier(
     GLiNER4jConfig config,
@@ -71,6 +73,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
     this.runtime = runtime;
     this.inputAssembler = inputAssembler;
     this.splitter = new WhitespaceTokenSplitter();
+    this.telemetry = new GLiNER4jTelemetry();
   }
 
   /**
@@ -186,12 +189,15 @@ public class GLiNER4jClassifier implements AutoCloseable {
    * @return list of classification results above threshold, sorted by confidence descending
    */
   public List<ClassificationResult> classify(String text, float threshold) {
+    long startNanos = System.nanoTime();
     if (text == null || text.isBlank()) {
+      telemetry.recordExtract(0.0, 1, 0);
       return List.of();
     }
 
     var textEncoder = new TextEncoder(text, splitter);
     if (textEncoder.getTextLen() == 0) {
+      telemetry.recordExtract(0.0, 1, 0);
       return List.of();
     }
 
@@ -201,7 +207,10 @@ public class GLiNER4jClassifier implements AutoCloseable {
       input.attentionMask()
     );
 
-    return classifyFromHiddenStates(hiddenStates, input, threshold);
+    var result = classifyFromHiddenStates(hiddenStates, input, threshold);
+    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
+    telemetry.recordExtract(durationMs, 1, result.size());
+    return result;
   }
 
   /**
@@ -231,7 +240,9 @@ public class GLiNER4jClassifier implements AutoCloseable {
     List<ClassificationLabel> labels,
     float threshold
   ) {
+    long startNanos = System.nanoTime();
     if (text == null || text.isBlank()) {
+      telemetry.recordExtract(0.0, 1, 0);
       return List.of();
     }
 
@@ -240,6 +251,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
 
     var textEncoder = new TextEncoder(text, splitter);
     if (textEncoder.getTextLen() == 0) {
+      telemetry.recordExtract(0.0, 1, 0);
       return List.of();
     }
 
@@ -249,7 +261,10 @@ public class GLiNER4jClassifier implements AutoCloseable {
       input.attentionMask()
     );
 
-    return classifyFromHiddenStates(hiddenStates, input, threshold);
+    var result = classifyFromHiddenStates(hiddenStates, input, threshold);
+    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
+    telemetry.recordExtract(durationMs, 1, result.size());
+    return result;
   }
 
   /**
@@ -276,6 +291,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
     List<String> texts,
     float threshold
   ) {
+    long startNanos = System.nanoTime();
     int batchSize = texts.size();
 
     // 1. Preprocess all texts and find max sequence length
@@ -305,6 +321,8 @@ public class GLiNER4jClassifier implements AutoCloseable {
       for (int i = 0; i < batchSize; i++) {
         emptyResults.add(List.of());
       }
+      double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
+      telemetry.recordExtract(durationMs, batchSize, 0);
       return emptyResults;
     }
 
@@ -372,6 +390,9 @@ public class GLiNER4jClassifier implements AutoCloseable {
       }
     }
 
+    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
+    long totalEntities = results.stream().mapToLong(List::size).sum();
+    telemetry.recordExtract(durationMs, batchSize, totalEntities);
     return results;
   }
 
