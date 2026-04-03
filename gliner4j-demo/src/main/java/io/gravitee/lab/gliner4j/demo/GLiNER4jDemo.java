@@ -17,56 +17,244 @@ package io.gravitee.lab.gliner4j.demo;
 
 import io.gravitee.lab.gliner4j.GLiNER4j;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
+import io.gravitee.lab.gliner4j.schema.EntitySpan;
 import java.nio.file.Path;
-import java.util.List;
+import java.util.*;
 
 /**
  * Demo application for GLiNER4j — runs NER on sample sentences.
  */
 public class GLiNER4jDemo {
 
+  // ANSI color codes
+  private static final String RESET = "\033[0m";
+  private static final String BOLD = "\033[1m";
+  private static final String DIM = "\033[2m";
+  private static final String WHITE = "\033[97m";
+  private static final String GRAY = "\033[90m";
+
+  // Entity type colors (background + foreground pairs)
+  private static final Map<String, String[]> ENTITY_COLORS =
+    new LinkedHashMap<>();
+
+  static {
+    ENTITY_COLORS.put(
+      "person",
+      new String[] { "\033[48;5;63m\033[97m", "\033[38;5;63m" }
+    ); // purple
+    ENTITY_COLORS.put(
+      "organization",
+      new String[] { "\033[48;5;37m\033[97m", "\033[38;5;37m" }
+    ); // teal
+    ENTITY_COLORS.put(
+      "location",
+      new String[] { "\033[48;5;208m\033[97m", "\033[38;5;208m" }
+    ); // orange
+    ENTITY_COLORS.put(
+      "date",
+      new String[] { "\033[48;5;170m\033[97m", "\033[38;5;170m" }
+    ); // pink
+    ENTITY_COLORS.put(
+      "event",
+      new String[] { "\033[48;5;196m\033[97m", "\033[38;5;196m" }
+    ); // red
+    ENTITY_COLORS.put(
+      "product",
+      new String[] { "\033[48;5;33m\033[97m", "\033[38;5;33m" }
+    ); // blue
+  }
+
   public static void main(String[] args) {
     var modelDir = Path.of("models/gliner2-base-onnx");
-    var entities = List.of(
-      new EntityDefinition("person"),
-      new EntityDefinition("organization"),
-      new EntityDefinition("location")
+
+    var samples = List.of(
+      "Elon Musk unveiled the Tesla Cybertruck at the Los Angeles event in November 2019.",
+      "The United Nations Climate Change Conference was held in Paris.",
+      "Marie Curie won the Nobel Prize at the University of Paris in 1903.",
+      "Apple released the iPhone 15 at their Cupertino headquarters on September 12, 2023."
     );
 
-    System.out.println("=== GLiNER4j Demo ===\n");
-    System.out.println("Loading model from: " + modelDir);
+    var entities = List.of(
+      new EntityDefinition("person", "Names of real individuals"),
+      new EntityDefinition("organization"),
+      new EntityDefinition(
+        "location",
+        "Cities, countries, geographical places"
+      ),
+      new EntityDefinition("date"),
+      new EntityDefinition(
+        "event",
+        "Named events, conferences, historical events"
+      ),
+      new EntityDefinition("product")
+    );
+
+    printBanner();
+    System.out.println(DIM + "  Model: " + modelDir + RESET);
+    System.out.println();
+    printEntityConfig(entities);
+    printLegend(entities);
 
     try (var gliner = GLiNER4j.load(modelDir, entities)) {
-      var samples = List.of(
-        "John works at Google in Mountain View, California.",
-        "Elon Musk founded SpaceX and leads Tesla.",
-        "The United Nations headquarters is in New York City.",
-        "Marie Curie worked at the University of Paris."
-      );
-
-      for (var text : samples) {
-        System.out.println("\nInput: " + text);
+      for (int i = 0; i < samples.size(); i++) {
+        var text = samples.get(i);
         var results = gliner.extract(text);
-
-        if (results.isEmpty()) {
-          System.out.println("  No entities found.");
-        } else {
-          results.forEach((type, spans) -> {
-            for (var span : spans) {
-              System.out.printf(
-                "  [%s] \"%s\" (confidence=%.3f, chars=%d-%d)%n",
-                type,
-                span.text(),
-                span.confidence(),
-                span.start(),
-                span.end()
-              );
-            }
-          });
-        }
+        printResult(i + 1, text, results);
       }
     }
 
-    System.out.println("\n=== Done ===");
+    System.out.println();
+    System.out.println(
+      DIM +
+      "  ─────────────────────────────────────────────────────────────" +
+      RESET
+    );
+    System.out.println(BOLD + "  Done." + RESET);
+    System.out.println();
+  }
+
+  private static void printBanner() {
+    System.out.println();
+    System.out.println(
+      BOLD +
+      "  ┌─────────────────────────────────────────────────────────┐" +
+      RESET
+    );
+    System.out.println(
+      BOLD +
+      "  │               GLiNER4j — NER Demo                       │" +
+      RESET
+    );
+    System.out.println(
+      BOLD +
+      "  │         Named Entity Recognition with ONNX Runtime       │" +
+      RESET
+    );
+    System.out.println(
+      BOLD +
+      "  └─────────────────────────────────────────────────────────┘" +
+      RESET
+    );
+    System.out.println();
+  }
+
+  private static void printEntityConfig(List<EntityDefinition> entities) {
+    System.out.println(DIM + "  Config:" + RESET);
+    for (var entity : entities) {
+      var colors = ENTITY_COLORS.getOrDefault(
+        entity.name(),
+        new String[] { BOLD, WHITE }
+      );
+      if (entity.description().isBlank()) {
+        System.out.println("    " + colors[1] + entity.name() + RESET);
+      } else {
+        System.out.println(
+          "    " +
+          colors[1] +
+          entity.name() +
+          RESET +
+          GRAY +
+          " — " +
+          entity.description() +
+          RESET
+        );
+      }
+    }
+    System.out.println();
+  }
+
+  private static void printLegend(List<EntityDefinition> entities) {
+    System.out.print("  ");
+    for (var entity : entities) {
+      var colors = ENTITY_COLORS.getOrDefault(
+        entity.name(),
+        new String[] { BOLD, WHITE }
+      );
+      System.out.print(
+        colors[0] + " " + entity.name().toUpperCase() + " " + RESET + "  "
+      );
+    }
+    System.out.println();
+    System.out.println(
+      DIM +
+      "  ─────────────────────────────────────────────────────────────" +
+      RESET
+    );
+  }
+
+  private static void printResult(
+    int index,
+    String text,
+    Map<String, List<EntitySpan>> results
+  ) {
+    System.out.println();
+
+    // Collect all spans and sort by start position
+    var allSpans = new ArrayList<EntitySpan>();
+    results.values().forEach(allSpans::addAll);
+    allSpans.sort(Comparator.comparingInt(EntitySpan::start));
+
+    // Print annotated text on the same line as the index number
+    System.out.print("  " + DIM + index + "." + RESET + " ");
+    int pos = 0;
+    for (var span : allSpans) {
+      if (span.start() > pos) {
+        System.out.print(text.substring(pos, span.start()));
+      }
+      var colors = ENTITY_COLORS.getOrDefault(
+        span.type(),
+        new String[] { BOLD, WHITE }
+      );
+      System.out.print(colors[0] + " " + span.text() + " " + RESET);
+      pos = span.end();
+    }
+    if (pos < text.length()) {
+      System.out.print(text.substring(pos));
+    }
+    System.out.println();
+
+    // Print entity details
+    if (allSpans.isEmpty()) {
+      System.out.println(GRAY + "     No entities found." + RESET);
+    } else {
+      for (var span : allSpans) {
+        var colors = ENTITY_COLORS.getOrDefault(
+          span.type(),
+          new String[] { BOLD, WHITE }
+        );
+        var bar = confidenceBar(span.confidence());
+        System.out.printf(
+          "     %s%-14s%s  %-25s  %s %s%.0f%%%s%n",
+          colors[1],
+          span.type(),
+          RESET,
+          "\"" + span.text() + "\"",
+          bar,
+          DIM,
+          span.confidence() * 100,
+          RESET
+        );
+      }
+    }
+  }
+
+  private static String confidenceBar(float confidence) {
+    int filled = Math.round(confidence * 10);
+    var sb = new StringBuilder(GRAY + "│" + RESET);
+    for (int i = 0; i < 10; i++) {
+      if (i < filled) {
+        if (confidence >= 0.8f) {
+          sb.append("\033[38;5;35m█" + RESET); // green
+        } else if (confidence >= 0.5f) {
+          sb.append("\033[38;5;220m█" + RESET); // yellow
+        } else {
+          sb.append("\033[38;5;196m█" + RESET); // red
+        }
+      } else {
+        sb.append(GRAY + "░" + RESET);
+      }
+    }
+    sb.append(GRAY + "│" + RESET);
+    return sb.toString();
   }
 }

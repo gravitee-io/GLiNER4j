@@ -115,6 +115,13 @@ tasks:
       - uv run --with huggingface-hub hf upload {{.HF_REPO}} {{.ONNX_OUTPUT_DIR}} . --commit-message "Upload ONNX model files (all variants)"
       - uv run --with huggingface-hub hf upload {{.HF_REPO}} MODEL_CARD.md README.md --commit-message "Upload model card"
 
+  demo:
+    desc: Run the GLiNER4j NER demo
+    deps:
+      - check:maven
+    cmds:
+      - mvn exec:java -pl gliner4j-demo 2>/dev/null
+
   benchmark:
     desc: Run JMH benchmarks
     deps:

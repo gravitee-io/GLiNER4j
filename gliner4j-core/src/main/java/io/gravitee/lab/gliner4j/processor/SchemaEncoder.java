@@ -22,7 +22,8 @@ import lombok.Getter;
 
 /**
  * Builds the schema token list from entity definitions.
- * Schema format: ["(", "[P]", "entities", "(", "[E]", "person", "[E]", "org", ")", ")"]
+ * Schema format: ["(", "[P]", "entities", "[DESCRIPTION]", "person:", "desc", ..., "(", "[E]", "person", "[E]", "org", ")", ")"]
+ * Description tokens are only emitted for entities with a non-blank description.
  * Immutable after construction — safe to share across threads.
  */
 @Getter
@@ -50,6 +51,14 @@ public class SchemaEncoder {
     tokens.add("(");
     tokens.add("[P]");
     tokens.add("entities");
+    for (var entity : entities) {
+      var desc = entity.description();
+      if (desc != null && !desc.isBlank()) {
+        tokens.add("[DESCRIPTION]");
+        tokens.add(entity.name() + ":");
+        tokens.add(desc);
+      }
+    }
     tokens.add("(");
     for (var entity : entities) {
       tokens.add("[E]");
