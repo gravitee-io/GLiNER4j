@@ -23,6 +23,7 @@ import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Demo application for GLiNER4jNER — runs NER on sample sentences.
@@ -100,7 +101,7 @@ public class GLiNER4jDemo {
   public static void main(String[] args) {
     var modelDir = Path.of("models/gliner2-base-onnx");
 
-    var samples = List.of(
+    var nerSamples = List.of(
       "Elon Musk unveiled the Tesla Cybertruck at the Los Angeles event in November 2019.",
       "The United Nations Climate Change Conference was held in Paris.",
       "Marie Curie won the Nobel Prize at the University of Paris in 1903.",
@@ -122,34 +123,7 @@ public class GLiNER4jDemo {
       new EntityDefinition("product")
     );
 
-    printBanner();
-    System.out.println(DIM + "  Model: " + modelDir + RESET);
-    System.out.println();
-    printEntityConfig(entities);
-    printLegend(entities);
-
-    try (var gliner = GLiNER4jNER.load(modelDir, entities)) {
-      for (int i = 0; i < samples.size(); i++) {
-        var text = samples.get(i);
-        var results = gliner.extract(text);
-        printResult(i + 1, text, results);
-      }
-    }
-
-    runClassificationDemo(modelDir);
-
-    System.out.println();
-    System.out.println(
-      DIM +
-      "  ─────────────────────────────────────────────────────────────" +
-      RESET
-    );
-    System.out.println(BOLD + "  Done." + RESET);
-    System.out.println();
-  }
-
-  private static void runClassificationDemo(Path modelDir) {
-    var samples = List.of(
+    var classifySamples = List.of(
       "This product is absolutely amazing, best purchase I've ever made!",
       "The service was terrible and the staff was rude.",
       "The quarterly earnings report shows a 15% increase in revenue.",
@@ -165,19 +139,97 @@ public class GLiNER4jDemo {
       new ClassificationLabel("technology", "Technology, software, hardware")
     );
 
-    printClassificationBanner();
+    // ── Showcase phase ──────────────────────────────────────────────
+
+    printBanner();
     System.out.println(DIM + "  Model: " + modelDir + RESET);
     System.out.println();
-    printLabelConfig(labels);
-    printLabelLegend(labels);
+    printEntityConfig(entities);
+    printLegend(entities);
 
-    try (var classifier = GLiNER4jClassifier.load(modelDir, labels)) {
-      for (int i = 0; i < samples.size(); i++) {
-        var text = samples.get(i);
+    try (
+      var gliner = GLiNER4jNER.load(modelDir, entities);
+      var classifier = GLiNER4jClassifier.load(modelDir, labels)
+    ) {
+      // NER showcase
+      for (int i = 0; i < nerSamples.size(); i++) {
+        var text = nerSamples.get(i);
+        var results = gliner.extract(text);
+        printResult(i + 1, text, results);
+      }
+
+      // Classification showcase
+      printClassificationBanner();
+      System.out.println(DIM + "  Model: " + modelDir + RESET);
+      System.out.println();
+      printLabelConfig(labels);
+      printLabelLegend(labels);
+
+      for (int i = 0; i < classifySamples.size(); i++) {
+        var text = classifySamples.get(i);
         var results = classifier.classify(text);
         printClassificationResult(i + 1, text, results);
       }
+
+      // ── Interactive phase ───────────────────────────────────────────
+
+      printInteractiveBanner();
+      var counter = new AtomicInteger(1);
+      var mode = new String[] { "ner" }; // mutable holder for current mode
+
+      try (var scanner = new Scanner(System.in)) {
+        while (true) {
+          System.out.print(
+            BOLD +
+            "  gliner" +
+            RESET +
+            DIM +
+            " [" +
+            mode[0] +
+            "]" +
+            RESET +
+            "> "
+          );
+          if (!scanner.hasNextLine()) break;
+          var line = scanner.nextLine().strip();
+          if (line.isEmpty()) continue;
+
+          if (line.equalsIgnoreCase("/exit")) {
+            break;
+          } else if (line.equalsIgnoreCase("/ner")) {
+            mode[0] = "ner";
+            System.out.println(DIM + "  Switched to NER mode." + RESET);
+            continue;
+          } else if (line.equalsIgnoreCase("/classify")) {
+            mode[0] = "classify";
+            System.out.println(
+              DIM + "  Switched to classification mode." + RESET
+            );
+            continue;
+          } else if (line.equalsIgnoreCase("/help")) {
+            printInteractiveHelp();
+            continue;
+          }
+
+          if ("ner".equals(mode[0])) {
+            var results = gliner.extract(line);
+            printResult(counter.getAndIncrement(), line, results);
+          } else {
+            var results = classifier.classify(line);
+            printClassificationResult(counter.getAndIncrement(), line, results);
+          }
+        }
+      }
     }
+
+    System.out.println();
+    System.out.println(
+      DIM +
+      "  ─────────────────────────────────────────────────────────────" +
+      RESET
+    );
+    System.out.println(BOLD + "  Done." + RESET);
+    System.out.println();
   }
 
   private static void printBanner() {
@@ -403,6 +455,58 @@ public class GLiNER4jDemo {
         );
       }
     }
+  }
+
+  private static void printInteractiveBanner() {
+    System.out.println();
+    System.out.println(
+      DIM +
+      "  ─────────────────────────────────────────────────────────────" +
+      RESET
+    );
+    System.out.println();
+    System.out.println(
+      BOLD +
+      "  Interactive mode" +
+      RESET +
+      DIM +
+      " — type a sentence and press Enter" +
+      RESET
+    );
+    System.out.println(
+      DIM + "  Commands: /ner  /classify  /help  /exit" + RESET
+    );
+    System.out.println();
+  }
+
+  private static void printInteractiveHelp() {
+    System.out.println();
+    System.out.println(DIM + "  Available commands:" + RESET);
+    System.out.println(
+      "    " + BOLD + "/ner" + RESET + DIM + "       Switch to NER mode" + RESET
+    );
+    System.out.println(
+      "    " +
+      BOLD +
+      "/classify" +
+      RESET +
+      DIM +
+      "  Switch to classification mode" +
+      RESET
+    );
+    System.out.println(
+      "    " + BOLD + "/help" + RESET + DIM + "      Show this help" + RESET
+    );
+    System.out.println(
+      "    " +
+      BOLD +
+      "/exit" +
+      RESET +
+      DIM +
+      "      Quit the interactive session" +
+      RESET
+    );
+    System.out.println();
   }
 
   private static String confidenceBar(float confidence) {
