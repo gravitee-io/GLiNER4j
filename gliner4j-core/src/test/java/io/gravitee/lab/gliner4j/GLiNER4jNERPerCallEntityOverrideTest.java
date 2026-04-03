@@ -31,12 +31,12 @@ import org.junit.jupiter.api.condition.EnabledIf;
  * Requires actual ONNX model files — skipped when not present.
  */
 @EnabledIf("modelDirExists")
-class GLiNER4jPerCallEntityOverrideTest {
+class GLiNER4jNERPerCallEntityOverrideTest {
 
   private static final Path MODEL_DIR = Path.of("models/gliner2-base-onnx");
 
   static boolean modelDirExists() {
-    return Files.exists(MODEL_DIR.resolve("encoder.onnx"));
+    return Files.exists(MODEL_DIR.resolve("onnx/encoder.onnx"));
   }
 
   @Test
@@ -46,7 +46,7 @@ class GLiNER4jPerCallEntityOverrideTest {
       new EntityDefinition("organization")
     );
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, defaultEntities)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, defaultEntities)) {
       var locationOnly = List.of(new EntityDefinition("location"));
       Map<String, List<EntitySpan>> results = gliner.extract(
         "John works at Google in New York.",
@@ -66,7 +66,7 @@ class GLiNER4jPerCallEntityOverrideTest {
   void extractWithPerCallEntityOverrideAndThreshold() {
     var defaultEntities = List.of(new EntityDefinition("person"));
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, defaultEntities)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, defaultEntities)) {
       var overrideEntities = List.of(
         new EntityDefinition("person"),
         new EntityDefinition("organization")
@@ -90,7 +90,7 @@ class GLiNER4jPerCallEntityOverrideTest {
   void extractWithPerCallEntityOverrideEmptyText() {
     var defaultEntities = List.of(new EntityDefinition("person"));
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, defaultEntities)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, defaultEntities)) {
       var overrideEntities = List.of(new EntityDefinition("location"));
       Map<String, List<EntitySpan>> results = gliner.extract(
         "",
@@ -107,7 +107,7 @@ class GLiNER4jPerCallEntityOverrideTest {
       new EntityDefinition("organization")
     );
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, defaultEntities)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, defaultEntities)) {
       // First call with override
       var locationOnly = List.of(new EntityDefinition("location"));
       gliner.extract("John works at Google in New York.", locationOnly);

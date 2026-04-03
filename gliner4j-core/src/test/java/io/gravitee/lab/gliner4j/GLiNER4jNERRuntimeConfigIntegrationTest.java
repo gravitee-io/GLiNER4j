@@ -33,7 +33,7 @@ import org.junit.jupiter.api.condition.EnabledIf;
  * settings are applied without breaking inference correctness.
  */
 @EnabledIf("modelDirExists")
-class GLiNER4jRuntimeConfigIntegrationTest {
+class GLiNER4jNERRuntimeConfigIntegrationTest {
 
   private static final Path MODEL_DIR = Path.of("models/gliner2-base-onnx");
 
@@ -53,7 +53,7 @@ class GLiNER4jRuntimeConfigIntegrationTest {
     var entities = defaultEntities();
     var config = RuntimeConfig.defaults();
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, entities, config)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, entities, config)) {
       Map<String, List<EntitySpan>> results = gliner.extract(
         "John works at Google."
       );
@@ -78,7 +78,7 @@ class GLiNER4jRuntimeConfigIntegrationTest {
       .scoringInterOpThreads(1)
       .build();
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, entities, config)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, entities, config)) {
       Map<String, List<EntitySpan>> results = gliner.extract(
         "John works at Google."
       );
@@ -98,7 +98,7 @@ class GLiNER4jRuntimeConfigIntegrationTest {
       .build();
 
     // Use a unique variant dir suffix to avoid interference with cached models
-    try (var gliner = GLiNER4j.load(MODEL_DIR, entities, config)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, entities, config)) {
       Map<String, List<EntitySpan>> results = gliner.extract(
         "Marie Curie worked at the University of Paris."
       );
@@ -118,7 +118,7 @@ class GLiNER4jRuntimeConfigIntegrationTest {
       .optimizedModelCacheEnabled(false)
       .build();
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, entities, config)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, entities, config)) {
       Map<String, List<EntitySpan>> results = gliner.extract(
         "John works at Google."
       );

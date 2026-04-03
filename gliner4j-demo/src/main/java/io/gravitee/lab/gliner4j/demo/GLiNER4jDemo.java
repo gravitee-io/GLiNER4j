@@ -15,14 +15,17 @@
  */
 package io.gravitee.lab.gliner4j.demo;
 
-import io.gravitee.lab.gliner4j.GLiNER4j;
+import io.gravitee.lab.gliner4j.GLiNER4jClassifier;
+import io.gravitee.lab.gliner4j.GLiNER4jNER;
+import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
+import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
 import java.nio.file.Path;
 import java.util.*;
 
 /**
- * Demo application for GLiNER4j — runs NER on sample sentences.
+ * Demo application for GLiNER4jNER — runs NER on sample sentences.
  */
 public class GLiNER4jDemo {
 
@@ -64,6 +67,36 @@ public class GLiNER4jDemo {
     ); // blue
   }
 
+  private static final Map<String, String[]> LABEL_COLORS =
+    new LinkedHashMap<>();
+
+  static {
+    LABEL_COLORS.put(
+      "positive",
+      new String[] { "\033[48;5;35m\033[97m", "\033[38;5;35m" }
+    ); // green
+    LABEL_COLORS.put(
+      "negative",
+      new String[] { "\033[48;5;196m\033[97m", "\033[38;5;196m" }
+    ); // red
+    LABEL_COLORS.put(
+      "neutral",
+      new String[] { "\033[48;5;245m\033[97m", "\033[38;5;245m" }
+    ); // gray
+    LABEL_COLORS.put(
+      "business",
+      new String[] { "\033[48;5;33m\033[97m", "\033[38;5;33m" }
+    ); // blue
+    LABEL_COLORS.put(
+      "health",
+      new String[] { "\033[48;5;170m\033[97m", "\033[38;5;170m" }
+    ); // pink
+    LABEL_COLORS.put(
+      "technology",
+      new String[] { "\033[48;5;208m\033[97m", "\033[38;5;208m" }
+    ); // orange
+  }
+
   public static void main(String[] args) {
     var modelDir = Path.of("models/gliner2-base-onnx");
 
@@ -95,13 +128,15 @@ public class GLiNER4jDemo {
     printEntityConfig(entities);
     printLegend(entities);
 
-    try (var gliner = GLiNER4j.load(modelDir, entities)) {
+    try (var gliner = GLiNER4jNER.load(modelDir, entities)) {
       for (int i = 0; i < samples.size(); i++) {
         var text = samples.get(i);
         var results = gliner.extract(text);
         printResult(i + 1, text, results);
       }
     }
+
+    runClassificationDemo(modelDir);
 
     System.out.println();
     System.out.println(
@@ -113,6 +148,38 @@ public class GLiNER4jDemo {
     System.out.println();
   }
 
+  private static void runClassificationDemo(Path modelDir) {
+    var samples = List.of(
+      "This product is absolutely amazing, best purchase I've ever made!",
+      "The service was terrible and the staff was rude.",
+      "The quarterly earnings report shows a 15% increase in revenue.",
+      "New research suggests that regular exercise improves mental health."
+    );
+
+    var labels = List.of(
+      new ClassificationLabel("positive", "Positive sentiment or opinion"),
+      new ClassificationLabel("negative", "Negative sentiment or opinion"),
+      new ClassificationLabel("neutral", "Neutral, factual statement"),
+      new ClassificationLabel("business", "Business, finance, economics"),
+      new ClassificationLabel("health", "Health, medicine, wellness"),
+      new ClassificationLabel("technology", "Technology, software, hardware")
+    );
+
+    printClassificationBanner();
+    System.out.println(DIM + "  Model: " + modelDir + RESET);
+    System.out.println();
+    printLabelConfig(labels);
+    printLabelLegend(labels);
+
+    try (var classifier = GLiNER4jClassifier.load(modelDir, labels)) {
+      for (int i = 0; i < samples.size(); i++) {
+        var text = samples.get(i);
+        var results = classifier.classify(text);
+        printClassificationResult(i + 1, text, results);
+      }
+    }
+  }
+
   private static void printBanner() {
     System.out.println();
     System.out.println(
@@ -122,12 +189,12 @@ public class GLiNER4jDemo {
     );
     System.out.println(
       BOLD +
-      "  │               GLiNER4j — NER Demo                       │" +
+      "  │                 GLiNER4jNER — NER Demo                  │" +
       RESET
     );
     System.out.println(
       BOLD +
-      "  │         Named Entity Recognition with ONNX Runtime       │" +
+      "  │       Named Entity Recognition with ONNX Runtime        │" +
       RESET
     );
     System.out.println(
@@ -232,6 +299,106 @@ public class GLiNER4jDemo {
           bar,
           DIM,
           span.confidence() * 100,
+          RESET
+        );
+      }
+    }
+  }
+
+  private static void printClassificationBanner() {
+    System.out.println();
+    System.out.println(
+      BOLD +
+      "  ┌─────────────────────────────────────────────────────────┐" +
+      RESET
+    );
+    System.out.println(
+      BOLD +
+      "  │        GLiNER4jClassifier — Classification Demo         │" +
+      RESET
+    );
+    System.out.println(
+      BOLD +
+      "  │          Text Classification with ONNX Runtime          │" +
+      RESET
+    );
+    System.out.println(
+      BOLD +
+      "  └─────────────────────────────────────────────────────────┘" +
+      RESET
+    );
+    System.out.println();
+  }
+
+  private static void printLabelConfig(List<ClassificationLabel> labels) {
+    System.out.println(DIM + "  Config:" + RESET);
+    for (var label : labels) {
+      var colors = LABEL_COLORS.getOrDefault(
+        label.name(),
+        new String[] { BOLD, WHITE }
+      );
+      if (label.description().isBlank()) {
+        System.out.println("    " + colors[1] + label.name() + RESET);
+      } else {
+        System.out.println(
+          "    " +
+          colors[1] +
+          label.name() +
+          RESET +
+          GRAY +
+          " — " +
+          label.description() +
+          RESET
+        );
+      }
+    }
+    System.out.println();
+  }
+
+  private static void printLabelLegend(List<ClassificationLabel> labels) {
+    System.out.print("  ");
+    for (var label : labels) {
+      var colors = LABEL_COLORS.getOrDefault(
+        label.name(),
+        new String[] { BOLD, WHITE }
+      );
+      System.out.print(
+        colors[0] + " " + label.name().toUpperCase() + " " + RESET + "  "
+      );
+    }
+    System.out.println();
+    System.out.println(
+      DIM +
+      "  ─────────────────────────────────────────────────────────────" +
+      RESET
+    );
+  }
+
+  private static void printClassificationResult(
+    int index,
+    String text,
+    List<ClassificationResult> results
+  ) {
+    System.out.println();
+    System.out.println("  " + DIM + index + "." + RESET + " " + text);
+
+    if (results.isEmpty()) {
+      System.out.println(GRAY + "     No labels matched." + RESET);
+    } else {
+      for (var result : results) {
+        var colors = LABEL_COLORS.getOrDefault(
+          result.label(),
+          new String[] { BOLD, WHITE }
+        );
+        var bar = confidenceBar(result.confidence());
+        System.out.printf(
+          "     %s%-14s%s  %s %s%.0f%%%s%n",
+          colors[1],
+          result.label(),
+          RESET,
+          bar,
+          DIM,
+          result.confidence() * 100,
           RESET
         );
       }

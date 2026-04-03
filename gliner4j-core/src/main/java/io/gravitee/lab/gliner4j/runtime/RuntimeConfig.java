@@ -32,7 +32,7 @@ import lombok.Getter;
  *     .encoderIntraOpThreads(2)
  *     .scoringIntraOpThreads(1)
  *     .build();
- * var gliner = GLiNER4j.load(modelDir, entities, config);
+ * var gliner = GLiNER4jNER.load(modelDir, entities, config);
  * }</pre>
  */
 @Getter

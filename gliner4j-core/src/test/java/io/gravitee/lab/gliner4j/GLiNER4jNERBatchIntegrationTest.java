@@ -31,7 +31,7 @@ import org.junit.jupiter.api.condition.EnabledIf;
  * Skipped automatically when model directory is not present.
  */
 @EnabledIf("modelDirExists")
-class GLiNER4jBatchIntegrationTest {
+class GLiNER4jNERBatchIntegrationTest {
 
   private static final Path MODEL_DIR = Path.of("models/gliner2-base-onnx");
 
@@ -46,7 +46,7 @@ class GLiNER4jBatchIntegrationTest {
       new EntityDefinition("organization")
     );
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, entities)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, entities)) {
       var texts = List.of(
         "John works at Google.",
         "Marie Curie worked at the University of Paris."
@@ -78,7 +78,7 @@ class GLiNER4jBatchIntegrationTest {
       new EntityDefinition("organization")
     );
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, entities)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, entities)) {
       var texts = List.of(
         "John works at Google.",
         "Elon Musk founded SpaceX and leads Tesla."
@@ -138,7 +138,7 @@ class GLiNER4jBatchIntegrationTest {
       new EntityDefinition("organization")
     );
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, entities)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, entities)) {
       var text = "John works at Google.";
 
       var singleResult = gliner.extract(text);
@@ -171,7 +171,7 @@ class GLiNER4jBatchIntegrationTest {
       new EntityDefinition("organization")
     );
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, entities)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, entities)) {
       var texts = List.of(
         "John works at Google.",
         "",
@@ -200,7 +200,7 @@ class GLiNER4jBatchIntegrationTest {
       new EntityDefinition("organization")
     );
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, entities)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, entities)) {
       var texts = List.of(
         "John works at Google.",
         "Elon Musk founded SpaceX and leads Tesla."

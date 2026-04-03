@@ -31,7 +31,7 @@ import org.junit.jupiter.api.condition.EnabledIf;
  * Skipped automatically when model directory is not present.
  */
 @EnabledIf("modelDirExists")
-class GLiNER4jIntegrationTest {
+class GLiNER4jNERIntegrationTest {
 
   private static final Path MODEL_DIR = Path.of("models/gliner2-base-onnx");
 
@@ -46,7 +46,7 @@ class GLiNER4jIntegrationTest {
       new EntityDefinition("organization")
     );
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, entities)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, entities)) {
       Map<String, List<EntitySpan>> results = gliner.extract(
         "John works at Google."
       );
@@ -68,7 +68,7 @@ class GLiNER4jIntegrationTest {
       new EntityDefinition("organization")
     );
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, entities)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, entities)) {
       Map<String, List<EntitySpan>> results = gliner.extract("");
       assertThat(results).isEmpty();
     }

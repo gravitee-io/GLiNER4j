@@ -36,15 +36,16 @@
 # ///
 """GLiNER2 → ONNX export script for gliner4j.
 
-Exports a GLiNER2 PyTorch model into 3 ONNX models organized by variant:
+Exports a GLiNER2 PyTorch model into 4 ONNX models organized by variant:
   - onnx/              Base FP32 models
   - onnx_fp16/         FP16 converted models (optional)
   - onnx_quantized/    INT8 dynamically-quantized models (optional)
 
 Each variant folder contains:
-  - encoder.onnx:      Transformer encoder (input_ids → last_hidden_state)
-  - span_rep.onnx:     Span representation layer
-  - scoring_head.onnx: Count-aware scoring head
+  - encoder.onnx:          Transformer encoder (input_ids → last_hidden_state)
+  - span_rep.onnx:         Span representation layer
+  - scoring_head.onnx:     Count-aware scoring head
+  - classifier_head.onnx:  Classifier MLP for text classification
 
 Shared files (config, tokenizer) live at the output root.
 
@@ -308,6 +309,29 @@ class ScoringHeadWrapper(nn.Module):
         return (gates.unsqueeze(-1) * x).sum(dim=2)  # (L, M, D)
 
 
+class ClassifierWrapper(nn.Module):
+    """Wraps the classifier MLP (2-layer: hidden→hidden*2→1, ReLU) for ONNX export.
+
+    The classifier operates on label embeddings extracted at [L] token positions
+    from the encoder's hidden states. It produces a single logit per label.
+    """
+
+    def __init__(self, classifier: nn.Module) -> None:
+        super().__init__()
+        self.classifier = classifier
+
+    def forward(self, label_embeddings: torch.Tensor) -> torch.Tensor:
+        """Run classifier MLP on label embeddings.
+
+        Args:
+            label_embeddings: Shape (num_labels, hidden_size).
+
+        Returns:
+            Logits of shape (num_labels, 1).
+        """
+        return self.classifier(label_embeddings)
+
+
 # ===========================================================================
 # Helpers
 # ===========================================================================
@@ -525,6 +549,52 @@ def _export_scoring_head(
     return path
 
 
+def _export_classifier_head(
+    model: nn.Module,
+    output_dir: Path,
+    opset: int,
+    hidden_size: int,
+) -> Path:
+    """Export classifier_head.onnx.
+
+    The classifier is a 2-layer MLP (hidden_size → hidden_size*2 → 1, ReLU)
+    that operates on label embeddings extracted at [L] token positions.
+
+    Args:
+        model: The full Extractor model.
+        output_dir: Directory to write the ONNX file.
+        opset: ONNX opset version.
+        hidden_size: Model hidden size.
+
+    Returns:
+        Path to the exported ONNX file.
+    """
+    wrapper = ClassifierWrapper(model.classifier)
+    wrapper.eval()
+
+    num_labels = 3
+    dummy_label_embs = torch.randn(num_labels, hidden_size)
+
+    path = output_dir / "classifier_head.onnx"
+    torch.onnx.export(
+        wrapper,
+        (dummy_label_embs,),
+        str(path),
+        opset_version=opset,
+        dynamo=False,
+        input_names=["label_embeddings"],
+        output_names=["logits"],
+        dynamic_axes={
+            "label_embeddings": {0: "num_labels"},
+            "logits": {0: "num_labels"},
+        },
+    )
+    console.print(
+        f"  [green]✓[/green] classifier_head.onnx ({path.stat().st_size / 1e6:.1f} MB)"
+    )
+    return path
+
+
 # ===========================================================================
 # Config & Tokenizer
 # ===========================================================================
@@ -731,6 +801,39 @@ def _verify_scoring_head(
     return ok
 
 
+def _verify_classifier_head(
+    model: nn.Module, output_dir: Path, hidden_size: int
+) -> bool:
+    """Verify classifier_head.onnx against PyTorch.
+
+    Args:
+        model: The full Extractor model.
+        output_dir: Directory containing the ONNX file.
+        hidden_size: Model hidden size.
+
+    Returns:
+        True if verification passes.
+    """
+    wrapper = ClassifierWrapper(model.classifier)
+    wrapper.eval()
+
+    num_labels = 4
+    dummy_label_embs = torch.randn(num_labels, hidden_size)
+
+    with torch.no_grad():
+        pt_out = wrapper(dummy_label_embs).numpy()
+
+    session = ort.InferenceSession(str(output_dir / "classifier_head.onnx"))
+    onnx_out = session.run(
+        None,
+        {"label_embeddings": dummy_label_embs.numpy()},
+    )[0]
+
+    ok = np.allclose(pt_out, onnx_out, atol=1e-4)
+    _print_verify("classifier_head.onnx", ok, pt_out, onnx_out)
+    return ok
+
+
 def _print_verify(
     name: str, ok: bool, pt: np.ndarray, onnx_val: np.ndarray
 ) -> None:
@@ -751,7 +854,7 @@ def _print_verify(
 # Variant Conversion
 # ===========================================================================
 
-ONNX_MODEL_FILES = ("encoder.onnx", "span_rep.onnx", "scoring_head.onnx")
+ONNX_MODEL_FILES = ("encoder.onnx", "span_rep.onnx", "scoring_head.onnx", "classifier_head.onnx")
 
 
 class Variant(str, Enum):
@@ -858,6 +961,7 @@ def export(
         _export_encoder(model, base_dir, opset, hidden_size)
         _export_span_rep(model, base_dir, opset, hidden_size, max_width)
         _export_scoring_head(model, base_dir, opset, hidden_size, max_width, counting_layer)
+        _export_classifier_head(model, base_dir, opset, hidden_size)
 
     # Step 5: Write config to root
     console.print(f"\n[bold]Writing config and tokenizer...[/bold]")
@@ -873,6 +977,7 @@ def export(
         all_ok &= _verify_encoder(model, base_dir, hidden_size)
         all_ok &= _verify_span_rep(model, base_dir, hidden_size, max_width)
         all_ok &= _verify_scoring_head(model, base_dir, hidden_size, max_width, counting_layer)
+        all_ok &= _verify_classifier_head(model, base_dir, hidden_size)
 
         if all_ok:
             console.print("\n[bold green]Base model verifications passed![/bold green]")

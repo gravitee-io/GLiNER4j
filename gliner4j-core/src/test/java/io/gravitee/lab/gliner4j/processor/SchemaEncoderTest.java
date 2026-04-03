@@ -17,19 +17,19 @@ package io.gravitee.lab.gliner4j.processor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class SchemaEncoderTest {
 
   @Test
-  void schemaTokensWithoutDescriptions() {
-    var entities = List.of(
-      new EntityDefinition("person"),
-      new EntityDefinition("organization")
+  void nerSchemaTokensWithoutDescriptions() {
+    var encoder = new SchemaEncoder(
+      "entities",
+      "[E]",
+      List.of("person", "organization"),
+      List.of("", "")
     );
-    var encoder = new SchemaEncoder(entities);
 
     assertThat(encoder.getSchemaTokens())
       .containsExactly(
@@ -47,15 +47,17 @@ class SchemaEncoderTest {
     assertThat(encoder.getFieldNames())
       .containsExactly("person", "organization");
     assertThat(encoder.getNumFields()).isEqualTo(2);
+    assertThat(encoder.getSpecialToken()).isEqualTo("[E]");
   }
 
   @Test
-  void schemaTokensWithDescriptions() {
-    var entities = List.of(
-      new EntityDefinition("person", "Names of individuals"),
-      new EntityDefinition("org", "Organization names")
+  void nerSchemaTokensWithDescriptions() {
+    var encoder = new SchemaEncoder(
+      "entities",
+      "[E]",
+      List.of("person", "org"),
+      List.of("Names of individuals", "Organization names")
     );
-    var encoder = new SchemaEncoder(entities);
 
     assertThat(encoder.getSchemaTokens())
       .containsExactly(
@@ -79,14 +81,14 @@ class SchemaEncoderTest {
   }
 
   @Test
-  void schemaTokensWithMixedDescriptions() {
-    var entities = List.of(
-      new EntityDefinition("person", "Names of individuals"),
-      new EntityDefinition("org")
+  void nerSchemaTokensWithMixedDescriptions() {
+    var encoder = new SchemaEncoder(
+      "entities",
+      "[E]",
+      List.of("person", "org"),
+      List.of("Names of individuals", "")
     );
-    var encoder = new SchemaEncoder(entities);
 
-    // Only person has a description; org has no description token
     assertThat(encoder.getSchemaTokens())
       .containsExactly(
         "(",
@@ -106,14 +108,14 @@ class SchemaEncoderTest {
   }
 
   @Test
-  void schemaTokensWithBlankDescriptionTreatedAsNoDescription() {
-    var entities = List.of(
-      new EntityDefinition("person", "   "),
-      new EntityDefinition("org", "")
+  void nerSchemaTokensWithBlankDescriptionTreatedAsNoDescription() {
+    var encoder = new SchemaEncoder(
+      "entities",
+      "[E]",
+      List.of("person", "org"),
+      List.of("   ", "")
     );
-    var encoder = new SchemaEncoder(entities);
 
-    // Blank/empty descriptions should produce the same output as no descriptions
     assertThat(encoder.getSchemaTokens())
       .containsExactly(
         "(",
@@ -124,6 +126,114 @@ class SchemaEncoderTest {
         "person",
         "[E]",
         "org",
+        ")",
+        ")"
+      );
+  }
+
+  @Test
+  void classificationSchemaTokensWithoutDescriptions() {
+    var encoder = new SchemaEncoder(
+      "classify",
+      "[L]",
+      List.of("positive", "negative"),
+      List.of("", "")
+    );
+
+    assertThat(encoder.getSchemaTokens())
+      .containsExactly(
+        "(",
+        "[P]",
+        "classify",
+        "(",
+        "[L]",
+        "positive",
+        "[L]",
+        "negative",
+        ")",
+        ")"
+      );
+    assertThat(encoder.getFieldNames()).containsExactly("positive", "negative");
+    assertThat(encoder.getNumFields()).isEqualTo(2);
+    assertThat(encoder.getSpecialToken()).isEqualTo("[L]");
+  }
+
+  @Test
+  void classificationSchemaTokensWithDescriptions() {
+    var encoder = new SchemaEncoder(
+      "classify",
+      "[L]",
+      List.of("positive", "negative"),
+      List.of("Expresses positive sentiment", "Expresses negative sentiment")
+    );
+
+    assertThat(encoder.getSchemaTokens())
+      .containsExactly(
+        "(",
+        "[P]",
+        "classify",
+        "[DESCRIPTION]",
+        "positive:",
+        "Expresses positive sentiment",
+        "[DESCRIPTION]",
+        "negative:",
+        "Expresses negative sentiment",
+        "(",
+        "[L]",
+        "positive",
+        "[L]",
+        "negative",
+        ")",
+        ")"
+      );
+  }
+
+  @Test
+  void classificationSchemaTokensWithMixedDescriptions() {
+    var encoder = new SchemaEncoder(
+      "classify",
+      "[L]",
+      List.of("positive", "negative"),
+      List.of("Expresses positive sentiment", "")
+    );
+
+    assertThat(encoder.getSchemaTokens())
+      .containsExactly(
+        "(",
+        "[P]",
+        "classify",
+        "[DESCRIPTION]",
+        "positive:",
+        "Expresses positive sentiment",
+        "(",
+        "[L]",
+        "positive",
+        "[L]",
+        "negative",
+        ")",
+        ")"
+      );
+  }
+
+  @Test
+  void classificationSchemaTokensWithBlankDescriptionTreatedAsNoDescription() {
+    var encoder = new SchemaEncoder(
+      "classify",
+      "[L]",
+      List.of("positive", "negative"),
+      List.of("   ", "")
+    );
+
+    assertThat(encoder.getSchemaTokens())
+      .containsExactly(
+        "(",
+        "[P]",
+        "classify",
+        "(",
+        "[L]",
+        "positive",
+        "[L]",
+        "negative",
         ")",
         ")"
       );

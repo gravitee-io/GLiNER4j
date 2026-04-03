@@ -17,12 +17,14 @@ package io.gravitee.lab.gliner4j;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
+import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
 import io.gravitee.lab.gliner4j.tokenizer.WhitespaceTokenSplitter;
 import org.junit.jupiter.api.Test;
 
-class GLiNER4jTest {
+class GLiNER4jNERTest {
 
   @Test
   void entityDefinitionWithDefaults() {
@@ -88,6 +90,32 @@ class GLiNER4jTest {
     assertThat(tokens).hasSize(2);
     assertThat(tokens.get(0).text()).isEqualTo("well-known");
     assertThat(tokens.get(1).text()).isEqualTo("state-of-the-art");
+  }
+
+  // --- Classification records ---
+
+  @Test
+  void classificationLabelWithDefaults() {
+    var label = new ClassificationLabel("positive");
+    assertThat(label.name()).isEqualTo("positive");
+    assertThat(label.description()).isEmpty();
+  }
+
+  @Test
+  void classificationLabelWithDescription() {
+    var label = new ClassificationLabel(
+      "positive",
+      "Expresses positive sentiment"
+    );
+    assertThat(label.name()).isEqualTo("positive");
+    assertThat(label.description()).isEqualTo("Expresses positive sentiment");
+  }
+
+  @Test
+  void classificationResultCreation() {
+    var result = new ClassificationResult("positive", 0.87f);
+    assertThat(result.label()).isEqualTo("positive");
+    assertThat(result.confidence()).isEqualTo(0.87f);
   }
 
   @Test

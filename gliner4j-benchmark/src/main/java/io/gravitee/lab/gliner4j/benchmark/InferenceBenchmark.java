@@ -15,7 +15,7 @@
  */
 package io.gravitee.lab.gliner4j.benchmark;
 
-import io.gravitee.lab.gliner4j.GLiNER4j;
+import io.gravitee.lab.gliner4j.GLiNER4jNER;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -63,7 +63,7 @@ public class InferenceBenchmark {
     new EntityDefinition("email")
   );
 
-  private GLiNER4j gliner;
+  private GLiNER4jNER gliner;
   private List<String> batch;
 
   @Setup(Level.Trial)
@@ -86,7 +86,7 @@ public class InferenceBenchmark {
     }
 
     var entities = entityCount == 4 ? ENTITIES_4 : ENTITIES_8;
-    gliner = GLiNER4j.load(Path.of(modelPath), entities);
+    gliner = GLiNER4jNER.load(Path.of(modelPath), entities);
     batch = corpus.subList(0, batchSize);
   }
 
