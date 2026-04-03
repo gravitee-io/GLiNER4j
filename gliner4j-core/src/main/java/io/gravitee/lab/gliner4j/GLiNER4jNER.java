@@ -20,7 +20,8 @@ import io.gravitee.lab.gliner4j.processor.InputAssembler;
 import io.gravitee.lab.gliner4j.processor.PreprocessedInput;
 import io.gravitee.lab.gliner4j.processor.SchemaEncoder;
 import io.gravitee.lab.gliner4j.processor.TextEncoder;
-import io.gravitee.lab.gliner4j.runtime.GLiNER4jRuntime;
+import io.gravitee.lab.gliner4j.runtime.BaseRuntime;
+import io.gravitee.lab.gliner4j.runtime.GLiNER4jNERRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
@@ -36,32 +37,32 @@ import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Main facade for GLiNER4j — Java-native GLiNER2 NER via ONNX Runtime.
+ * Main facade for GLiNER4jNER — Java-native GLiNER2 NER via ONNX Runtime.
  *
  * <p>Usage:
  * <pre>{@code
  * var entities = List.of(new EntityDefinition("person"), new EntityDefinition("organization"));
- * try (var gliner = GLiNER4j.load(modelDir, entities)) {
+ * try (var gliner = GLiNER4jNER.load(modelDir, entities)) {
  *     Map<String, List<EntitySpan>> results = gliner.extract("John works at Google.");
  * }
  * }</pre>
  */
 @Slf4j
-public class GLiNER4j implements AutoCloseable {
+public class GLiNER4jNER implements AutoCloseable {
 
   private final GLiNER4jConfig config;
   private final List<EntityDefinition> entities;
   private final DjlTokenizerWrapper tokenizer;
-  private final GLiNER4jRuntime runtime;
+  private final GLiNER4jNERRuntime runtime;
   private final InputAssembler inputAssembler;
   private final WhitespaceTokenSplitter splitter;
   private final SpanDecoder spanDecoder;
 
-  private GLiNER4j(
+  private GLiNER4jNER(
     GLiNER4jConfig config,
     List<EntityDefinition> entities,
     DjlTokenizerWrapper tokenizer,
-    GLiNER4jRuntime runtime,
+    GLiNER4jNERRuntime runtime,
     InputAssembler inputAssembler
   ) {
     this.config = config;
@@ -78,13 +79,16 @@ public class GLiNER4j implements AutoCloseable {
    *
    * @param modelDir path to the root model directory
    * @param entities the entity types to extract
-   * @return a ready-to-use GLiNER4j instance
+   * @return a ready-to-use GLiNER4jNER instance
    */
-  public static GLiNER4j load(Path modelDir, List<EntityDefinition> entities) {
+  public static GLiNER4jNER load(
+    Path modelDir,
+    List<EntityDefinition> entities
+  ) {
     return load(
       modelDir,
       entities,
-      GLiNER4jRuntime.DEFAULT_VARIANT,
+      BaseRuntime.DEFAULT_VARIANT,
       RuntimeConfig.defaults()
     );
   }
@@ -95,9 +99,9 @@ public class GLiNER4j implements AutoCloseable {
    * @param modelDir path to the root model directory
    * @param entities the entity types to extract
    * @param variant  ONNX variant folder name (e.g. "onnx", "onnx_fp16", "onnx_quantized")
-   * @return a ready-to-use GLiNER4j instance
+   * @return a ready-to-use GLiNER4jNER instance
    */
-  public static GLiNER4j load(
+  public static GLiNER4jNER load(
     Path modelDir,
     List<EntityDefinition> entities,
     String variant
@@ -111,19 +115,14 @@ public class GLiNER4j implements AutoCloseable {
    * @param modelDir      path to the root model directory
    * @param entities      the entity types to extract
    * @param runtimeConfig resource control configuration for ORT sessions
-   * @return a ready-to-use GLiNER4j instance
+   * @return a ready-to-use GLiNER4jNER instance
    */
-  public static GLiNER4j load(
+  public static GLiNER4jNER load(
     Path modelDir,
     List<EntityDefinition> entities,
     RuntimeConfig runtimeConfig
   ) {
-    return load(
-      modelDir,
-      entities,
-      GLiNER4jRuntime.DEFAULT_VARIANT,
-      runtimeConfig
-    );
+    return load(modelDir, entities, BaseRuntime.DEFAULT_VARIANT, runtimeConfig);
   }
 
   /**
@@ -136,16 +135,16 @@ public class GLiNER4j implements AutoCloseable {
    * @param entities      the entity types to extract
    * @param variant       ONNX variant folder name (e.g. "onnx", "onnx_fp16", "onnx_quantized")
    * @param runtimeConfig resource control configuration for ORT sessions
-   * @return a ready-to-use GLiNER4j instance
+   * @return a ready-to-use GLiNER4jNER instance
    */
-  public static GLiNER4j load(
+  public static GLiNER4jNER load(
     Path modelDir,
     List<EntityDefinition> entities,
     String variant,
     RuntimeConfig runtimeConfig
   ) {
     log.info(
-      "Loading GLiNER4j model from {} (variant={}) with {} entities",
+      "Loading GLiNER4jNER model from {} (variant={}) with {} entities",
       modelDir,
       variant,
       entities.size()
@@ -153,15 +152,21 @@ public class GLiNER4j implements AutoCloseable {
 
     var config = GLiNER4jConfig.load(modelDir);
     var tokenizer = new DjlTokenizerWrapper(modelDir);
-    var runtime = new GLiNER4jRuntime(modelDir, variant, runtimeConfig);
-    var schemaEncoder = new SchemaEncoder(entities);
+    var runtime = new GLiNER4jNERRuntime(modelDir, variant, runtimeConfig);
+    var schemaEncoder = createSchemaEncoder(entities);
     var inputAssembler = new InputAssembler(tokenizer, schemaEncoder);
 
     // Pre-allocate encoder buffers with the constant schema prefix
     runtime.initEncoderBuffers(inputAssembler.getSchemaPrefixIds());
 
-    log.info("GLiNER4j model loaded successfully");
-    return new GLiNER4j(config, entities, tokenizer, runtime, inputAssembler);
+    log.info("GLiNER4jNER model loaded successfully");
+    return new GLiNER4jNER(
+      config,
+      entities,
+      tokenizer,
+      runtime,
+      inputAssembler
+    );
   }
 
   /**
@@ -206,7 +211,7 @@ public class GLiNER4j implements AutoCloseable {
     }
 
     // Build a fresh schema encoder and input assembler for the override entities
-    var schemaEncoder = new SchemaEncoder(entities);
+    var schemaEncoder = createSchemaEncoder(entities);
     var overrideAssembler = new InputAssembler(tokenizer, schemaEncoder);
 
     // Split text into words with char offsets
@@ -540,46 +545,14 @@ public class GLiNER4j implements AutoCloseable {
     float[][] hiddenState,
     PreprocessedInput input
   ) {
-    int hiddenSize = config.getHiddenSize();
-    var specialTokenIds = config.getSpecialTokenIds();
-    long pTokenId = specialTokenIds.getOrDefault("P", -1L);
-    long eTokenId = specialTokenIds.getOrDefault("E", -1L);
-
-    // Collect schema embeddings by scanning for special token IDs
-    var schemaEmbsList = new ArrayList<float[]>();
-    for (int i = 0; i < input.inputIds().length; i++) {
-      long tokenId = input.inputIds()[i];
-      if (tokenId == pTokenId || tokenId == eTokenId) {
-        schemaEmbsList.add(hiddenState[i]);
-      }
-    }
-
-    // schemaEmbs[0] = [P] embedding, schemaEmbs[1:] = [E] field embeddings
-    float[] schemaEmbP = schemaEmbsList.isEmpty()
-      ? new float[hiddenSize]
-      : schemaEmbsList.get(0);
-    float[][] schemaEmbFields = new float[schemaEmbsList.size() -
-    1][hiddenSize];
-    for (int i = 1; i < schemaEmbsList.size(); i++) {
-      schemaEmbFields[i - 1] = schemaEmbsList.get(i);
-    }
-
-    // Extract text embeddings using first-subword pooling per word
-    int textLen = input.textLen();
-    var textEmbs = new float[textLen][hiddenSize];
-    var seenWord = new boolean[textLen];
-    for (int i = 0; i < input.mappings().length; i++) {
-      var mapping = input.mappings()[i];
-      if (
-        mapping.type() == TokenMapping.SegmentType.TEXT &&
-        !seenWord[mapping.origIdx()]
-      ) {
-        textEmbs[mapping.origIdx()] = hiddenState[i];
-        seenWord[mapping.origIdx()] = true;
-      }
-    }
-
-    return new ExtractedEmbeddings(schemaEmbP, schemaEmbFields, textEmbs);
+    var schema = extractSchemaEmbeddings(hiddenState, input);
+    var textEmbs = new float[input.textLen()][config.getHiddenSize()];
+    extractTextEmbeddings(hiddenState, input, textEmbs);
+    return new ExtractedEmbeddings(
+      schema.schemaEmbP(),
+      schema.schemaEmbFields(),
+      textEmbs
+    );
   }
 
   private static long[] buildSpanIdxFlat(
@@ -613,11 +586,22 @@ public class GLiNER4j implements AutoCloseable {
     return maxIdx;
   }
 
+  private static SchemaEncoder createSchemaEncoder(
+    List<EntityDefinition> entities
+  ) {
+    return new SchemaEncoder(
+      "entities",
+      "[E]",
+      entities.stream().map(EntityDefinition::name).toList(),
+      entities.stream().map(EntityDefinition::description).toList()
+    );
+  }
+
   @Override
   public void close() {
     runtime.close();
     tokenizer.close();
-    log.info("GLiNER4j closed");
+    log.info("GLiNER4jNER closed");
   }
 
   private record ExtractedEmbeddings(

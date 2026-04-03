@@ -31,12 +31,12 @@ import org.junit.jupiter.api.condition.EnabledIf;
  * Requires actual ONNX model files — skipped when not present.
  */
 @EnabledIf("modelDirExists")
-class GLiNER4jDescriptionIntegrationTest {
+class GLiNER4jNERDescriptionIntegrationTest {
 
   private static final Path MODEL_DIR = Path.of("models/gliner2-base-onnx");
 
   static boolean modelDirExists() {
-    return Files.exists(MODEL_DIR.resolve("encoder.onnx"));
+    return Files.exists(MODEL_DIR.resolve("onnx/encoder.onnx"));
   }
 
   @Test
@@ -46,7 +46,7 @@ class GLiNER4jDescriptionIntegrationTest {
       new EntityDefinition("organization", "Company or institution names")
     );
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, entities)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, entities)) {
       Map<String, List<EntitySpan>> results = gliner.extract(
         "John works at Google."
       );
@@ -64,7 +64,7 @@ class GLiNER4jDescriptionIntegrationTest {
   void extractWithPerCallDescriptionOverride() {
     var defaultEntities = List.of(new EntityDefinition("person"));
 
-    try (var gliner = GLiNER4j.load(MODEL_DIR, defaultEntities)) {
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, defaultEntities)) {
       var overrideEntities = List.of(
         new EntityDefinition("person", "Names of individuals"),
         new EntityDefinition("organization", "Company or institution names")

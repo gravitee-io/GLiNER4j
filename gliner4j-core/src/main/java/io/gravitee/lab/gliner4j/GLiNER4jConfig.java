@@ -100,7 +100,7 @@ public class GLiNER4jConfig {
     int hiddenSize = 768;
 
     @JsonProperty("max_width")
-    int maxWidth = 8;
+    int maxWidth = DEFAULT_MAX_WIDTH;
 
     @JsonProperty("max_count")
     int maxCount = 20;

@@ -53,16 +53,17 @@ public class InputAssembler {
     this.fieldNames = schemaEncoder.getFieldNames();
 
     // Pre-tokenize schema tokens into primitive arrays
+    var specialToken = schemaEncoder.getSpecialToken();
     int schemaCapacity = schemaEncoder.getSchemaTokens().size() * 2;
     var schemaIds = new long[schemaCapacity];
     var schemaMappings = new TokenMapping[schemaCapacity];
     int schemaPos = 0;
-    int entityIdx = -1;
+    int fieldIdx = -1;
 
     for (int i = 0; i < schemaEncoder.getSchemaTokens().size(); i++) {
       var token = schemaEncoder.getSchemaTokens().get(i);
-      if ("[E]".equals(token)) {
-        entityIdx++;
+      if (specialToken.equals(token)) {
+        fieldIdx++;
       }
       var result = tokenizer.tokenizeWithIds(token);
       for (long id : result.ids()) {
@@ -73,7 +74,7 @@ public class InputAssembler {
         }
         schemaIds[schemaPos] = id;
         schemaMappings[schemaPos] =
-          new TokenMapping(SegmentType.SCHEMA, i, entityIdx);
+          new TokenMapping(SegmentType.SCHEMA, i, fieldIdx);
         schemaPos++;
       }
     }
