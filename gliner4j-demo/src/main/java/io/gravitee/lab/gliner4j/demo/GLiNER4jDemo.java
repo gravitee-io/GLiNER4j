@@ -15,8 +15,10 @@
  */
 package io.gravitee.lab.gliner4j.demo;
 
+import ai.onnxruntime.OrtSession;
 import io.gravitee.lab.gliner4j.GLiNER4jClassifier;
 import io.gravitee.lab.gliner4j.GLiNER4jNER;
+import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
@@ -155,26 +157,36 @@ public class GLiNER4jDemo {
       new ClassificationLabel("technology", "Technology, software, hardware")
     );
 
-    // ── Showcase phase ──────────────────────────────────────────────
+    // ── Load model ───────────────────────────────────────────────────
 
-    printBanner();
-    System.out.println(DIM + "  Model: " + modelDir + RESET);
+    var runtimeConfig = RuntimeConfig
+      .builder()
+      .optimizationLevel(OrtSession.SessionOptions.OptLevel.EXTENDED_OPT)
+      .build();
+
     System.out.println();
-    printEntityConfig(entities);
-    printLegend(entities);
+    System.out.println(
+      DIM + "  Loading model from " + modelDir + " ..." + RESET
+    );
 
     try (
-      var gliner = GLiNER4jNER.load(modelDir, entities);
-      var classifier = GLiNER4jClassifier.load(modelDir, labels)
+      var gliner = GLiNER4jNER.load(modelDir, entities, runtimeConfig);
+      var classifier = GLiNER4jClassifier.load(modelDir, labels, runtimeConfig)
     ) {
-      // NER showcase
+      // ── NER showcase ───────────────────────────────────────────────
+      printBanner();
+      System.out.println(DIM + "  Model: " + modelDir + RESET);
+      System.out.println();
+      printEntityConfig(entities);
+      printLegend(entities);
+
       for (int i = 0; i < nerSamples.size(); i++) {
         var text = nerSamples.get(i);
         var results = gliner.extract(text);
         printResult(i + 1, text, results);
       }
 
-      // Classification showcase
+      // ── Classification showcase ────────────────────────────────────
       printClassificationBanner();
       System.out.println(DIM + "  Model: " + modelDir + RESET);
       System.out.println();
