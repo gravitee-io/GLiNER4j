@@ -21,12 +21,12 @@ import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
-import io.opentelemetry.exporter.logging.LoggingMetricExporter;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.metrics.SdkMeterProvider;
-import io.opentelemetry.sdk.metrics.export.PeriodicMetricReader;
+import io.opentelemetry.sdk.metrics.data.HistogramPointData;
+import io.opentelemetry.sdk.metrics.data.MetricData;
+import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -104,11 +104,8 @@ public class GLiNER4jDemo {
   }
 
   public static void main(String[] args) {
-    // Initialize OpenTelemetry SDK with a logging exporter that prints metrics to stdout
-    var metricReader = PeriodicMetricReader
-      .builder(LoggingMetricExporter.create())
-      .setInterval(Duration.ofSeconds(5))
-      .build();
+    // Initialize OpenTelemetry SDK with an in-memory reader to collect metrics
+    var metricReader = InMemoryMetricReader.create();
     var meterProvider = SdkMeterProvider
       .builder()
       .registerMetricReader(metricReader)
@@ -241,17 +238,9 @@ public class GLiNER4jDemo {
       }
     }
 
-    // Flush remaining metrics before exit
+    // Collect and display metrics
+    printMetrics(metricReader.collectAllMetrics());
     openTelemetry.close();
-
-    System.out.println();
-    System.out.println(
-      DIM +
-      "  ─────────────────────────────────────────────────────────────" +
-      RESET
-    );
-    System.out.println(BOLD + "  Done." + RESET);
-    System.out.println();
   }
 
   private static void printBanner() {
@@ -549,5 +538,101 @@ public class GLiNER4jDemo {
     }
     sb.append(GRAY + "│" + RESET);
     return sb.toString();
+  }
+
+  private static void printMetrics(Collection<MetricData> metrics) {
+    System.out.println();
+    System.out.println(
+      BOLD +
+      "  ┌─────────────────────────────────────────────────────────┐" +
+      RESET
+    );
+    System.out.println(
+      BOLD +
+      "  │                    Telemetry Summary                    │" +
+      RESET
+    );
+    System.out.println(
+      BOLD +
+      "  └─────────────────────────────────────────────────────────┘" +
+      RESET
+    );
+    System.out.println();
+
+    for (var metric : metrics) {
+      var name = metric.getName();
+      var desc = metric.getDescription();
+      var unit = metric.getUnit();
+
+      switch (metric.getType()) {
+        case LONG_SUM -> {
+          long total = metric
+            .getLongSumData()
+            .getPoints()
+            .stream()
+            .mapToLong(p -> p.getValue())
+            .sum();
+          System.out.printf(
+            "  %s%-38s%s  %s%,d%s",
+            DIM,
+            name,
+            RESET,
+            BOLD,
+            total,
+            RESET
+          );
+          if (!unit.isEmpty()) {
+            System.out.print(DIM + " " + unit + RESET);
+          }
+          System.out.println();
+          System.out.println("  " + GRAY + desc + RESET);
+          System.out.println();
+        }
+        case HISTOGRAM -> {
+          for (var point : metric.getHistogramData().getPoints()) {
+            var hp = (HistogramPointData) point;
+            System.out.printf("  %s%-38s%s%n", DIM, name, RESET);
+            System.out.println("  " + GRAY + desc + RESET);
+            System.out.printf(
+              "    count   %s%,d%s%n",
+              BOLD,
+              hp.getCount(),
+              RESET
+            );
+            System.out.printf(
+              "    min     %s%,.1f%s %s%n",
+              BOLD,
+              hp.getMin(),
+              RESET,
+              unit
+            );
+            System.out.printf(
+              "    max     %s%,.1f%s %s%n",
+              BOLD,
+              hp.getMax(),
+              RESET,
+              unit
+            );
+            System.out.printf(
+              "    avg     %s%,.1f%s %s%n",
+              BOLD,
+              hp.getCount() > 0 ? hp.getSum() / hp.getCount() : 0.0,
+              RESET,
+              unit
+            );
+            System.out.println();
+          }
+        }
+        default -> {}
+      }
+    }
+
+    System.out.println(
+      DIM +
+      "  ─────────────────────────────────────────────────────────────" +
+      RESET
+    );
+    System.out.println(BOLD + "  Done." + RESET);
+    System.out.println();
   }
 }

@@ -46,14 +46,14 @@
             <artifactId>slf4j-simple</artifactId>
         </dependency>
 
-        <!-- OpenTelemetry SDK + logging exporter to display metrics in the console -->
+        <!-- OpenTelemetry SDK + in-memory reader to collect and display metrics -->
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-sdk</artifactId>
         </dependency>
         <dependency>
             <groupId>io.opentelemetry</groupId>
-            <artifactId>opentelemetry-exporter-logging</artifactId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
         </dependency>
     </dependencies>
 
