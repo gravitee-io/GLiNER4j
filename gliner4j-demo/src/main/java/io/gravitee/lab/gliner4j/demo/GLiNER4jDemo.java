@@ -21,7 +21,12 @@ import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
+import io.opentelemetry.exporter.logging.LoggingMetricExporter;
+import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.metrics.SdkMeterProvider;
+import io.opentelemetry.sdk.metrics.export.PeriodicMetricReader;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -99,6 +104,20 @@ public class GLiNER4jDemo {
   }
 
   public static void main(String[] args) {
+    // Initialize OpenTelemetry SDK with a logging exporter that prints metrics to stdout
+    var metricReader = PeriodicMetricReader
+      .builder(LoggingMetricExporter.create())
+      .setInterval(Duration.ofSeconds(5))
+      .build();
+    var meterProvider = SdkMeterProvider
+      .builder()
+      .registerMetricReader(metricReader)
+      .build();
+    var openTelemetry = OpenTelemetrySdk
+      .builder()
+      .setMeterProvider(meterProvider)
+      .buildAndRegisterGlobal();
+
     var modelDir = Path.of("models/gliner2-base-onnx");
 
     var nerSamples = List.of(
@@ -221,6 +240,9 @@ public class GLiNER4jDemo {
         }
       }
     }
+
+    // Flush remaining metrics before exit
+    openTelemetry.close();
 
     System.out.println();
     System.out.println(
