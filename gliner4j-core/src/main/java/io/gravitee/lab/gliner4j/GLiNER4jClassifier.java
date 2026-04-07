@@ -73,7 +73,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
     this.runtime = runtime;
     this.inputAssembler = inputAssembler;
     this.splitter = new WhitespaceTokenSplitter();
-    this.telemetry = new GLiNER4jTelemetry();
+    this.telemetry = new GLiNER4jTelemetry("classify");
   }
 
   /**
@@ -191,13 +191,13 @@ public class GLiNER4jClassifier implements AutoCloseable {
   public List<ClassificationResult> classify(String text, float threshold) {
     long startNanos = System.nanoTime();
     if (text == null || text.isBlank()) {
-      telemetry.recordExtract(0.0, 1, 0);
+      telemetry.record(0.0, 1, 0);
       return List.of();
     }
 
     var textEncoder = new TextEncoder(text, splitter);
     if (textEncoder.getTextLen() == 0) {
-      telemetry.recordExtract(0.0, 1, 0);
+      telemetry.record(0.0, 1, 0);
       return List.of();
     }
 
@@ -209,7 +209,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
 
     var result = classifyFromHiddenStates(hiddenStates, input, threshold);
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-    telemetry.recordExtract(durationMs, 1, result.size());
+    telemetry.record(durationMs, 1, result.size());
     return result;
   }
 
@@ -242,7 +242,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
   ) {
     long startNanos = System.nanoTime();
     if (text == null || text.isBlank()) {
-      telemetry.recordExtract(0.0, 1, 0);
+      telemetry.record(0.0, 1, 0);
       return List.of();
     }
 
@@ -251,7 +251,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
 
     var textEncoder = new TextEncoder(text, splitter);
     if (textEncoder.getTextLen() == 0) {
-      telemetry.recordExtract(0.0, 1, 0);
+      telemetry.record(0.0, 1, 0);
       return List.of();
     }
 
@@ -263,7 +263,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
 
     var result = classifyFromHiddenStates(hiddenStates, input, threshold);
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-    telemetry.recordExtract(durationMs, 1, result.size());
+    telemetry.record(durationMs, 1, result.size());
     return result;
   }
 
@@ -322,7 +322,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
         emptyResults.add(List.of());
       }
       double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-      telemetry.recordExtract(durationMs, batchSize, 0);
+      telemetry.record(durationMs, batchSize, 0);
       return emptyResults;
     }
 
@@ -392,7 +392,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
 
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
     long totalEntities = results.stream().mapToLong(List::size).sum();
-    telemetry.recordExtract(durationMs, batchSize, totalEntities);
+    telemetry.record(durationMs, batchSize, totalEntities);
     return results;
   }
 

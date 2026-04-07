@@ -41,23 +41,24 @@ class GLiNER4jTelemetryNoopTest {
 
   @Test
   void creatingTelemetryWithoutSdkDoesNotThrow() {
-    assertThatCode(GLiNER4jTelemetry::new).doesNotThrowAnyException();
+    assertThatCode(() -> new GLiNER4jTelemetry("extract"))
+      .doesNotThrowAnyException();
   }
 
   @Test
   void recordingMetricsWithoutSdkDoesNotThrow() {
-    var telemetry = new GLiNER4jTelemetry();
-    assertThatCode(() -> telemetry.recordExtract(50.0, 1, 5))
+    var telemetry = new GLiNER4jTelemetry("extract");
+    assertThatCode(() -> telemetry.record(50.0, 1, 5))
       .doesNotThrowAnyException();
   }
 
   @Test
   void multipleRecordingsWithoutSdkDoNotThrow() {
-    var telemetry = new GLiNER4jTelemetry();
+    var telemetry = new GLiNER4jTelemetry("classify");
     assertThatCode(() -> {
-        telemetry.recordExtract(10.0, 1, 3);
-        telemetry.recordExtract(20.0, 5, 12);
-        telemetry.recordExtract(0.0, 0, 0);
+        telemetry.record(10.0, 1, 3);
+        telemetry.record(20.0, 5, 12);
+        telemetry.record(0.0, 0, 0);
       })
       .doesNotThrowAnyException();
   }

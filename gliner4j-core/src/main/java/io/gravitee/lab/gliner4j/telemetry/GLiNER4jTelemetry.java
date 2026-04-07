@@ -23,6 +23,10 @@ import io.opentelemetry.api.metrics.Meter;
 /**
  * Initializes and exposes OpenTelemetry instruments for GLiNER4j.
  *
+ * <p>Each instance is scoped to a specific operation (e.g. {@code "extract"} for NER,
+ * {@code "classify"} for classification), producing distinct metric names such as
+ * {@code gliner4j.extract.duration} vs {@code gliner4j.classify.duration}.
+ *
  * <p>When no OTel SDK is present at runtime, all instruments are automatic no-ops
  * with near-zero overhead.
  */
@@ -30,33 +34,46 @@ public class GLiNER4jTelemetry {
 
   private static final String INSTRUMENTATION_NAME = "gliner4j";
 
-  private final DoubleHistogram extractDuration;
+  private final DoubleHistogram duration;
   private final LongCounter textCount;
-  private final LongCounter entityCount;
+  private final LongCounter resultCount;
 
-  public GLiNER4jTelemetry() {
+  /**
+   * Creates telemetry instruments scoped to the given operation.
+   *
+   * @param operation the operation name used as metric prefix (e.g. "extract", "classify")
+   */
+  public GLiNER4jTelemetry(String operation) {
     Meter meter = GlobalOpenTelemetry.get().getMeter(INSTRUMENTATION_NAME);
-    this.extractDuration =
+    String prefix = "gliner4j." + operation;
+    this.duration =
       meter
-        .histogramBuilder("gliner4j.extract.duration")
+        .histogramBuilder(prefix + ".duration")
         .setUnit("ms")
-        .setDescription("End-to-end latency per extract/extractBatch call")
+        .setDescription("End-to-end latency per " + operation + " call")
         .build();
     this.textCount =
       meter
-        .counterBuilder("gliner4j.extract.text.count")
+        .counterBuilder(prefix + ".text.count")
         .setDescription("Number of texts processed")
         .build();
-    this.entityCount =
+    this.resultCount =
       meter
-        .counterBuilder("gliner4j.extract.entity.count")
-        .setDescription("Number of entities found")
+        .counterBuilder(prefix + ".result.count")
+        .setDescription("Number of results produced")
         .build();
   }
 
-  public void recordExtract(double durationMs, long texts, long entities) {
-    extractDuration.record(durationMs);
+  /**
+   * Records metrics for a completed operation.
+   *
+   * @param durationMs wall-clock duration in milliseconds
+   * @param texts number of texts processed
+   * @param results number of results produced (entities for NER, labels for classification)
+   */
+  public void record(double durationMs, long texts, long results) {
+    duration.record(durationMs);
     textCount.add(texts);
-    entityCount.add(entities);
+    resultCount.add(results);
   }
 }

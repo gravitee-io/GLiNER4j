@@ -74,7 +74,7 @@ public class GLiNER4jNER implements AutoCloseable {
     this.inputAssembler = inputAssembler;
     this.splitter = new WhitespaceTokenSplitter();
     this.spanDecoder = new SpanDecoder();
-    this.telemetry = new GLiNER4jTelemetry();
+    this.telemetry = new GLiNER4jTelemetry("extract");
   }
 
   /**
@@ -211,7 +211,7 @@ public class GLiNER4jNER implements AutoCloseable {
   ) {
     long startNanos = System.nanoTime();
     if (text == null || text.isBlank()) {
-      telemetry.recordExtract(0.0, 1, 0);
+      telemetry.record(0.0, 1, 0);
       return Map.of();
     }
 
@@ -222,7 +222,7 @@ public class GLiNER4jNER implements AutoCloseable {
     // Split text into words with char offsets
     var textEncoder = new TextEncoder(text, splitter);
     if (textEncoder.getTextLen() == 0) {
-      telemetry.recordExtract(0.0, 1, 0);
+      telemetry.record(0.0, 1, 0);
       return Map.of();
     }
 
@@ -239,7 +239,7 @@ public class GLiNER4jNER implements AutoCloseable {
     var result = extractFromHiddenStates(hiddenStates, input, text, threshold);
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
     long entityCount = result.values().stream().mapToLong(List::size).sum();
-    telemetry.recordExtract(durationMs, 1, entityCount);
+    telemetry.record(durationMs, 1, entityCount);
     return result;
   }
 
@@ -306,7 +306,7 @@ public class GLiNER4jNER implements AutoCloseable {
         emptyResults.add(Map.of());
       }
       double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-      telemetry.recordExtract(durationMs, batchSize, 0);
+      telemetry.record(durationMs, batchSize, 0);
       return emptyResults;
     }
 
@@ -473,7 +473,7 @@ public class GLiNER4jNER implements AutoCloseable {
       .stream()
       .mapToLong(m -> m.values().stream().mapToLong(List::size).sum())
       .sum();
-    telemetry.recordExtract(durationMs, batchSize, totalEntities);
+    telemetry.record(durationMs, batchSize, totalEntities);
     return results;
   }
 
@@ -487,14 +487,14 @@ public class GLiNER4jNER implements AutoCloseable {
   public Map<String, List<EntitySpan>> extract(String text, float threshold) {
     long startNanos = System.nanoTime();
     if (text == null || text.isBlank()) {
-      telemetry.recordExtract(0.0, 1, 0);
+      telemetry.record(0.0, 1, 0);
       return Map.of();
     }
 
     // 1. Split text into words with char offsets
     var textEncoder = new TextEncoder(text, splitter);
     if (textEncoder.getTextLen() == 0) {
-      telemetry.recordExtract(0.0, 1, 0);
+      telemetry.record(0.0, 1, 0);
       return Map.of();
     }
 
@@ -511,7 +511,7 @@ public class GLiNER4jNER implements AutoCloseable {
     var result = extractFromHiddenStates(hiddenStates, input, text, threshold);
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
     long entityCount = result.values().stream().mapToLong(List::size).sum();
-    telemetry.recordExtract(durationMs, 1, entityCount);
+    telemetry.record(durationMs, 1, entityCount);
     return result;
   }
 
