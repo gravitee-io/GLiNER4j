@@ -24,15 +24,15 @@
     <parent>
         <groupId>io.gravitee</groupId>
         <artifactId>gravitee-parent</artifactId>
-        <version>23.4.1</version>
+        <version>23.5.0</version>
     </parent>
 
-    <groupId>io.gravitee.lab</groupId>
-    <artifactId>gliner4j</artifactId>
+    <groupId>io.gravitee.ai.gliner4j</groupId>
+    <artifactId>gravitee-gliner4j</artifactId>
     <version>1.0.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
-    <name>GLiNER4j</name>
+    <name>Gravitee.io - GLiNER4j</name>
     <description>Java library for GLiNER2 NER model inference via ONNX Runtime</description>
 
     <modules>
