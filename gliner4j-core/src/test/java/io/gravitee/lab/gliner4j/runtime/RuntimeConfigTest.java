@@ -34,8 +34,9 @@ class RuntimeConfigTest {
   @Test
   void defaultConfig_hasAllOptLevel() {
     var config = RuntimeConfig.builder().build();
-    assertThat(config.getOptimizationLevel())
-      .isEqualTo(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+    assertThat(config.getOptimizationLevel()).isEqualTo(
+      OrtSession.SessionOptions.OptLevel.ALL_OPT
+    );
   }
 
   @Test
@@ -46,8 +47,7 @@ class RuntimeConfigTest {
 
   @Test
   void builder_overridesIndividualFields() {
-    var config = RuntimeConfig
-      .builder()
+    var config = RuntimeConfig.builder()
       .encoderIntraOpThreads(4)
       .encoderInterOpThreads(2)
       .scoringIntraOpThreads(1)
@@ -60,8 +60,9 @@ class RuntimeConfigTest {
     assertThat(config.getEncoderInterOpThreads()).isEqualTo(2);
     assertThat(config.getScoringIntraOpThreads()).isEqualTo(1);
     assertThat(config.getScoringInterOpThreads()).isEqualTo(1);
-    assertThat(config.getOptimizationLevel())
-      .isEqualTo(OrtSession.SessionOptions.OptLevel.BASIC_OPT);
+    assertThat(config.getOptimizationLevel()).isEqualTo(
+      OrtSession.SessionOptions.OptLevel.BASIC_OPT
+    );
     assertThat(config.isOptimizedModelCacheEnabled()).isFalse();
   }
 
@@ -70,17 +71,23 @@ class RuntimeConfigTest {
     var fromDefaults = RuntimeConfig.defaults();
     var fromBuilder = RuntimeConfig.builder().build();
 
-    assertThat(fromDefaults.getEncoderIntraOpThreads())
-      .isEqualTo(fromBuilder.getEncoderIntraOpThreads());
-    assertThat(fromDefaults.getEncoderInterOpThreads())
-      .isEqualTo(fromBuilder.getEncoderInterOpThreads());
-    assertThat(fromDefaults.getScoringIntraOpThreads())
-      .isEqualTo(fromBuilder.getScoringIntraOpThreads());
-    assertThat(fromDefaults.getScoringInterOpThreads())
-      .isEqualTo(fromBuilder.getScoringInterOpThreads());
-    assertThat(fromDefaults.getOptimizationLevel())
-      .isEqualTo(fromBuilder.getOptimizationLevel());
-    assertThat(fromDefaults.isOptimizedModelCacheEnabled())
-      .isEqualTo(fromBuilder.isOptimizedModelCacheEnabled());
+    assertThat(fromDefaults.getEncoderIntraOpThreads()).isEqualTo(
+      fromBuilder.getEncoderIntraOpThreads()
+    );
+    assertThat(fromDefaults.getEncoderInterOpThreads()).isEqualTo(
+      fromBuilder.getEncoderInterOpThreads()
+    );
+    assertThat(fromDefaults.getScoringIntraOpThreads()).isEqualTo(
+      fromBuilder.getScoringIntraOpThreads()
+    );
+    assertThat(fromDefaults.getScoringInterOpThreads()).isEqualTo(
+      fromBuilder.getScoringInterOpThreads()
+    );
+    assertThat(fromDefaults.getOptimizationLevel()).isEqualTo(
+      fromBuilder.getOptimizationLevel()
+    );
+    assertThat(fromDefaults.isOptimizedModelCacheEnabled()).isEqualTo(
+      fromBuilder.isOptimizedModelCacheEnabled()
+    );
   }
 }

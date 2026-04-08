@@ -69,12 +69,17 @@ public class InputAssembler {
       for (long id : result.ids()) {
         if (schemaPos >= schemaIds.length) {
           schemaIds = Arrays.copyOf(schemaIds, schemaIds.length * 2);
-          schemaMappings =
-            Arrays.copyOf(schemaMappings, schemaMappings.length * 2);
+          schemaMappings = Arrays.copyOf(
+            schemaMappings,
+            schemaMappings.length * 2
+          );
         }
         schemaIds[schemaPos] = id;
-        schemaMappings[schemaPos] =
-          new TokenMapping(SegmentType.SCHEMA, i, fieldIdx);
+        schemaMappings[schemaPos] = new TokenMapping(
+          SegmentType.SCHEMA,
+          i,
+          fieldIdx
+        );
         schemaPos++;
       }
     }
@@ -87,8 +92,8 @@ public class InputAssembler {
     this.cachedSepIds = sepResult.ids();
 
     // Build concatenated prefix for buffer reuse in runtime
-    this.schemaPrefixIds =
-      new long[cachedSchemaIds.length + cachedSepIds.length];
+    this.schemaPrefixIds = new long[cachedSchemaIds.length +
+    cachedSepIds.length];
     System.arraycopy(
       cachedSchemaIds,
       0,
@@ -125,8 +130,7 @@ public class InputAssembler {
     int estimatedSize =
       cachedSchemaIds.length +
       cachedSepIds.length +
-      textEncoder.getTextLen() *
-      2;
+      textEncoder.getTextLen() * 2;
     var ids = new long[estimatedSize];
     var mappings = new TokenMapping[estimatedSize];
     int pos = 0;

@@ -108,12 +108,10 @@ public class GLiNER4jDemo {
   public static void main(String[] args) {
     // Initialize OpenTelemetry SDK with an in-memory reader to collect metrics
     var metricReader = InMemoryMetricReader.create();
-    var meterProvider = SdkMeterProvider
-      .builder()
+    var meterProvider = SdkMeterProvider.builder()
       .registerMetricReader(metricReader)
       .build();
-    var openTelemetry = OpenTelemetrySdk
-      .builder()
+    var openTelemetry = OpenTelemetrySdk.builder()
       .setMeterProvider(meterProvider)
       .buildAndRegisterGlobal();
 
@@ -159,8 +157,7 @@ public class GLiNER4jDemo {
 
     // ── Load model ───────────────────────────────────────────────────
 
-    var runtimeConfig = RuntimeConfig
-      .builder()
+    var runtimeConfig = RuntimeConfig.builder()
       .optimizationLevel(OrtSession.SessionOptions.OptLevel.EXTENDED_OPT)
       .build();
 
@@ -209,14 +206,14 @@ public class GLiNER4jDemo {
         while (true) {
           System.out.print(
             BOLD +
-            "  gliner" +
-            RESET +
-            DIM +
-            " [" +
-            mode[0] +
-            "]" +
-            RESET +
-            "> "
+              "  gliner" +
+              RESET +
+              DIM +
+              " [" +
+              mode[0] +
+              "]" +
+              RESET +
+              "> "
           );
           if (!scanner.hasNextLine()) break;
           var line = scanner.nextLine().strip();
@@ -259,23 +256,23 @@ public class GLiNER4jDemo {
     System.out.println();
     System.out.println(
       BOLD +
-      "  ┌─────────────────────────────────────────────────────────┐" +
-      RESET
+        "  ┌─────────────────────────────────────────────────────────┐" +
+        RESET
     );
     System.out.println(
       BOLD +
-      "  │                 GLiNER4jNER — NER Demo                  │" +
-      RESET
+        "  │                 GLiNER4jNER — NER Demo                  │" +
+        RESET
     );
     System.out.println(
       BOLD +
-      "  │       Named Entity Recognition with ONNX Runtime        │" +
-      RESET
+        "  │       Named Entity Recognition with ONNX Runtime        │" +
+        RESET
     );
     System.out.println(
       BOLD +
-      "  └─────────────────────────────────────────────────────────┘" +
-      RESET
+        "  └─────────────────────────────────────────────────────────┘" +
+        RESET
     );
     System.out.println();
   }
@@ -292,13 +289,13 @@ public class GLiNER4jDemo {
       } else {
         System.out.println(
           "    " +
-          colors[1] +
-          entity.name() +
-          RESET +
-          GRAY +
-          " — " +
-          entity.description() +
-          RESET
+            colors[1] +
+            entity.name() +
+            RESET +
+            GRAY +
+            " — " +
+            entity.description() +
+            RESET
         );
       }
     }
@@ -319,8 +316,8 @@ public class GLiNER4jDemo {
     System.out.println();
     System.out.println(
       DIM +
-      "  ─────────────────────────────────────────────────────────────" +
-      RESET
+        "  ─────────────────────────────────────────────────────────────" +
+        RESET
     );
   }
 
@@ -384,23 +381,23 @@ public class GLiNER4jDemo {
     System.out.println();
     System.out.println(
       BOLD +
-      "  ┌─────────────────────────────────────────────────────────┐" +
-      RESET
+        "  ┌─────────────────────────────────────────────────────────┐" +
+        RESET
     );
     System.out.println(
       BOLD +
-      "  │        GLiNER4jClassifier — Classification Demo         │" +
-      RESET
+        "  │        GLiNER4jClassifier — Classification Demo         │" +
+        RESET
     );
     System.out.println(
       BOLD +
-      "  │          Text Classification with ONNX Runtime          │" +
-      RESET
+        "  │          Text Classification with ONNX Runtime          │" +
+        RESET
     );
     System.out.println(
       BOLD +
-      "  └─────────────────────────────────────────────────────────┘" +
-      RESET
+        "  └─────────────────────────────────────────────────────────┘" +
+        RESET
     );
     System.out.println();
   }
@@ -417,13 +414,13 @@ public class GLiNER4jDemo {
       } else {
         System.out.println(
           "    " +
-          colors[1] +
-          label.name() +
-          RESET +
-          GRAY +
-          " — " +
-          label.description() +
-          RESET
+            colors[1] +
+            label.name() +
+            RESET +
+            GRAY +
+            " — " +
+            label.description() +
+            RESET
         );
       }
     }
@@ -444,8 +441,8 @@ public class GLiNER4jDemo {
     System.out.println();
     System.out.println(
       DIM +
-      "  ─────────────────────────────────────────────────────────────" +
-      RESET
+        "  ─────────────────────────────────────────────────────────────" +
+        RESET
     );
   }
 
@@ -484,17 +481,17 @@ public class GLiNER4jDemo {
     System.out.println();
     System.out.println(
       DIM +
-      "  ─────────────────────────────────────────────────────────────" +
-      RESET
+        "  ─────────────────────────────────────────────────────────────" +
+        RESET
     );
     System.out.println();
     System.out.println(
       BOLD +
-      "  Interactive mode" +
-      RESET +
-      DIM +
-      " — type a sentence and press Enter" +
-      RESET
+        "  Interactive mode" +
+        RESET +
+        DIM +
+        " — type a sentence and press Enter" +
+        RESET
     );
     System.out.println(
       DIM + "  Commands: /ner  /classify  /help  /exit" + RESET
@@ -510,24 +507,24 @@ public class GLiNER4jDemo {
     );
     System.out.println(
       "    " +
-      BOLD +
-      "/classify" +
-      RESET +
-      DIM +
-      "  Switch to classification mode" +
-      RESET
+        BOLD +
+        "/classify" +
+        RESET +
+        DIM +
+        "  Switch to classification mode" +
+        RESET
     );
     System.out.println(
       "    " + BOLD + "/help" + RESET + DIM + "      Show this help" + RESET
     );
     System.out.println(
       "    " +
-      BOLD +
-      "/exit" +
-      RESET +
-      DIM +
-      "      Quit the interactive session" +
-      RESET
+        BOLD +
+        "/exit" +
+        RESET +
+        DIM +
+        "      Quit the interactive session" +
+        RESET
     );
     System.out.println();
   }
@@ -556,18 +553,18 @@ public class GLiNER4jDemo {
     System.out.println();
     System.out.println(
       BOLD +
-      "  ┌─────────────────────────────────────────────────────────┐" +
-      RESET
+        "  ┌─────────────────────────────────────────────────────────┐" +
+        RESET
     );
     System.out.println(
       BOLD +
-      "  │                    Telemetry Summary                    │" +
-      RESET
+        "  │                    Telemetry Summary                    │" +
+        RESET
     );
     System.out.println(
       BOLD +
-      "  └─────────────────────────────────────────────────────────┘" +
-      RESET
+        "  └─────────────────────────────────────────────────────────┘" +
+        RESET
     );
     System.out.println();
 
@@ -641,8 +638,8 @@ public class GLiNER4jDemo {
 
     System.out.println(
       DIM +
-      "  ─────────────────────────────────────────────────────────────" +
-      RESET
+        "  ─────────────────────────────────────────────────────────────" +
+        RESET
     );
     System.out.println(BOLD + "  Done." + RESET);
     System.out.println();

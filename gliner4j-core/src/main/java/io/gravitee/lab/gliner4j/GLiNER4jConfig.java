@@ -78,8 +78,7 @@ public class GLiNER4jConfig {
         json.usesSpanIdx,
         json.tokenPooling
       );
-      return GLiNER4jConfig
-        .builder()
+      return GLiNER4jConfig.builder()
         .modelPath(modelDir)
         .hiddenSize(json.hiddenSize)
         .maxWidth(json.maxWidth)

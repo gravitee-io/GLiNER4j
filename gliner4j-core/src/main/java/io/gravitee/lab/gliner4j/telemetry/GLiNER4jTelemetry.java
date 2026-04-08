@@ -46,22 +46,19 @@ public class GLiNER4jTelemetry {
   public GLiNER4jTelemetry(String operation) {
     Meter meter = GlobalOpenTelemetry.get().getMeter(INSTRUMENTATION_NAME);
     String prefix = "gliner4j." + operation;
-    this.duration =
-      meter
-        .histogramBuilder(prefix + ".duration")
-        .setUnit("ms")
-        .setDescription("End-to-end latency per " + operation + " call")
-        .build();
-    this.textCount =
-      meter
-        .counterBuilder(prefix + ".text.count")
-        .setDescription("Number of texts processed")
-        .build();
-    this.resultCount =
-      meter
-        .counterBuilder(prefix + ".result.count")
-        .setDescription("Number of results produced")
-        .build();
+    this.duration = meter
+      .histogramBuilder(prefix + ".duration")
+      .setUnit("ms")
+      .setDescription("End-to-end latency per " + operation + " call")
+      .build();
+    this.textCount = meter
+      .counterBuilder(prefix + ".text.count")
+      .setDescription("Number of texts processed")
+      .build();
+    this.resultCount = meter
+      .counterBuilder(prefix + ".result.count")
+      .setDescription("Number of results produced")
+      .build();
   }
 
   /**

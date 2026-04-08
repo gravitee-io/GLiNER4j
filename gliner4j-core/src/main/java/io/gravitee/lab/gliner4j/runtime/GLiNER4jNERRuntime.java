@@ -85,8 +85,10 @@ public class GLiNER4jNERRuntime extends BaseRuntime {
         "span_rep.onnx"
       )
     ) {
-      this.spanRepSession =
-        env.createSession(variantDir.resolve("span_rep.onnx").toString(), opts);
+      this.spanRepSession = env.createSession(
+        variantDir.resolve("span_rep.onnx").toString(),
+        opts
+      );
     }
 
     log.info("Loading scoring_head.onnx...");
@@ -100,11 +102,10 @@ public class GLiNER4jNERRuntime extends BaseRuntime {
         "scoring_head.onnx"
       )
     ) {
-      this.scoringHeadSession =
-        env.createSession(
-          variantDir.resolve("scoring_head.onnx").toString(),
-          opts
-        );
+      this.scoringHeadSession = env.createSession(
+        variantDir.resolve("scoring_head.onnx").toString(),
+        opts
+      );
     }
   }
 

@@ -58,16 +58,19 @@ class GLiNER4jNERBatchIntegrationTest {
 
       // First text
       assertThat(results.get(0)).containsKey("person");
-      assertThat(results.get(0).get("person"))
-        .anyMatch(span -> span.text().equals("John"));
+      assertThat(results.get(0).get("person")).anyMatch(span ->
+        span.text().equals("John")
+      );
       assertThat(results.get(0)).containsKey("organization");
-      assertThat(results.get(0).get("organization"))
-        .anyMatch(span -> span.text().equals("Google"));
+      assertThat(results.get(0).get("organization")).anyMatch(span ->
+        span.text().equals("Google")
+      );
 
       // Second text
       assertThat(results.get(1)).containsKey("person");
-      assertThat(results.get(1).get("person"))
-        .anyMatch(span -> span.text().contains("Marie Curie"));
+      assertThat(results.get(1).get("person")).anyMatch(span ->
+        span.text().contains("Marie Curie")
+      );
     }
   }
 
@@ -94,10 +97,12 @@ class GLiNER4jNERBatchIntegrationTest {
       var singleResult1 = gliner.extract(texts.get(1));
 
       // Same entity types detected
-      assertThat(batchResults.get(0).keySet())
-        .isEqualTo(singleResult0.keySet());
-      assertThat(batchResults.get(1).keySet())
-        .isEqualTo(singleResult1.keySet());
+      assertThat(batchResults.get(0).keySet()).isEqualTo(
+        singleResult0.keySet()
+      );
+      assertThat(batchResults.get(1).keySet()).isEqualTo(
+        singleResult1.keySet()
+      );
 
       // Same entity texts detected
       for (var type : singleResult0.keySet()) {

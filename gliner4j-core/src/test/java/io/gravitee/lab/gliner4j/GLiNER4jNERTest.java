@@ -120,8 +120,7 @@ class GLiNER4jNERTest {
 
   @Test
   void configDefaults() {
-    var config = GLiNER4jConfig
-      .builder()
+    var config = GLiNER4jConfig.builder()
       .modelPath(java.nio.file.Path.of("/tmp/model"))
       .build();
     assertThat(config.getDefaultThreshold()).isEqualTo(0.5f);

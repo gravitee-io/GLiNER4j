@@ -42,11 +42,17 @@ public class TextEncoder {
     this.originalText = text;
     var tokens = splitter.tokenize(text);
     this.textLen = tokens.size();
-    this.words =
-      tokens.stream().map(WhitespaceTokenSplitter.Token::text).toList();
-    this.wordStartChars =
-      tokens.stream().mapToInt(WhitespaceTokenSplitter.Token::start).toArray();
-    this.wordEndChars =
-      tokens.stream().mapToInt(WhitespaceTokenSplitter.Token::end).toArray();
+    this.words = tokens
+      .stream()
+      .map(WhitespaceTokenSplitter.Token::text)
+      .toList();
+    this.wordStartChars = tokens
+      .stream()
+      .mapToInt(WhitespaceTokenSplitter.Token::start)
+      .toArray();
+    this.wordEndChars = tokens
+      .stream()
+      .mapToInt(WhitespaceTokenSplitter.Token::end)
+      .toArray();
   }
 }

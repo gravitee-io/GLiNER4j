@@ -52,12 +52,14 @@ class GLiNER4jNERIntegrationTest {
       );
 
       assertThat(results).containsKey("person");
-      assertThat(results.get("person"))
-        .anyMatch(span -> span.text().equals("John"));
+      assertThat(results.get("person")).anyMatch(span ->
+        span.text().equals("John")
+      );
 
       assertThat(results).containsKey("organization");
-      assertThat(results.get("organization"))
-        .anyMatch(span -> span.text().equals("Google"));
+      assertThat(results.get("organization")).anyMatch(span ->
+        span.text().equals("Google")
+      );
     }
   }
 

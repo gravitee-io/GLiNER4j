@@ -42,11 +42,10 @@ public class DjlTokenizerWrapper implements AutoCloseable {
    */
   public DjlTokenizerWrapper(Path modelDir) {
     try {
-      this.tokenizer =
-        HuggingFaceTokenizer.newInstance(
-          modelDir,
-          Map.of("padding", "false", "truncation", "false")
-        );
+      this.tokenizer = HuggingFaceTokenizer.newInstance(
+        modelDir,
+        Map.of("padding", "false", "truncation", "false")
+      );
       log.info("Loaded HuggingFace tokenizer from {}", modelDir);
     } catch (IOException e) {
       throw new RuntimeException(

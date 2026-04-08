@@ -50,8 +50,12 @@ public class SchemaEncoder {
     this.fieldNames = List.copyOf(fieldNames);
     this.numFields = fieldNames.size();
     this.specialToken = specialToken;
-    this.schemaTokens =
-      buildSchemaTokens(taskKeyword, specialToken, fieldNames, descriptions);
+    this.schemaTokens = buildSchemaTokens(
+      taskKeyword,
+      specialToken,
+      fieldNames,
+      descriptions
+    );
   }
 
   private static List<String> buildSchemaTokens(

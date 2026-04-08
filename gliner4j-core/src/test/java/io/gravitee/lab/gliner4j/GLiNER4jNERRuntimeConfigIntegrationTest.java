@@ -59,19 +59,20 @@ class GLiNER4jNERRuntimeConfigIntegrationTest {
       );
 
       assertThat(results).containsKey("person");
-      assertThat(results.get("person"))
-        .anyMatch(span -> span.text().equals("John"));
+      assertThat(results.get("person")).anyMatch(span ->
+        span.text().equals("John")
+      );
       assertThat(results).containsKey("organization");
-      assertThat(results.get("organization"))
-        .anyMatch(span -> span.text().equals("Google"));
+      assertThat(results.get("organization")).anyMatch(span ->
+        span.text().equals("Google")
+      );
     }
   }
 
   @Test
   void loadWithCustomThreadCounts_succeeds() {
     var entities = defaultEntities();
-    var config = RuntimeConfig
-      .builder()
+    var config = RuntimeConfig.builder()
       .encoderIntraOpThreads(2)
       .encoderInterOpThreads(1)
       .scoringIntraOpThreads(1)
@@ -84,16 +85,16 @@ class GLiNER4jNERRuntimeConfigIntegrationTest {
       );
 
       assertThat(results).containsKey("person");
-      assertThat(results.get("person"))
-        .anyMatch(span -> span.text().equals("John"));
+      assertThat(results.get("person")).anyMatch(span ->
+        span.text().equals("John")
+      );
     }
   }
 
   @Test
   void loadWithCacheDisabled_succeeds() {
     var entities = defaultEntities();
-    var config = RuntimeConfig
-      .builder()
+    var config = RuntimeConfig.builder()
       .optimizedModelCacheEnabled(false)
       .build();
 
@@ -104,16 +105,16 @@ class GLiNER4jNERRuntimeConfigIntegrationTest {
       );
 
       assertThat(results).containsKey("person");
-      assertThat(results.get("person"))
-        .anyMatch(span -> span.text().contains("Marie"));
+      assertThat(results.get("person")).anyMatch(span ->
+        span.text().contains("Marie")
+      );
     }
   }
 
   @Test
   void loadWithReducedOptLevel_succeeds() {
     var entities = defaultEntities();
-    var config = RuntimeConfig
-      .builder()
+    var config = RuntimeConfig.builder()
       .optimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT)
       .optimizedModelCacheEnabled(false)
       .build();
@@ -124,8 +125,9 @@ class GLiNER4jNERRuntimeConfigIntegrationTest {
       );
 
       assertThat(results).containsKey("person");
-      assertThat(results.get("person"))
-        .anyMatch(span -> span.text().equals("John"));
+      assertThat(results.get("person")).anyMatch(span ->
+        span.text().equals("John")
+      );
     }
   }
 }
