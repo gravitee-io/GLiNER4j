@@ -29,7 +29,7 @@
 
     <groupId>io.gravitee.lab</groupId>
     <artifactId>gliner4j</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>1.0.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>GLiNER4j</name>
