@@ -31,21 +31,22 @@ class SchemaEncoderTest {
       List.of("", "")
     );
 
-    assertThat(encoder.getSchemaTokens())
-      .containsExactly(
-        "(",
-        "[P]",
-        "entities",
-        "(",
-        "[E]",
-        "person",
-        "[E]",
-        "organization",
-        ")",
-        ")"
-      );
-    assertThat(encoder.getFieldNames())
-      .containsExactly("person", "organization");
+    assertThat(encoder.getSchemaTokens()).containsExactly(
+      "(",
+      "[P]",
+      "entities",
+      "(",
+      "[E]",
+      "person",
+      "[E]",
+      "organization",
+      ")",
+      ")"
+    );
+    assertThat(encoder.getFieldNames()).containsExactly(
+      "person",
+      "organization"
+    );
     assertThat(encoder.getNumFields()).isEqualTo(2);
     assertThat(encoder.getSpecialToken()).isEqualTo("[E]");
   }
@@ -59,25 +60,24 @@ class SchemaEncoderTest {
       List.of("Names of individuals", "Organization names")
     );
 
-    assertThat(encoder.getSchemaTokens())
-      .containsExactly(
-        "(",
-        "[P]",
-        "entities",
-        "[DESCRIPTION]",
-        "person:",
-        "Names of individuals",
-        "[DESCRIPTION]",
-        "org:",
-        "Organization names",
-        "(",
-        "[E]",
-        "person",
-        "[E]",
-        "org",
-        ")",
-        ")"
-      );
+    assertThat(encoder.getSchemaTokens()).containsExactly(
+      "(",
+      "[P]",
+      "entities",
+      "[DESCRIPTION]",
+      "person:",
+      "Names of individuals",
+      "[DESCRIPTION]",
+      "org:",
+      "Organization names",
+      "(",
+      "[E]",
+      "person",
+      "[E]",
+      "org",
+      ")",
+      ")"
+    );
   }
 
   @Test
@@ -89,22 +89,21 @@ class SchemaEncoderTest {
       List.of("Names of individuals", "")
     );
 
-    assertThat(encoder.getSchemaTokens())
-      .containsExactly(
-        "(",
-        "[P]",
-        "entities",
-        "[DESCRIPTION]",
-        "person:",
-        "Names of individuals",
-        "(",
-        "[E]",
-        "person",
-        "[E]",
-        "org",
-        ")",
-        ")"
-      );
+    assertThat(encoder.getSchemaTokens()).containsExactly(
+      "(",
+      "[P]",
+      "entities",
+      "[DESCRIPTION]",
+      "person:",
+      "Names of individuals",
+      "(",
+      "[E]",
+      "person",
+      "[E]",
+      "org",
+      ")",
+      ")"
+    );
   }
 
   @Test
@@ -116,19 +115,18 @@ class SchemaEncoderTest {
       List.of("   ", "")
     );
 
-    assertThat(encoder.getSchemaTokens())
-      .containsExactly(
-        "(",
-        "[P]",
-        "entities",
-        "(",
-        "[E]",
-        "person",
-        "[E]",
-        "org",
-        ")",
-        ")"
-      );
+    assertThat(encoder.getSchemaTokens()).containsExactly(
+      "(",
+      "[P]",
+      "entities",
+      "(",
+      "[E]",
+      "person",
+      "[E]",
+      "org",
+      ")",
+      ")"
+    );
   }
 
   @Test
@@ -140,19 +138,18 @@ class SchemaEncoderTest {
       List.of("", "")
     );
 
-    assertThat(encoder.getSchemaTokens())
-      .containsExactly(
-        "(",
-        "[P]",
-        "classify",
-        "(",
-        "[L]",
-        "positive",
-        "[L]",
-        "negative",
-        ")",
-        ")"
-      );
+    assertThat(encoder.getSchemaTokens()).containsExactly(
+      "(",
+      "[P]",
+      "classify",
+      "(",
+      "[L]",
+      "positive",
+      "[L]",
+      "negative",
+      ")",
+      ")"
+    );
     assertThat(encoder.getFieldNames()).containsExactly("positive", "negative");
     assertThat(encoder.getNumFields()).isEqualTo(2);
     assertThat(encoder.getSpecialToken()).isEqualTo("[L]");
@@ -167,25 +164,24 @@ class SchemaEncoderTest {
       List.of("Expresses positive sentiment", "Expresses negative sentiment")
     );
 
-    assertThat(encoder.getSchemaTokens())
-      .containsExactly(
-        "(",
-        "[P]",
-        "classify",
-        "[DESCRIPTION]",
-        "positive:",
-        "Expresses positive sentiment",
-        "[DESCRIPTION]",
-        "negative:",
-        "Expresses negative sentiment",
-        "(",
-        "[L]",
-        "positive",
-        "[L]",
-        "negative",
-        ")",
-        ")"
-      );
+    assertThat(encoder.getSchemaTokens()).containsExactly(
+      "(",
+      "[P]",
+      "classify",
+      "[DESCRIPTION]",
+      "positive:",
+      "Expresses positive sentiment",
+      "[DESCRIPTION]",
+      "negative:",
+      "Expresses negative sentiment",
+      "(",
+      "[L]",
+      "positive",
+      "[L]",
+      "negative",
+      ")",
+      ")"
+    );
   }
 
   @Test
@@ -197,22 +193,21 @@ class SchemaEncoderTest {
       List.of("Expresses positive sentiment", "")
     );
 
-    assertThat(encoder.getSchemaTokens())
-      .containsExactly(
-        "(",
-        "[P]",
-        "classify",
-        "[DESCRIPTION]",
-        "positive:",
-        "Expresses positive sentiment",
-        "(",
-        "[L]",
-        "positive",
-        "[L]",
-        "negative",
-        ")",
-        ")"
-      );
+    assertThat(encoder.getSchemaTokens()).containsExactly(
+      "(",
+      "[P]",
+      "classify",
+      "[DESCRIPTION]",
+      "positive:",
+      "Expresses positive sentiment",
+      "(",
+      "[L]",
+      "positive",
+      "[L]",
+      "negative",
+      ")",
+      ")"
+    );
   }
 
   @Test
@@ -224,18 +219,17 @@ class SchemaEncoderTest {
       List.of("   ", "")
     );
 
-    assertThat(encoder.getSchemaTokens())
-      .containsExactly(
-        "(",
-        "[P]",
-        "classify",
-        "(",
-        "[L]",
-        "positive",
-        "[L]",
-        "negative",
-        ")",
-        ")"
-      );
+    assertThat(encoder.getSchemaTokens()).containsExactly(
+      "(",
+      "[P]",
+      "classify",
+      "(",
+      "[L]",
+      "positive",
+      "[L]",
+      "negative",
+      ")",
+      ")"
+    );
   }
 }

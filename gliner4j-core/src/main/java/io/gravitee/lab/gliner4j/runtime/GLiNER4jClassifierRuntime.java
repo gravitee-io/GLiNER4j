@@ -65,11 +65,10 @@ public class GLiNER4jClassifierRuntime extends BaseRuntime {
         "classifier_head.onnx"
       )
     ) {
-      this.classifierHeadSession =
-        env.createSession(
-          variantDir.resolve("classifier_head.onnx").toString(),
-          opts
-        );
+      this.classifierHeadSession = env.createSession(
+        variantDir.resolve("classifier_head.onnx").toString(),
+        opts
+      );
     }
   }
 

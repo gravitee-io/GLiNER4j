@@ -397,56 +397,49 @@ public class GLiNER4jNER implements AutoCloseable {
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
       for (int s = 0; s < nonEmptyCount; s++) {
         final int si = s;
-        futures[si] =
-          executor.submit(() -> {
-            int origIdx = batchIndices[si];
-            var input = inputs[origIdx];
-            int textLen = textLens[si];
+        futures[si] = executor.submit(() -> {
+          int origIdx = batchIndices[si];
+          var input = inputs[origIdx];
+          int textLen = textLens[si];
 
-            // Extract the per-text span_rep slice [textLen][maxWidth][hiddenSize]
-            var spanRep = new float[textLen][maxWidth][hiddenSize];
-            for (int i = 0; i < textLen; i++) {
-              System.arraycopy(
-                batchSpanRep4d[si][i],
-                0,
-                spanRep[i],
-                0,
-                maxWidth
-              );
-            }
+          // Extract the per-text span_rep slice [textLen][maxWidth][hiddenSize]
+          var spanRep = new float[textLen][maxWidth][hiddenSize];
+          for (int i = 0; i < textLen; i++) {
+            System.arraycopy(batchSpanRep4d[si][i], 0, spanRep[i], 0, maxWidth);
+          }
 
-            var scoringResult = runtime.runScoringHead(
-              spanRep,
-              schemaEmbs.schemaEmbP(),
-              schemaEmbs.schemaEmbFields(),
-              (long) config.getMaxCount()
+          var scoringResult = runtime.runScoringHead(
+            spanRep,
+            schemaEmbs.schemaEmbP(),
+            schemaEmbs.schemaEmbFields(),
+            (long) config.getMaxCount()
+          );
+
+          int predCount = argmax(scoringResult.countLogits()[0]);
+          if (predCount == 0) {
+            return Map.<String, List<EntitySpan>>of();
+          }
+
+          var spans = spanDecoder.decode(
+            scoringResult.spanScores(),
+            input.fieldNames(),
+            input.wordStartChars(),
+            input.wordEndChars(),
+            texts.get(origIdx),
+            textLen,
+            threshold
+          );
+
+          return spans
+            .stream()
+            .collect(
+              Collectors.groupingBy(
+                EntitySpan::type,
+                LinkedHashMap::new,
+                Collectors.toList()
+              )
             );
-
-            int predCount = argmax(scoringResult.countLogits()[0]);
-            if (predCount == 0) {
-              return Map.<String, List<EntitySpan>>of();
-            }
-
-            var spans = spanDecoder.decode(
-              scoringResult.spanScores(),
-              input.fieldNames(),
-              input.wordStartChars(),
-              input.wordEndChars(),
-              texts.get(origIdx),
-              textLen,
-              threshold
-            );
-
-            return spans
-              .stream()
-              .collect(
-                Collectors.groupingBy(
-                  EntitySpan::type,
-                  LinkedHashMap::new,
-                  Collectors.toList()
-                )
-              );
-          });
+        });
       }
 
       // Collect results preserving original order

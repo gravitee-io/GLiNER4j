@@ -10,5 +10,6 @@ target/
 .classpath
 
 models/
+dependency-reduced-pom.xml
 .gravitee/
 .task

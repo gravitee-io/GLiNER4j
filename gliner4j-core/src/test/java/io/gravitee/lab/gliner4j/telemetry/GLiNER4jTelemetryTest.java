@@ -35,12 +35,10 @@ class GLiNER4jTelemetryTest {
   void setUp() {
     GlobalOpenTelemetry.resetForTest();
     metricReader = InMemoryMetricReader.create();
-    var meterProvider = SdkMeterProvider
-      .builder()
+    var meterProvider = SdkMeterProvider.builder()
       .registerMetricReader(metricReader)
       .build();
-    OpenTelemetrySdk
-      .builder()
+    OpenTelemetrySdk.builder()
       .setMeterProvider(meterProvider)
       .buildAndRegisterGlobal();
   }
@@ -103,8 +101,7 @@ class GLiNER4jTelemetryTest {
     var classifyTextCount = findMetric("gliner4j.classify.text.count");
     assertThat(
       extractTextCount.getLongSumData().getPoints().iterator().next().getValue()
-    )
-      .isEqualTo(1);
+    ).isEqualTo(1);
     assertThat(
       classifyTextCount
         .getLongSumData()
@@ -112,8 +109,7 @@ class GLiNER4jTelemetryTest {
         .iterator()
         .next()
         .getValue()
-    )
-      .isEqualTo(2);
+    ).isEqualTo(2);
   }
 
   @Test

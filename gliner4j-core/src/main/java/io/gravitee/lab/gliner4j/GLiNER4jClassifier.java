@@ -359,17 +359,16 @@ public class GLiNER4jClassifier implements AutoCloseable {
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
       for (int s = 0; s < nonEmptyCount; s++) {
         final int si = s;
-        futures[si] =
-          executor.submit(() -> {
-            int origIdx = batchIndices[si];
-            var input = inputs[origIdx];
+        futures[si] = executor.submit(() -> {
+          int origIdx = batchIndices[si];
+          var input = inputs[origIdx];
 
-            var labelEmbs = extractLabelEmbeddings(
-              batchedHiddenStates[si],
-              input
-            );
-            return applyClassifierHead(labelEmbs, input, threshold);
-          });
+          var labelEmbs = extractLabelEmbeddings(
+            batchedHiddenStates[si],
+            input
+          );
+          return applyClassifierHead(labelEmbs, input, threshold);
+        });
       }
 
       for (int s = 0; s < nonEmptyCount; s++) {

@@ -87,9 +87,10 @@ public class SpanDecoder {
     for (var candidate : candidates) {
       boolean overlaps = result
         .stream()
-        .anyMatch(existing ->
-          candidate.start() < existing.end() &&
-          candidate.end() > existing.start()
+        .anyMatch(
+          existing ->
+            candidate.start() < existing.end() &&
+            candidate.end() > existing.start()
         );
       if (!overlaps) {
         result.add(candidate);

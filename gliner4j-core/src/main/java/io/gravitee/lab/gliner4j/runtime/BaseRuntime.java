@@ -92,11 +92,10 @@ public abstract class BaseRuntime implements AutoCloseable {
           "encoder.onnx"
         )
       ) {
-        this.encoderSession =
-          env.createSession(
-            variantDir.resolve("encoder.onnx").toString(),
-            opts
-          );
+        this.encoderSession = env.createSession(
+          variantDir.resolve("encoder.onnx").toString(),
+          opts
+        );
       }
 
       loadTaskHeads(variantDir, runtimeConfig, cacheDir);
@@ -314,8 +313,7 @@ public abstract class BaseRuntime implements AutoCloseable {
   }
 
   protected static LongBuffer allocateDirectLongBuffer(long[] data) {
-    return ByteBuffer
-      .allocateDirect(data.length * Long.BYTES)
+    return ByteBuffer.allocateDirect(data.length * Long.BYTES)
       .order(ByteOrder.nativeOrder())
       .asLongBuffer()
       .put(data)
@@ -323,8 +321,7 @@ public abstract class BaseRuntime implements AutoCloseable {
   }
 
   protected static LongBuffer allocateDirectLongBuffer(int capacity) {
-    return ByteBuffer
-      .allocateDirect(capacity * Long.BYTES)
+    return ByteBuffer.allocateDirect(capacity * Long.BYTES)
       .order(ByteOrder.nativeOrder())
       .asLongBuffer();
   }

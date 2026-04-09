@@ -79,8 +79,9 @@ class GLiNER4jClassifierIntegrationTest {
       assertThat(results).isNotEmpty();
       // Results should be sorted by confidence descending
       for (int i = 1; i < results.size(); i++) {
-        assertThat(results.get(i).confidence())
-          .isLessThanOrEqualTo(results.get(i - 1).confidence());
+        assertThat(results.get(i).confidence()).isLessThanOrEqualTo(
+          results.get(i - 1).confidence()
+        );
       }
     }
   }

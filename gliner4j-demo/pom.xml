@@ -22,9 +22,9 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>io.gravitee.lab</groupId>
-        <artifactId>gliner4j</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
+        <groupId>io.gravitee.ai.gliner4j</groupId>
+        <artifactId>gravitee-gliner4j</artifactId>
+        <version>1.0.0</version>
     </parent>
 
     <artifactId>gliner4j-demo</artifactId>
@@ -35,7 +35,7 @@
 
     <dependencies>
         <dependency>
-            <groupId>io.gravitee.lab</groupId>
+            <groupId>io.gravitee.ai.gliner4j</groupId>
             <artifactId>gliner4j-core</artifactId>
             <version>${project.version}</version>
         </dependency>

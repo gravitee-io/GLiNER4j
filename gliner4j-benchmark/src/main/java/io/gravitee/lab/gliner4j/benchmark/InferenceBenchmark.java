@@ -68,8 +68,7 @@ public class InferenceBenchmark {
 
   @Setup(Level.Trial)
   public void setup() throws IOException {
-    var corpus = Files
-      .readAllLines(Path.of(corpusPath))
+    var corpus = Files.readAllLines(Path.of(corpusPath))
       .stream()
       .filter(line -> !line.isBlank())
       .toList();
@@ -79,9 +78,9 @@ public class InferenceBenchmark {
     if (batchSize > corpus.size()) {
       throw new IllegalStateException(
         "batchSize (%d) exceeds corpus size (%d)".formatted(
-            batchSize,
-            corpus.size()
-          )
+          batchSize,
+          corpus.size()
+        )
       );
     }
 

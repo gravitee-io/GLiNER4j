@@ -217,11 +217,13 @@ class GLiNER4jNEREdgeCaseTest {
 
       // normal text → has entities
       assertThat(results.get(3)).containsKey("person");
-      assertThat(results.get(3).get("person"))
-        .anyMatch(span -> span.text().equals("John"));
+      assertThat(results.get(3).get("person")).anyMatch(span ->
+        span.text().equals("John")
+      );
       assertThat(results.get(3)).containsKey("organization");
-      assertThat(results.get(3).get("organization"))
-        .anyMatch(span -> span.text().equals("Google"));
+      assertThat(results.get(3).get("organization")).anyMatch(span ->
+        span.text().equals("Google")
+      );
     }
   }
 

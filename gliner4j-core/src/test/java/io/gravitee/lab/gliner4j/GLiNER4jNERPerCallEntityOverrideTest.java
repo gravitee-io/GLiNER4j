@@ -57,8 +57,9 @@ class GLiNER4jNERPerCallEntityOverrideTest {
       assertThat(results).doesNotContainKey("person");
       assertThat(results).doesNotContainKey("organization");
       assertThat(results).containsKey("location");
-      assertThat(results.get("location"))
-        .anyMatch(span -> span.text().contains("New York"));
+      assertThat(results.get("location")).anyMatch(span ->
+        span.text().contains("New York")
+      );
     }
   }
 
@@ -78,11 +79,13 @@ class GLiNER4jNERPerCallEntityOverrideTest {
       );
 
       assertThat(results).containsKey("person");
-      assertThat(results.get("person"))
-        .anyMatch(span -> span.text().equals("John"));
+      assertThat(results.get("person")).anyMatch(span ->
+        span.text().equals("John")
+      );
       assertThat(results).containsKey("organization");
-      assertThat(results.get("organization"))
-        .anyMatch(span -> span.text().equals("Google"));
+      assertThat(results.get("organization")).anyMatch(span ->
+        span.text().equals("Google")
+      );
     }
   }
 
@@ -117,8 +120,9 @@ class GLiNER4jNERPerCallEntityOverrideTest {
         "John works at Google."
       );
       assertThat(results).containsKey("person");
-      assertThat(results.get("person"))
-        .anyMatch(span -> span.text().equals("John"));
+      assertThat(results.get("person")).anyMatch(span ->
+        span.text().equals("John")
+      );
     }
   }
 }
