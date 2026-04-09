@@ -6,6 +6,7 @@ library_name: onnx
 tags:
   - ner
   - named-entity-recognition
+  - text-classification
   - gliner
   - gliner2
   - java
@@ -18,7 +19,16 @@ base_model: fastino-ai/gliner2-base
 
 ONNX export of [fastino-ai/gliner2-base](https://huggingface.co/fastino-ai/gliner2-base) for Java inference via [ONNX Runtime](https://onnxruntime.ai/).
 
-Part of the [gliner4j](https://github.com/gravitee-io/gliner4j) project.
+Part of the [GLiNER4j](https://github.com/gravitee-io/GLiNER4j) project.
+
+## Supported Tasks
+
+| Task | Description |
+|------|-------------|
+| **Named Entity Recognition** | Extract typed entity spans from text with confidence scores |
+| **Text Classification** | Assign labels to text with multi-label support and confidence scores |
+
+Both tasks support entity/label descriptions for improved accuracy and per-call overrides without model reloading.
 
 ## Repository Structure
 
@@ -46,9 +56,9 @@ The model is split into 3 ONNX modules for modular inference:
 
 | Module | Description |
 |--------|-------------|
-| `encoder.onnx` | DebertaV2 transformer encoder |
-| `span_rep.onnx` | Span representation layer |
-| `scoring_head.onnx` | Count-aware scoring head |
+| `encoder.onnx` | DeBERTaV2 transformer encoder |
+| `span_rep.onnx` | Span representation layer (NER) |
+| `scoring_head.onnx` | Count-aware scoring head (NER) / Classifier head MLP (Classification) |
 
 ## Variants
 
@@ -76,18 +86,47 @@ huggingface-cli download <repo> --include "onnx_fp16/*" "*.json"
 
 ## Usage
 
-Use with [gliner4j](https://github.com/gravitee-io/gliner4j), a Java library for GLiNER2 inference via ONNX Runtime.
+Use with [GLiNER4j](https://github.com/gravitee-io/GLiNER4j), a Java library for GLiNER2 inference via ONNX Runtime.
+
+### Named Entity Recognition
 
 ```java
-// Base FP32 (default)
-var gliner = GLiNER4j.load(modelDir, entities);
+var entities = List.of(
+    new EntityDefinition("person", "Names of individuals"),
+    new EntityDefinition("organization", "Company or institution names")
+);
+var gliner = GLiNER4jNER.load(modelDir, entities);
+Map<String, List<EntitySpan>> results = gliner.extract("John works at Google.");
+```
 
+### Text Classification
+
+```java
+var labels = List.of(
+    new ClassificationLabel("positive", "Expresses positive sentiment"),
+    new ClassificationLabel("negative", "Expresses negative sentiment")
+);
+var classifier = GLiNER4jClassifier.load(modelDir, labels);
+List<ClassificationResult> results = classifier.classify("Great product!");
+```
+
+### Model Variants
+
+```java
 // FP16 variant
-var gliner = GLiNER4j.load(modelDir, entities, "onnx_fp16");
+var gliner = GLiNER4jNER.load(modelDir, entities, "onnx_fp16");
 
 // Quantized variant
-var gliner = GLiNER4j.load(modelDir, entities, "onnx_quantized");
+var gliner = GLiNER4jNER.load(modelDir, entities, "onnx_quantized");
 ```
+
+## Features
+
+- **Entity/Label Descriptions**: Provide natural language descriptions alongside entity types or classification labels to improve model accuracy
+- **Per-call Overrides**: Change entities or labels at inference time without reloading the model
+- **Batch Processing**: Batched encoder calls with virtual thread parallelism for scoring
+- **OpenTelemetry**: Built-in instrumentation for duration, text count, and result count metrics (zero overhead when no OTel SDK is present)
+- **Runtime Configuration**: Control thread pools, graph optimization level, and model caching
 
 ## Benchmarks
 
