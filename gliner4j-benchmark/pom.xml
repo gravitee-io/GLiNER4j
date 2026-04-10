@@ -24,7 +24,7 @@
     <parent>
         <groupId>io.gravitee.ai.gliner4j</groupId>
         <artifactId>gravitee-gliner4j</artifactId>
-        <version>1.0.0</version>
+        <version>1.0.0-alpha.1</version>
     </parent>
 
     <artifactId>gliner4j-benchmark</artifactId>
