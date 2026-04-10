@@ -39,26 +39,30 @@ Both tasks support entity/label descriptions for improved accuracy and per-call 
 ├── onnx/                       # Base FP32 (~830 MB)
 │   ├── encoder.onnx
 │   ├── span_rep.onnx
-│   └── scoring_head.onnx
+│   ├── scoring_head.onnx
+│   └── classifier_head.onnx
 ├── onnx_fp16/                  # FP16 (~416 MB, ~50% smaller)
 │   ├── encoder.onnx
 │   ├── span_rep.onnx
-│   └── scoring_head.onnx
+│   ├── scoring_head.onnx
+│   └── classifier_head.onnx
 └── onnx_quantized/             # INT8 dynamic quantization (~208 MB, ~75% smaller)
     ├── encoder.onnx
     ├── span_rep.onnx
-    └── scoring_head.onnx
+    ├── scoring_head.onnx
+    └── classifier_head.onnx
 ```
 
 ## Model Architecture
 
-The model is split into 3 ONNX modules for modular inference:
+The model is split into 4 ONNX modules for modular inference:
 
 | Module | Description |
 |--------|-------------|
-| `encoder.onnx` | DeBERTaV2 transformer encoder |
+| `encoder.onnx` | DeBERTaV2 transformer encoder (shared) |
 | `span_rep.onnx` | Span representation layer (NER) |
-| `scoring_head.onnx` | Count-aware scoring head (NER) / Classifier head MLP (Classification) |
+| `scoring_head.onnx` | Count-aware scoring head (NER) |
+| `classifier_head.onnx` | Classifier head MLP (Classification) |
 
 ## Variants
 
@@ -115,9 +119,11 @@ List<ClassificationResult> results = classifier.classify("Great product!");
 ```java
 // FP16 variant
 var gliner = GLiNER4jNER.load(modelDir, entities, "onnx_fp16");
+var classifier = GLiNER4jClassifier.load(modelDir, labels, "onnx_fp16");
 
 // Quantized variant
 var gliner = GLiNER4jNER.load(modelDir, entities, "onnx_quantized");
+var classifier = GLiNER4jClassifier.load(modelDir, labels, "onnx_quantized");
 ```
 
 ## Features
