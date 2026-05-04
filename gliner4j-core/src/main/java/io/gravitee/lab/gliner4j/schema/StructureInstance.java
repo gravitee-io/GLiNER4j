@@ -13,10 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package io.gravitee.lab.gliner4j.demo;
+package io.gravitee.lab.gliner4j.schema;
 
-public enum Mode {
-  NER,
-  CLASSIFY,
-  SCHEMA,
+import java.util.Map;
+
+/**
+ * A single instance of a {@link StructureDefinition} extracted from text.
+ * Fields with no extracted value are absent from the map (use {@link Map#getOrDefault}).
+ *
+ * @param fields field-name → extracted value
+ */
+public record StructureInstance(Map<String, StructureValue> fields) {
+  public StructureInstance {
+    fields = Map.copyOf(fields);
+  }
 }

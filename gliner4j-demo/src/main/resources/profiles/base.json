@@ -28,5 +28,18 @@
     "The service was terrible and the staff was rude.",
     "The quarterly earnings report shows a 15% increase in revenue.",
     "New research suggests that regular exercise improves mental health."
+  ],
+  "structures": [
+    {
+      "name": "product",
+      "fields": [
+        { "name": "name", "type": "STRING", "description": "Product name" },
+        { "name": "price", "type": "LIST" },
+        { "name": "features", "type": "LIST" }
+      ]
+    }
+  ],
+  "schemaSamples": [
+    "The MacBook Pro costs $1999 and features M3 chip, 16GB RAM, and 512GB storage."
   ]
 }

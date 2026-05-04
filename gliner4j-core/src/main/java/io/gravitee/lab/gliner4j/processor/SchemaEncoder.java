@@ -58,6 +58,25 @@ public class SchemaEncoder {
     );
   }
 
+  /**
+   * Builds a SchemaEncoder from a pre-computed token list. Used by composers like
+   * {@code MultiSchemaEncoder} that need to join multiple per-structure schemas with separator tokens.
+   *
+   * @param specialToken the special token marking each field (used by InputAssembler to track field indices)
+   * @param fieldNames the combined field names in order
+   * @param schemaTokens the pre-built token list
+   */
+  public SchemaEncoder(
+    String specialToken,
+    List<String> fieldNames,
+    List<String> schemaTokens
+  ) {
+    this.fieldNames = List.copyOf(fieldNames);
+    this.numFields = fieldNames.size();
+    this.specialToken = specialToken;
+    this.schemaTokens = List.copyOf(schemaTokens);
+  }
+
   private static List<String> buildSchemaTokens(
     String taskKeyword,
     String specialToken,

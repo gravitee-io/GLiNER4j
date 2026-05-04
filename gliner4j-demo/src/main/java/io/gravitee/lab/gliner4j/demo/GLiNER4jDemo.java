@@ -21,11 +21,13 @@ import static io.gravitee.lab.gliner4j.demo.profile.ProfileType.BASE;
 import ai.onnxruntime.OrtSession;
 import io.gravitee.lab.gliner4j.GLiNER4jClassifier;
 import io.gravitee.lab.gliner4j.GLiNER4jNER;
+import io.gravitee.lab.gliner4j.GLiNER4jSchemaExtractor;
 import io.gravitee.lab.gliner4j.demo.profile.Profile;
 import io.gravitee.lab.gliner4j.demo.profile.ProfileType;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
+import io.gravitee.lab.gliner4j.schema.StructureDefinition;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.metrics.SdkMeterProvider;
 import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader;
@@ -43,6 +45,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   - nerSamples: sample texts for NER
  *   - labels (optional): classification labels — if present, classification demo runs too
  *   - classifySamples (optional): sample texts for classification
+ *   - structures (optional): JSON structure definitions — if present, schema demo runs too
+ *   - schemaSamples (optional): sample texts for schema extraction
  */
 public class GLiNER4jDemo {
 
@@ -108,6 +112,13 @@ public class GLiNER4jDemo {
         .map(l -> new ClassificationLabel(l.name(), l.description()))
         .toList()
       : List.<ClassificationLabel>of();
+    var structures = profile.hasSchema()
+      ? profile
+        .structures()
+        .stream()
+        .map(s -> s.toDefinition())
+        .toList()
+      : List.<StructureDefinition>of();
 
     var runtimeConfig = RuntimeConfig.builder()
       .optimizationLevel(OrtSession.SessionOptions.OptLevel.EXTENDED_OPT)
@@ -118,6 +129,7 @@ public class GLiNER4jDemo {
 
     GLiNER4jNER gliner = null;
     GLiNER4jClassifier classifier = null;
+    GLiNER4jSchemaExtractor schemaExtractor = null;
     try {
       // Optional NER demo (skipped for classification-only profiles)
       if (profile.hasEntities()) {
@@ -149,19 +161,41 @@ public class GLiNER4jDemo {
         }
       }
 
-      runInteractive(profile, gliner, classifier);
+      // Optional schema extraction demo
+      if (profile.hasSchema()) {
+        schemaExtractor = GLiNER4jSchemaExtractor.load(modelDir, structures, variant, runtimeConfig);
+        printer.schemaBanner();
+        System.out.println(DIM + "  Model: " + modelDir + RESET);
+        System.out.println();
+        printer.structureLegend(structures);
+
+        var samples = profile.schemaSamples() == null ? List.<String>of() : profile.schemaSamples();
+        for (int i = 0; i < samples.size(); i++) {
+          var text = samples.get(i);
+          var results = schemaExtractor.extract(text);
+          printer.schemaResult(i + 1, text, results);
+        }
+      }
+
+      runInteractive(profile, gliner, classifier, schemaExtractor);
     } finally {
       if (gliner != null) gliner.close();
       if (classifier != null) classifier.close();
+      if (schemaExtractor != null) schemaExtractor.close();
     }
 
     printer.metrics(metricReader.collectAllMetrics());
     openTelemetry.close();
   }
 
-  private static void runInteractive(Profile profile, GLiNER4jNER gliner, GLiNER4jClassifier classifier) {
+  private static void runInteractive(
+    Profile profile,
+    GLiNER4jNER gliner,
+    GLiNER4jClassifier classifier,
+    GLiNER4jSchemaExtractor schemaExtractor
+  ) {
     var hasEntities = gliner != null;
-    printer.interactiveBanner(hasEntities, profile.hasLabels());
+    printer.interactiveBanner(hasEntities, profile.hasLabels(), profile.hasSchema());
     var counter = new AtomicInteger(1);
     var mode = hasEntities ? NER : Mode.CLASSIFY;
 
@@ -190,14 +224,23 @@ public class GLiNER4jDemo {
             System.out.println(DIM + "  Switched to classification mode." + RESET);
           }
           continue;
+        } else if (line.equalsIgnoreCase("/schema")) {
+          if (schemaExtractor == null) {
+            System.out.println(GRAY + "  This profile has no structures — '/schema' unavailable." + RESET);
+          } else {
+            mode = Mode.SCHEMA;
+            System.out.println(DIM + "  Switched to schema mode." + RESET);
+          }
+          continue;
         } else if (line.equalsIgnoreCase("/help")) {
-          printer.interactiveHelp(hasEntities, profile.hasLabels());
+          printer.interactiveHelp(hasEntities, profile.hasLabels(), profile.hasSchema());
           continue;
         }
 
         switch (mode) {
           case NER -> printer.nerResult(counter.getAndIncrement(), line, gliner.extract(line));
-          default -> printer.classificationResult(counter.getAndIncrement(), line, classifier.classify(line));
+          case CLASSIFY -> printer.classificationResult(counter.getAndIncrement(), line, classifier.classify(line));
+          case SCHEMA -> printer.schemaResult(counter.getAndIncrement(), line, schemaExtractor.extract(line));
         }
       }
     }
