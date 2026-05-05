@@ -17,6 +17,8 @@ package io.gravitee.lab.gliner4j.demo;
 
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
+import io.gravitee.lab.gliner4j.schema.ExtractionResult;
+import io.gravitee.lab.gliner4j.schema.RelationInstance;
 import io.gravitee.lab.gliner4j.schema.StructureDefinition;
 import io.gravitee.lab.gliner4j.schema.StructureInstance;
 import io.gravitee.lab.gliner4j.schema.StructureValue;
@@ -62,7 +64,7 @@ public class Printer {
     System.out.println(dim + "  ─────────────────────────────────────────────────────────────" + reset);
   }
 
-  public void interactiveBanner(boolean hasEntities, boolean hasLabels, boolean hasSchema) {
+  public void interactiveBanner(boolean hasEntities, boolean hasLabels, boolean hasSchema, boolean hasRelations) {
     System.out.println();
     System.out.println(dim + "  ─────────────────────────────────────────────────────────────" + reset);
     System.out.println();
@@ -71,6 +73,7 @@ public class Printer {
     if (hasEntities) commands.append("  /ner");
     if (hasLabels) commands.append("  /classify");
     if (hasSchema) commands.append("  /schema");
+    if (hasRelations) commands.append("  /relations  /extract");
     commands.append("  /help  /exit");
     System.out.println(dim + commands + reset);
     System.out.println();
@@ -198,6 +201,24 @@ public class Printer {
     System.out.println();
   }
 
+  void relationBanner() {
+    System.out.println();
+    System.out.println(bold + "  ┌─────────────────────────────────────────────────────────┐" + reset);
+    System.out.println(bold + "  │      GLiNER4jRelationExtractor — Relations Demo         │" + reset);
+    System.out.println(bold + "  │         Relation Extraction with ONNX Runtime           │" + reset);
+    System.out.println(bold + "  └─────────────────────────────────────────────────────────┘" + reset);
+    System.out.println();
+  }
+
+  void combinedBanner() {
+    System.out.println();
+    System.out.println(bold + "  ┌─────────────────────────────────────────────────────────┐" + reset);
+    System.out.println(bold + "  │       GLiNER4j — Combined Extraction Demo               │" + reset);
+    System.out.println(bold + "  │       Entities + Relations in a single forward pass     │" + reset);
+    System.out.println(bold + "  └─────────────────────────────────────────────────────────┘" + reset);
+    System.out.println();
+  }
+
   public void nerResult(int index, String text, Map<String, List<EntitySpan>> results) {
     System.out.println();
     var allSpans = new ArrayList<EntitySpan>();
@@ -234,6 +255,95 @@ public class Printer {
         span.confidence() * 100,
         reset
       );
+    }
+  }
+
+  public void relationResult(int index, String text, Map<String, List<RelationInstance>> results) {
+    System.out.println();
+    System.out.println("  " + dim + index + "." + reset + " " + text);
+
+    boolean any = results
+      .values()
+      .stream()
+      .anyMatch(list -> !list.isEmpty());
+    if (!any) {
+      System.out.println(gray + "     No relations found." + reset);
+      return;
+    }
+    for (var entry : results.entrySet()) {
+      var instances = entry.getValue();
+      if (instances.isEmpty()) continue;
+      var c = palette.colorsFor(entry.getKey());
+      System.out.println("    " + c[1] + entry.getKey() + reset);
+      for (var instance : instances) {
+        printRelationInstance(instance);
+      }
+    }
+  }
+
+  public void combinedResult(int index, String text, ExtractionResult result) {
+    System.out.println();
+    System.out.println("  " + dim + index + "." + reset + " " + text);
+
+    var entitySpans = new ArrayList<EntitySpan>();
+    result.entities().values().forEach(entitySpans::addAll);
+    entitySpans.sort(Comparator.comparingInt(EntitySpan::start));
+
+    if (!entitySpans.isEmpty()) {
+      System.out.println("    " + dim + "Entities:" + reset);
+      for (var span : entitySpans) {
+        var c = palette.colorsFor(span.type());
+        System.out.printf("      %s%-22s%s  %s%n", c[1], span.type(), reset, "\"" + span.text() + "\"");
+      }
+    }
+
+    boolean anyRel = result
+      .relations()
+      .values()
+      .stream()
+      .anyMatch(list -> !list.isEmpty());
+    if (anyRel) {
+      System.out.println("    " + dim + "Relations:" + reset);
+      for (var entry : result.relations().entrySet()) {
+        var instances = entry.getValue();
+        if (instances.isEmpty()) continue;
+        var c = palette.colorsFor(entry.getKey());
+        System.out.println("      " + c[1] + entry.getKey() + reset);
+        for (var instance : instances) {
+          printRelationInstance(instance);
+        }
+      }
+    }
+
+    if (entitySpans.isEmpty() && !anyRel) {
+      System.out.println(gray + "     No entities or relations found." + reset);
+    }
+  }
+
+  private void printRelationInstance(RelationInstance instance) {
+    var head = instance.head();
+    var tail = instance.tail();
+    var bar = confidenceBar(instance.confidence());
+    if (head != null && tail != null) {
+      System.out.printf(
+        "      %s\"%s\"%s  →  %s\"%s\"%s  %s %s%.0f%%%s%n",
+        bold,
+        head.text(),
+        reset,
+        bold,
+        tail.text(),
+        reset,
+        bar,
+        dim,
+        instance.confidence() * 100,
+        reset
+      );
+    } else {
+      var sb = new StringBuilder();
+      for (var fieldEntry : instance.fields().entrySet()) {
+        sb.append(fieldEntry.getKey()).append("=\"").append(fieldEntry.getValue().text()).append("\"  ");
+      }
+      System.out.printf("      %s  %s %s%.0f%%%s%n", sb, bar, dim, instance.confidence() * 100, reset);
     }
   }
 
@@ -279,22 +389,34 @@ public class Printer {
     return sb.toString();
   }
 
-  public void interactiveHelp(boolean hasEntities, boolean hasLabels, boolean hasSchema) {
+  public void interactiveHelp(boolean hasEntities, boolean hasLabels, boolean hasSchema, boolean hasRelations) {
     System.out.println();
     System.out.println(dim + "  Available commands:" + reset);
     if (hasEntities) {
-      System.out.println("    " + bold + "/ner" + reset + dim + "       Switch to NER mode" + reset);
+      System.out.println("    " + bold + "/ner" + reset + dim + "        Switch to NER mode" + reset);
     }
     if (hasLabels) {
-      System.out.println("    " + bold + "/classify" + reset + dim + "  Switch to classification mode" + reset);
+      System.out.println("    " + bold + "/classify" + reset + dim + "   Switch to classification mode" + reset);
     }
     if (hasSchema) {
       System.out.println(
-        "    " + bold + "/schema" + reset + dim + "    Switch to schema (JSON structure) mode" + reset
+        "    " + bold + "/schema" + reset + dim + "     Switch to schema (JSON structure) mode" + reset
       );
     }
-    System.out.println("    " + bold + "/help" + reset + dim + "      Show this help" + reset);
-    System.out.println("    " + bold + "/exit" + reset + dim + "      Quit the interactive session" + reset);
+    if (hasRelations) {
+      System.out.println("    " + bold + "/relations" + reset + dim + "  Switch to relation extraction mode" + reset);
+      System.out.println(
+        "    " +
+          bold +
+          "/extract" +
+          reset +
+          dim +
+          "    Switch to combined extraction mode (entities + relations)" +
+          reset
+      );
+    }
+    System.out.println("    " + bold + "/help" + reset + dim + "       Show this help" + reset);
+    System.out.println("    " + bold + "/exit" + reset + dim + "       Quit the interactive session" + reset);
     System.out.println();
   }
 

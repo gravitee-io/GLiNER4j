@@ -13,12 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package io.gravitee.lab.gliner4j.demo;
+package io.gravitee.lab.gliner4j.schema;
 
-public enum Mode {
-  NER,
-  CLASSIFY,
-  SCHEMA,
-  RELATIONS,
-  EXTRACT,
-}
+/**
+ * A single field span within a {@link RelationInstance} (e.g. the "head" or "tail" of a relation).
+ *
+ * @param name the field name (e.g. "head", "tail")
+ * @param text the matched substring
+ * @param confidence model confidence score (0..1) for this field
+ * @param start character start offset (inclusive) in the original text
+ * @param end character end offset (exclusive) in the original text
+ */
+public record FieldSpan(
+  String name,
+  String text,
+  float confidence,
+  int start,
+  int end
+) {}
