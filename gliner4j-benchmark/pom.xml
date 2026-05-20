@@ -63,6 +63,13 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-simple</artifactId>
         </dependency>
+
+        <!-- Fake data generation for benchmark corpora (avoids shipping any real text) -->
+        <dependency>
+            <groupId>net.datafaker</groupId>
+            <artifactId>datafaker</artifactId>
+            <version>2.4.2</version>
+        </dependency>
     </dependencies>
 
     <build>
