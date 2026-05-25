@@ -1,3 +1,10 @@
+# [1.0.0-alpha.3](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0-alpha.2...1.0.0-alpha.3) (2026-05-25)
+
+
+### Features
+
+* gliguard support ([#23](https://github.com/gravitee-io/GLiNER4j/issues/23)) ([0d1a20a](https://github.com/gravitee-io/GLiNER4j/commit/0d1a20a9f4bb1b752ea523fc4867df6c1b39488a))
+
 # [1.0.0-alpha.2](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0-alpha.1...1.0.0-alpha.2) (2026-05-25)
 
 
