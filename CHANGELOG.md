@@ -1,3 +1,10 @@
+# [1.0.0-alpha.2](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0-alpha.1...1.0.0-alpha.2) (2026-05-25)
+
+
+### Features
+
+* gliner4j-pii ([#22](https://github.com/gravitee-io/GLiNER4j/issues/22)) ([06d473d](https://github.com/gravitee-io/GLiNER4j/commit/06d473d839a2662127a39f7debdef81bb810b378))
+
 # 1.0.0-alpha.1 (2026-04-10)
 
 
