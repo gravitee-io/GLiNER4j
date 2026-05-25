@@ -158,7 +158,6 @@ public class GLiNER4jRelationExtractor implements AutoCloseable {
     float threshold
   ) {
     long startNanos = System.nanoTime();
-    var emptyResult = emptyMapForCurrentRelations();
     if (text == null || text.isBlank()) {
       telemetry.record(0.0, 1, 0);
       return Map.of();
@@ -327,14 +326,6 @@ public class GLiNER4jRelationExtractor implements AutoCloseable {
       input.textLen(),
       threshold
     );
-  }
-
-  private Map<String, List<RelationInstance>> emptyMapForCurrentRelations() {
-    var map = new LinkedHashMap<String, List<RelationInstance>>();
-    for (var rel : relations) {
-      map.put(rel.name(), List.of());
-    }
-    return map;
   }
 
   private static long totalInstances(
