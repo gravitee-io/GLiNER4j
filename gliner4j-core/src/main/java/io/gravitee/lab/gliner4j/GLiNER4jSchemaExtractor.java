@@ -64,7 +64,6 @@ public class GLiNER4jSchemaExtractor implements AutoCloseable {
   private final List<StructureDefinition> structures;
   private final DjlTokenizerWrapper tokenizer;
   private final GLiNER4jNERRuntime runtime;
-  private final MultiSchemaEncoder multiEncoder;
   private final InputAssembler inputAssembler;
   private final WhitespaceTokenSplitter splitter;
   private final StructureDecoder decoder;
@@ -75,14 +74,12 @@ public class GLiNER4jSchemaExtractor implements AutoCloseable {
     List<StructureDefinition> structures,
     DjlTokenizerWrapper tokenizer,
     GLiNER4jNERRuntime runtime,
-    MultiSchemaEncoder multiEncoder,
     InputAssembler inputAssembler
   ) {
     this.config = config;
     this.structures = List.copyOf(structures);
     this.tokenizer = tokenizer;
     this.runtime = runtime;
-    this.multiEncoder = multiEncoder;
     this.inputAssembler = inputAssembler;
     this.splitter = new WhitespaceTokenSplitter();
     this.decoder = new StructureDecoder();
@@ -131,7 +128,6 @@ public class GLiNER4jSchemaExtractor implements AutoCloseable {
       structures,
       tokenizer,
       runtime,
-      multiEncoder,
       inputAssembler
     );
   }
@@ -166,7 +162,6 @@ public class GLiNER4jSchemaExtractor implements AutoCloseable {
       hiddenStates,
       input,
       structures,
-      multiEncoder,
       text,
       threshold
     );
@@ -209,7 +204,6 @@ public class GLiNER4jSchemaExtractor implements AutoCloseable {
       hiddenStates,
       input,
       overrideStructures,
-      overrideEncoder,
       text,
       threshold
     );
@@ -248,7 +242,6 @@ public class GLiNER4jSchemaExtractor implements AutoCloseable {
     float[][][] hiddenStates,
     PreprocessedInput input,
     List<StructureDefinition> activeStructures,
-    MultiSchemaEncoder activeEncoder,
     String text,
     float threshold
   ) {
@@ -295,7 +288,7 @@ public class GLiNER4jSchemaExtractor implements AutoCloseable {
         spanRep,
         schemaEmbP,
         schemaEmbFields,
-        (long) config.getMaxCount()
+        config.getMaxCount()
       );
 
       int predCount = argmax(scoringResult.countLogits()[0]);
