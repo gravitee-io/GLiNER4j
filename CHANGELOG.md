@@ -1,3 +1,10 @@
+# [1.0.0-alpha.4](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0-alpha.3...1.0.0-alpha.4) (2026-05-25)
+
+
+### Features
+
+* **schema-extractor:** add JSON structure extraction ([#24](https://github.com/gravitee-io/GLiNER4j/issues/24)) ([00db7da](https://github.com/gravitee-io/GLiNER4j/commit/00db7da833dd933771866d928f74a97054b601f3))
+
 # [1.0.0-alpha.3](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0-alpha.2...1.0.0-alpha.3) (2026-05-25)
 
 
