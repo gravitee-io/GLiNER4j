@@ -97,13 +97,33 @@ public class Printer {
   public void structureLegend(List<StructureDefinition> structures) {
     for (var structure : structures) {
       var c = palette.colorsFor(structure.name());
-      System.out.print("  " + c[0] + " " + structure.name() + " " + reset + " ");
-      var fieldNames = structure
-        .fields()
-        .stream()
-        .map(f -> f.name() + ":" + f.type().name().toLowerCase())
-        .toList();
-      System.out.println(dim + String.join(", ", fieldNames) + reset);
+      System.out.println("  " + c[0] + " " + structure.name() + " " + reset);
+      for (var field : structure.fields()) {
+        var typeTag = field.type().name().toLowerCase();
+        var line = new StringBuilder()
+          .append("      ")
+          .append(dim)
+          .append("• ")
+          .append(reset)
+          .append(field.name())
+          .append(dim)
+          .append(" :")
+          .append(typeTag)
+          .append(reset);
+        if (!field.choices().isEmpty()) {
+          line
+            .append("  ")
+            .append(gray)
+            .append("∈ {")
+            .append(String.join(" | ", field.choices()))
+            .append("}")
+            .append(reset);
+        }
+        if (field.description() != null && !field.description().isBlank()) {
+          line.append("  ").append(dim).append("— ").append(field.description()).append(reset);
+        }
+        System.out.println(line);
+      }
     }
     System.out.println(dim + "  ─────────────────────────────────────────────────────────────" + reset);
   }
