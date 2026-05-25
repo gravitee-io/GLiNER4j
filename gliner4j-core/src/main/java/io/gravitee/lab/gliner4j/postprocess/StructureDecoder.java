@@ -180,9 +180,7 @@ public class StructureDecoder {
     List<StringValue> candidates
   ) {
     var sorted = new ArrayList<>(candidates);
-    sorted.sort(
-      Comparator.comparingDouble((StringValue v) -> v.confidence()).reversed()
-    );
+    sorted.sort(Comparator.comparingDouble(StringValue::confidence).reversed());
     var kept = new ArrayList<StringValue>();
     for (var c : sorted) {
       boolean overlaps = false;
@@ -195,12 +193,5 @@ public class StructureDecoder {
       if (!overlaps) kept.add(c);
     }
     return kept;
-  }
-
-  /**
-   * Empty result with no fields populated — convenience for callers when no instances are predicted.
-   */
-  public static Map<String, StructureValue> emptyFields() {
-    return Map.of();
   }
 }
