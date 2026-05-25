@@ -67,6 +67,13 @@
                     <mainClass>io.gravitee.lab.gliner4j.demo.GLiNER4jDemo</mainClass>
                 </configuration>
             </plugin>
+            <plugin>
+                <groupId>com.hubspot.maven.plugins</groupId>
+                <artifactId>prettier-maven-plugin</artifactId>
+                <configuration>
+                    <printWidth>120</printWidth>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>

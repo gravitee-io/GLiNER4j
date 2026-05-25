@@ -15,66 +15,115 @@
  */
 package io.gravitee.lab.gliner4j.benchmark;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.gravitee.lab.gliner4j.GLiNER4jNER;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
 
+/**
+ * JMH benchmark for GLiNER4j inference.
+ *
+ * <p>Parameterized over:
+ *   - profile: which model + entity vocabulary to use (loaded from /profiles/{name}.json)
+ *   - textLength: token-length bucket (tiny ≈ 16, short ≈ 64, medium ≈ 256, long ≈ 512)
+ *   - entityCount: number of entity labels to keep (a "common app" small set vs a wider one).
+ *     Falls through to "use all" when the requested count exceeds the profile's available
+ *     entities (e.g., base has only 6 — both 8 and 16 run with all 6).
+ *   - batchSize: number of texts per extractBatch() call
+ *
+ * <p>The corpus is generated at trial setup from {@link CorpusGenerator}, which composes
+ * datafaker output with simple templates. No hand-written sample text ships in the repo;
+ * the seed is fixed so different benchmark runs see the same content.
+ *
+ * <p>To reduce JIT specialization on a single batch, a wrapping cursor advances by
+ * {@code batchSize} per invocation, so each {@code @Benchmark} call sees a different slice
+ * of the {@value CORPUS_SAMPLES}-sample corpus.
+ */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Benchmark)
 @Warmup(iterations = 2, time = 1)
-@Measurement(iterations = 5, time = 1)
-@Fork(3)
+@Measurement(iterations = 10, time = 1)
+@Fork(1)
 public class InferenceBenchmark {
+
+  private static final ObjectMapper MAPPER = new ObjectMapper();
+  private static final int CORPUS_SAMPLES = 16;
+  private static final long CORPUS_SEED = 0xC0FFEEL;
+  private static final Map<String, Integer> TARGET_TOKENS = Map.of(
+    "tiny",
+    16,
+    "short",
+    64,
+    "medium",
+    256,
+    "long",
+    512
+  );
+
+  @Param({ "base", "pii" })
+  private String profile;
+
+  @Param({ "onnx_quantized" })
+  private String variant;
+
+  @Param({ "tiny", "short", "medium", "long" })
+  private String textLength;
 
   @Param({ "1", "4", "8" })
   private int batchSize;
 
-  @Param({ "4", "8" })
+  @Param({ "8", "16" })
   private int entityCount;
 
-  @Param({ "models/gliner2-base-onnx" })
-  private String modelPath;
-
-  @Param({ "gliner4j-benchmark/src/main/resources/corpus.txt" })
-  private String corpusPath;
-
-  private static final List<EntityDefinition> ENTITIES_4 = List.of(
-    new EntityDefinition("person"),
-    new EntityDefinition("organization"),
-    new EntityDefinition("location"),
-    new EntityDefinition("date", "Calendar date or time expression")
-  );
-
-  private static final List<EntityDefinition> ENTITIES_8 = List.of(
-    new EntityDefinition("person"),
-    new EntityDefinition("organization"),
-    new EntityDefinition("location"),
-    new EntityDefinition("date", "Calendar date or time expression"),
-    new EntityDefinition("currency", "Monetary value or currency name"),
-    new EntityDefinition("job title", "Professional role or job position"),
-    new EntityDefinition("product", "Commercial product or service name"),
-    new EntityDefinition("email")
-  );
-
   private GLiNER4jNER gliner;
-  private List<String> batch;
+  private List<String> corpus;
+  private int cursor;
 
   @Setup(Level.Trial)
   public void setup() throws IOException {
-    var corpus = Files.readAllLines(Path.of(corpusPath))
-      .stream()
-      .filter(line -> !line.isBlank())
-      .toList();
-    if (corpus.isEmpty()) {
-      throw new IllegalStateException("Corpus file is empty: " + corpusPath);
+    var resource = "/profiles/" + profile + ".json";
+    String modelDir;
+    var allEntities = new ArrayList<EntityDefinition>();
+    try (var in = InferenceBenchmark.class.getResourceAsStream(resource)) {
+      if (in == null) {
+        throw new IllegalStateException(
+          "Profile resource not found: " + resource
+        );
+      }
+      var json = MAPPER.readTree(in);
+      modelDir = json.get("modelDir").asText();
+      for (var node : json.get("entities")) {
+        allEntities.add(
+          new EntityDefinition(
+            node.get("name").asText(),
+            node.path("description").asText("")
+          )
+        );
+      }
     }
+
+    var entities = (entityCount > 0 && entityCount < allEntities.size())
+      ? allEntities.subList(0, entityCount)
+      : allEntities;
+
+    var targetTokens = TARGET_TOKENS.get(textLength);
+    if (targetTokens == null) {
+      throw new IllegalStateException("Unknown textLength: " + textLength);
+    }
+    corpus = new CorpusGenerator(CORPUS_SEED).generate(
+      profile,
+      targetTokens,
+      CORPUS_SAMPLES
+    );
+
     if (batchSize > corpus.size()) {
       throw new IllegalStateException(
         "batchSize (%d) exceeds corpus size (%d)".formatted(
@@ -84,9 +133,8 @@ public class InferenceBenchmark {
       );
     }
 
-    var entities = entityCount == 4 ? ENTITIES_4 : ENTITIES_8;
-    gliner = GLiNER4jNER.load(Path.of(modelPath), entities);
-    batch = corpus.subList(0, batchSize);
+    gliner = GLiNER4jNER.load(Path.of(modelDir), entities, variant);
+    cursor = 0;
   }
 
   @TearDown(Level.Trial)
@@ -96,6 +144,18 @@ public class InferenceBenchmark {
 
   @Benchmark
   public void extractBatch(Blackhole bh) {
-    bh.consume(gliner.extractBatch(batch));
+    var n = corpus.size();
+    var start = cursor;
+    cursor = (cursor + batchSize) % n;
+
+    List<String> slice;
+    if (start + batchSize <= n) {
+      slice = corpus.subList(start, start + batchSize);
+    } else {
+      slice = new ArrayList<>(batchSize);
+      slice.addAll(corpus.subList(start, n));
+      slice.addAll(corpus.subList(0, batchSize - (n - start)));
+    }
+    bh.consume(gliner.extractBatch(slice));
   }
 }

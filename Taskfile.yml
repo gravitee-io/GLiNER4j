@@ -18,27 +18,23 @@
 version: "3"
 
 vars:
-  HF_MODEL: "fastino/gliner2-base-v1"
-  HF_LOCAL_DIR: "models/gliner2-base-hf"
-  ONNX_OUTPUT_DIR: "models/gliner2-base-onnx"
+  # Base model (fastino/gliner2-base-v1)
+  BASE_HF_MODEL: "fastino/gliner2-base-v1"
+  BASE_HF_LOCAL_DIR: "models/gliner2-base-hf"
+  BASE_ONNX_OUTPUT_DIR: "models/gliner2-base-onnx"
+
+  # PII model (fastino/gliner2-privacy-filter-PII-multi)
+  PII_HF_MODEL: "fastino/gliner2-privacy-filter-PII-multi"
+  PII_HF_LOCAL_DIR: "models/gliner2-privacy-hf"
+  PII_ONNX_OUTPUT_DIR: "models/gliner2-privacy-onnx"
 
 tasks:
   default:
-    desc: Download model and export to ONNX (all variants)
+    desc: Default — runs the base all-in-one chain (download + export, FP16 + INT8)
     cmds:
-      - task: model:download
-      - task: model:export
-        vars:
-          EXPORT_ARGS: "--variant fp16 --variant quantized"
+      - task: base
 
-  model:download:
-    desc: Download GLiNER2 model from HuggingFace
-    deps:
-      - check:uv
-    cmds:
-      - uv run --with huggingface-hub hf download {{.HF_MODEL}} --local-dir {{.HF_LOCAL_DIR}}
-    status:
-      - test -d {{.HF_LOCAL_DIR}}/model.safetensors || test -f {{.HF_LOCAL_DIR}}/config.json
+  # ── Shared utilities ────────────────────────────────────────────────────────
 
   check:uv:
     desc: Verify uv is installed
@@ -53,30 +49,6 @@ tasks:
     preconditions:
       - sh: command -v mvn
         msg: "mvn not found. Install Maven: https://maven.apache.org/install.html"
-
-  model:export:
-    desc: Export PyTorch model to ONNX format (base + optional variants)
-    deps:
-      - model:download
-      - check:uv
-    cmds:
-      - uv run scripts/export_onnx.py --model-path {{.HF_LOCAL_DIR}} --output-dir {{.ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default ""}}
-    sources:
-      - scripts/export_onnx.py
-      - "{{.HF_LOCAL_DIR}}/**/*"
-    generates:
-      - "{{.ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
-      - "{{.ONNX_OUTPUT_DIR}}/onnx/span_rep.onnx"
-      - "{{.ONNX_OUTPUT_DIR}}/onnx/scoring_head.onnx"
-      - "{{.ONNX_OUTPUT_DIR}}/gliner4j_config.json"
-      - "{{.ONNX_OUTPUT_DIR}}/tokenizer.json"
-
-  model:clean:
-    desc: Remove downloaded and exported model files
-    prompt: This will delete all model files. Continue?
-    cmds:
-      - rm -rf {{.HF_LOCAL_DIR}}
-      - rm -rf {{.ONNX_OUTPUT_DIR}}
 
   format:
     desc: Apply license headers and format code
@@ -101,31 +73,189 @@ tasks:
     cmds:
       - mvn test
 
-  hf-upload:
-    desc: Upload ONNX model directory to HuggingFace Hub
+  benchmark:
+    desc: Run JMH benchmarks (host JVM, all profiles × entityCounts × batchSizes)
+    deps:
+      - check:maven
+    cmds:
+      - mvn -pl gliner4j-benchmark -am package -DskipTests
+      - java -jar gliner4j-benchmark/target/gliner4j-benchmark.jar {{.JMH_ARGS | default ""}}
+
+  benchmark:docker:build:
+    desc: Build the benchmark Docker image (`gliner4j-benchmark:latest`)
+    cmds:
+      - docker build -f gliner4j-benchmark/Dockerfile -t gliner4j-benchmark:latest .
+
+  analyze:
+    desc: Analyze JMH JSON output(s) — produces results/{summary.csv,report.md,plots/*.png}
+    deps:
+      - check:uv
+    vars:
+      INPUTS: '{{.INPUTS | default "results/bench-cpu1.json results/bench-cpu2.json results/bench-cpu4.json"}}'
+      OUT: '{{.OUT | default "results"}}'
+    cmds:
+      - uv run scripts/analyze_benchmark.py analyze {{.INPUTS}} --out {{.OUT}}
+
+  analyze:compare:
+    desc: "Compare N labeled run sets (>= 2). Usage: task analyze:compare RUNS='baseline=path1.json tuned=path2.json,path3.json'"
+    deps:
+      - check:uv
+    requires:
+      vars:
+        - RUNS
+    vars:
+      OUT: '{{.OUT | default "results/compare"}}'
+    cmds:
+      - uv run scripts/analyze_benchmark.py compare {{.RUNS}} --out {{.OUT}}
+
+  benchmark:docker:
+    desc: Run the benchmark in Docker with CPU affinity (override CPUSET, RESULTS_FILE, JMH_ARGS as needed)
+    deps:
+      - benchmark:docker:build
+    vars:
+      CPUSET: '{{.CPUSET | default "0-3"}}'
+      RESULTS_FILE: '{{.RESULTS_FILE | default "bench.json"}}'
+    cmds:
+      - mkdir -p results
+      - >
+        docker run --rm
+        --cpuset-cpus={{.CPUSET}}
+        -v $PWD/models:/app/models
+        -v $PWD/results:/app/results
+        gliner4j-benchmark:latest
+        -rf json -rff /app/results/{{.RESULTS_FILE}}
+        {{.JMH_ARGS | default ""}}
+
+  # ── Base model chain (fastino/gliner2-base-v1) ──────────────────────────────
+
+  base:
+    desc: Download and export the base model (FP32 + FP16 + INT8) and render its MODEL_CARD.md
+    cmds:
+      - task: model:download:base
+      - task: model:export:base
+        vars:
+          EXPORT_ARGS: "--variant fp16 --variant quantized"
+
+  model:download:base:
+    desc: Download the base GLiNER2 model from HuggingFace
+    deps:
+      - check:uv
+    cmds:
+      - uvx --from huggingface-hub hf download {{.BASE_HF_MODEL}} --local-dir {{.BASE_HF_LOCAL_DIR}}
+    status:
+      - test -f {{.BASE_HF_LOCAL_DIR}}/model.safetensors
+      - test -f {{.BASE_HF_LOCAL_DIR}}/config.json
+
+  model:export:base:
+    desc: Export the base PyTorch model to ONNX (base + optional variants) and render its MODEL_CARD.md
+    deps:
+      - model:download:base
+      - check:uv
+    cmds:
+      - uv run scripts/export_onnx.py --model-path {{.BASE_HF_LOCAL_DIR}} --output-dir {{.BASE_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default ""}}
+      - uv run scripts/render_model_card.py base {{.BASE_ONNX_OUTPUT_DIR}}/MODEL_CARD.md
+    sources:
+      - scripts/export_onnx.py
+      - "{{.BASE_HF_LOCAL_DIR}}/**/*"
+    generates:
+      - "{{.BASE_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
+      - "{{.BASE_ONNX_OUTPUT_DIR}}/onnx/span_rep.onnx"
+      - "{{.BASE_ONNX_OUTPUT_DIR}}/onnx/scoring_head.onnx"
+      - "{{.BASE_ONNX_OUTPUT_DIR}}/gliner4j_config.json"
+      - "{{.BASE_ONNX_OUTPUT_DIR}}/tokenizer.json"
+
+  model:clean:base:
+    desc: Remove downloaded and exported base model files
+    prompt: This will delete all base model files. Continue?
+    cmds:
+      - rm -rf {{.BASE_HF_LOCAL_DIR}}
+      - rm -rf {{.BASE_ONNX_OUTPUT_DIR}}
+
+  demo:base:
+    desc: 'Run the GLiNER4j demo against the base profile (override VARIANT=onnx_fp16|onnx_quantized)'
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo -Dexec.args="base {{.VARIANT}}" 2>/dev/null
+
+  hf-upload:base:
+    desc: Upload the base ONNX model directory to HuggingFace Hub
     requires:
       vars:
         - HF_REPO
     deps:
       - check:uv
     preconditions:
-      - sh: test -d {{.ONNX_OUTPUT_DIR}}/onnx
-        msg: "ONNX model directory not found. Run: task model:export"
+      - sh: test -d {{.BASE_ONNX_OUTPUT_DIR}}/onnx
+        msg: "Base ONNX model directory not found. Run: task model:export:base"
     cmds:
-      - uv run --with huggingface-hub hf upload {{.HF_REPO}} {{.ONNX_OUTPUT_DIR}} . --commit-message "Upload ONNX model files (all variants)"
-      - uv run --with huggingface-hub hf upload {{.HF_REPO}} MODEL_CARD.md README.md --commit-message "Upload model card"
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.BASE_ONNX_OUTPUT_DIR}} . --commit-message "Upload base ONNX model files (all variants) + model card"
 
-  demo:
-    desc: Run the GLiNER4j NER demo
+  # ── PII model chain (fastino/gliner2-privacy-filter-PII-multi) ──────────────
+
+  pii:
+    desc: Download and export the PII model (FP32 + FP16 + INT8) and render its MODEL_CARD.md
+    cmds:
+      - task: model:download:pii
+      - task: model:export:pii
+        vars:
+          EXPORT_ARGS: "--variant fp16 --variant quantized"
+
+  model:download:pii:
+    desc: Download the PII GLiNER2 model from HuggingFace
+    deps:
+      - check:uv
+    cmds:
+      - uvx --from huggingface-hub hf download {{.PII_HF_MODEL}} --local-dir {{.PII_HF_LOCAL_DIR}}
+    status:
+      - test -f {{.PII_HF_LOCAL_DIR}}/model.safetensors
+      - test -f {{.PII_HF_LOCAL_DIR}}/config.json
+
+  model:export:pii:
+    desc: Export the PII PyTorch model to ONNX (base + optional variants) and render its MODEL_CARD.md
+    deps:
+      - model:download:pii
+      - check:uv
+    cmds:
+      - uv run scripts/export_onnx.py --model-path {{.PII_HF_LOCAL_DIR}} --output-dir {{.PII_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default ""}}
+      - uv run scripts/render_model_card.py pii {{.PII_ONNX_OUTPUT_DIR}}/MODEL_CARD.md
+    sources:
+      - scripts/export_onnx.py
+      - "{{.PII_HF_LOCAL_DIR}}/**/*"
+    generates:
+      - "{{.PII_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
+      - "{{.PII_ONNX_OUTPUT_DIR}}/onnx/span_rep.onnx"
+      - "{{.PII_ONNX_OUTPUT_DIR}}/onnx/scoring_head.onnx"
+      - "{{.PII_ONNX_OUTPUT_DIR}}/gliner4j_config.json"
+      - "{{.PII_ONNX_OUTPUT_DIR}}/tokenizer.json"
+
+  model:clean:pii:
+    desc: Remove downloaded and exported PII model files
+    prompt: This will delete all PII model files. Continue?
+    cmds:
+      - rm -rf {{.PII_HF_LOCAL_DIR}}
+      - rm -rf {{.PII_ONNX_OUTPUT_DIR}}
+
+  demo:pii:
+    desc: 'Run the GLiNER4j demo against the PII profile (42 PII labels — override VARIANT=onnx_fp16|onnx_quantized)'
     deps:
       - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
     cmds:
-      - mvn exec:java -pl gliner4j-demo 2>/dev/null
+      - mvn exec:java -pl gliner4j-demo -Dexec.args="pii {{.VARIANT}}" 2>/dev/null
 
-  benchmark:
-    desc: Run JMH benchmarks
+  hf-upload:pii:
+    desc: Upload the PII ONNX model directory to HuggingFace Hub
+    requires:
+      vars:
+        - HF_REPO
     deps:
-      - check:maven
+      - check:uv
+    preconditions:
+      - sh: test -d {{.PII_ONNX_OUTPUT_DIR}}/onnx
+        msg: "PII ONNX model directory not found. Run: task model:export:pii"
     cmds:
-      - mvn -pl gliner4j-benchmark -am package -DskipTests
-      - java -jar gliner4j-benchmark/target/gliner4j-benchmark.jar
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.PII_ONNX_OUTPUT_DIR}} . --commit-message "Upload PII ONNX model files (all variants) + model card"

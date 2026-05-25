@@ -1,0 +1,32 @@
+{
+  "displayName": "GLiNER2 Base",
+  "modelDir": "models/gliner2-base-onnx",
+  "entities": [
+    { "name": "person", "description": "Names of real individuals" },
+    { "name": "organization", "description": "" },
+    { "name": "location", "description": "Cities, countries, geographical places" },
+    { "name": "date", "description": "" },
+    { "name": "event", "description": "Named events, conferences, historical events" },
+    { "name": "product", "description": "" }
+  ],
+  "nerSamples": [
+    "Elon Musk unveiled the Tesla Cybertruck at the Los Angeles event in November 2019.",
+    "The United Nations Climate Change Conference was held in Paris.",
+    "Marie Curie won the Nobel Prize at the University of Paris in 1903.",
+    "Apple released the iPhone 15 at their Cupertino headquarters on September 12, 2023."
+  ],
+  "labels": [
+    { "name": "positive", "description": "Positive sentiment or opinion" },
+    { "name": "negative", "description": "Negative sentiment or opinion" },
+    { "name": "neutral", "description": "Neutral, factual statement" },
+    { "name": "business", "description": "Business, finance, economics" },
+    { "name": "health", "description": "Health, medicine, wellness" },
+    { "name": "technology", "description": "Technology, software, hardware" }
+  ],
+  "classifySamples": [
+    "This product is absolutely amazing, best purchase I've ever made!",
+    "The service was terrible and the staff was rude.",
+    "The quarterly earnings report shows a 15% increase in revenue.",
+    "New research suggests that regular exercise improves mental health."
+  ]
+}

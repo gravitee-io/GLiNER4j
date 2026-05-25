@@ -116,6 +116,7 @@
                 <configuration>
                     <excludes>
                         <exclude>**/*.txt</exclude>
+                        <exclude>**/*.json</exclude>
                         <exclude>models/**</exclude>
                     </excludes>
                 </configuration>

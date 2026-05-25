@@ -13,3 +13,7 @@ models/
 dependency-reduced-pom.xml
 .gravitee/
 .task
+**/__pycache__/**
+.venv/
+uv.lock
+results/
