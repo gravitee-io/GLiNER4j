@@ -28,6 +28,11 @@ vars:
   PII_HF_LOCAL_DIR: "models/gliner2-privacy-hf"
   PII_ONNX_OUTPUT_DIR: "models/gliner2-privacy-onnx"
 
+  # GLiGuard model (fastino/gliguard-LLMGuardrails-300M)
+  GLIGUARD_HF_MODEL: "fastino/gliguard-LLMGuardrails-300M"
+  GLIGUARD_HF_LOCAL_DIR: "models/gliguard-hf"
+  GLIGUARD_ONNX_OUTPUT_DIR: "models/gliguard-onnx"
+
 tasks:
   default:
     desc: Default — runs the base all-in-one chain (download + export, FP16 + INT8)
@@ -259,3 +264,69 @@ tasks:
         msg: "PII ONNX model directory not found. Run: task model:export:pii"
     cmds:
       - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.PII_ONNX_OUTPUT_DIR}} . --commit-message "Upload PII ONNX model files (all variants) + model card"
+
+  # ── GLiGuard model chain (fastino/gliguard-LLMGuardrails-300M) ──────────────
+
+  gliguard:
+    desc: Download and export the GLiGuard model (FP32 + FP16 + INT8) and render its MODEL_CARD.md
+    cmds:
+      - task: model:download:gliguard
+      - task: model:export:gliguard
+        vars:
+          EXPORT_ARGS: "--variant fp16 --variant quantized"
+
+  model:download:gliguard:
+    desc: Download the GLiGuard GLiNER2 model from HuggingFace
+    deps:
+      - check:uv
+    cmds:
+      - uvx --from huggingface-hub hf download {{.GLIGUARD_HF_MODEL}} --local-dir {{.GLIGUARD_HF_LOCAL_DIR}}
+    status:
+      - test -f {{.GLIGUARD_HF_LOCAL_DIR}}/model.safetensors
+      - test -f {{.GLIGUARD_HF_LOCAL_DIR}}/config.json
+
+  model:export:gliguard:
+    desc: Export the GLiGuard PyTorch model to ONNX (base + optional variants) and render its MODEL_CARD.md
+    deps:
+      - model:download:gliguard
+      - check:uv
+    cmds:
+      - uv run scripts/export_onnx.py --model-path {{.GLIGUARD_HF_LOCAL_DIR}} --output-dir {{.GLIGUARD_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default ""}}
+      - uv run scripts/render_model_card.py gliguard {{.GLIGUARD_ONNX_OUTPUT_DIR}}/MODEL_CARD.md
+    sources:
+      - scripts/export_onnx.py
+      - "{{.GLIGUARD_HF_LOCAL_DIR}}/**/*"
+    generates:
+      - "{{.GLIGUARD_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
+      - "{{.GLIGUARD_ONNX_OUTPUT_DIR}}/onnx/classifier_head.onnx"
+      - "{{.GLIGUARD_ONNX_OUTPUT_DIR}}/gliner4j_config.json"
+      - "{{.GLIGUARD_ONNX_OUTPUT_DIR}}/tokenizer.json"
+
+  model:clean:gliguard:
+    desc: Remove downloaded and exported GLiGuard model files
+    prompt: This will delete all GLiGuard model files. Continue?
+    cmds:
+      - rm -rf {{.GLIGUARD_HF_LOCAL_DIR}}
+      - rm -rf {{.GLIGUARD_ONNX_OUTPUT_DIR}}
+
+  demo:gliguard:
+    desc: 'Run the GLiNER4j demo against the GLiGuard profile (LLM guardrail classification — override VARIANT=onnx_fp16|onnx_quantized)'
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo -Dexec.args="gliguard {{.VARIANT}}" 2>/dev/null
+
+  hf-upload:gliguard:
+    desc: Upload the GLiGuard ONNX model directory to HuggingFace Hub
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -d {{.GLIGUARD_ONNX_OUTPUT_DIR}}/onnx
+        msg: "GLiGuard ONNX model directory not found. Run: task model:export:gliguard"
+    cmds:
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.GLIGUARD_ONNX_OUTPUT_DIR}} . --commit-message "Upload GLiGuard ONNX model files (all variants) + model card"

@@ -79,8 +79,12 @@ public final class Profile {
     }
   }
 
-  public boolean hasClassification() {
+  public boolean hasLabels() {
     return labels != null && !labels.isEmpty();
+  }
+
+  public boolean hasEntities() {
+    return entities != null && !entities.isEmpty();
   }
 
   public String displayName() {

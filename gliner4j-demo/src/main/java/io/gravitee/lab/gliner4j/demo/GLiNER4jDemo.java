@@ -78,17 +78,30 @@ public class GLiNER4jDemo {
     var variant = args.length > 1 ? args[1] : "onnx";
     Profile profile = new Profile(profileName);
 
+    if (!profile.hasEntities() && !profile.hasLabels()) {
+      System.out.println(
+        GRAY +
+          "  Profile '" +
+          profileName.name().toLowerCase() +
+          "' has no entities or labels — nothing to run." +
+          RESET
+      );
+      return;
+    }
+
     var metricReader = InMemoryMetricReader.create();
     var meterProvider = SdkMeterProvider.builder().registerMetricReader(metricReader).build();
     var openTelemetry = OpenTelemetrySdk.builder().setMeterProvider(meterProvider).buildAndRegisterGlobal();
 
     var modelDir = Path.of(profile.modelDir());
-    var entities = profile
-      .entities()
-      .stream()
-      .map(e -> new EntityDefinition(e.name(), e.description()))
-      .toList();
-    var labels = profile.hasClassification()
+    var entities = profile.hasEntities()
+      ? profile
+        .entities()
+        .stream()
+        .map(e -> new EntityDefinition(e.name(), e.description()))
+        .toList()
+      : List.<EntityDefinition>of();
+    var labels = profile.hasLabels()
       ? profile
         .labels()
         .stream()
@@ -103,19 +116,25 @@ public class GLiNER4jDemo {
     System.out.println();
     System.out.println(DIM + "  Loading model from " + modelDir + " (variant=" + variant + ") ..." + RESET);
 
-    try (var gliner = GLiNER4jNER.load(modelDir, entities, variant, runtimeConfig)) {
-      printer.banner(profile.displayName());
-      printLegend(entities, modelDir);
+    GLiNER4jNER gliner = null;
+    GLiNER4jClassifier classifier = null;
+    try {
+      // Optional NER demo (skipped for classification-only profiles)
+      if (profile.hasEntities()) {
+        gliner = GLiNER4jNER.load(modelDir, entities, variant, runtimeConfig);
+        printer.banner(profile.displayName());
+        printLegend(entities, modelDir);
 
-      for (int i = 0; i < profile.nerSamples().size(); i++) {
-        var text = profile.nerSamples().get(i);
-        var results = gliner.extract(text);
-        printer.nerResult(i + 1, text, results);
+        var samples = profile.nerSamples() == null ? List.<String>of() : profile.nerSamples();
+        for (int i = 0; i < samples.size(); i++) {
+          var text = samples.get(i);
+          var results = gliner.extract(text);
+          printer.nerResult(i + 1, text, results);
+        }
       }
 
       // Optional classification demo
-      GLiNER4jClassifier classifier = null;
-      if (profile.hasClassification()) {
+      if (profile.hasLabels()) {
         classifier = GLiNER4jClassifier.load(modelDir, labels, variant, runtimeConfig);
         printer.classificationBanner();
         System.out.println(DIM + "  Model: " + modelDir + RESET);
@@ -131,7 +150,8 @@ public class GLiNER4jDemo {
       }
 
       runInteractive(profile, gliner, classifier);
-
+    } finally {
+      if (gliner != null) gliner.close();
       if (classifier != null) classifier.close();
     }
 
@@ -140,9 +160,10 @@ public class GLiNER4jDemo {
   }
 
   private static void runInteractive(Profile profile, GLiNER4jNER gliner, GLiNER4jClassifier classifier) {
-    printer.interactiveBanner(profile.hasClassification());
+    var hasEntities = gliner != null;
+    printer.interactiveBanner(hasEntities, profile.hasLabels());
     var counter = new AtomicInteger(1);
-    var mode = NER;
+    var mode = hasEntities ? NER : Mode.CLASSIFY;
 
     try (var scanner = new Scanner(System.in)) {
       while (true) {
@@ -154,8 +175,12 @@ public class GLiNER4jDemo {
         if (line.equalsIgnoreCase("/exit")) {
           break;
         } else if (line.equalsIgnoreCase("/ner")) {
-          mode = NER;
-          System.out.println(DIM + "  Switched to NER mode." + RESET);
+          if (!hasEntities) {
+            System.out.println(GRAY + "  This profile has no NER entities — '/ner' unavailable." + RESET);
+          } else {
+            mode = NER;
+            System.out.println(DIM + "  Switched to NER mode." + RESET);
+          }
           continue;
         } else if (line.equalsIgnoreCase("/classify")) {
           if (classifier == null) {
@@ -166,7 +191,7 @@ public class GLiNER4jDemo {
           }
           continue;
         } else if (line.equalsIgnoreCase("/help")) {
-          printer.interactiveHelp(profile.hasClassification());
+          printer.interactiveHelp(hasEntities, profile.hasLabels());
           continue;
         }
 
