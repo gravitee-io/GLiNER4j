@@ -70,8 +70,7 @@ class StructureDecoderTest {
 
   @Test
   void listField_returnsAllAboveThreshold() {
-    var product = StructureDefinition
-      .builder("product")
+    var product = StructureDefinition.builder("product")
       .list("features")
       .build();
 
@@ -96,8 +95,9 @@ class StructureDecoderTest {
 
     var features = (ListValue) instances.get(0).fields().get("features");
     assertThat(features.items()).hasSize(3);
-    assertThat(features.items().stream().map(StringValue::text).toList())
-      .containsExactly("The", "MacBook", "$1999");
+    assertThat(
+      features.items().stream().map(StringValue::text).toList()
+    ).containsExactly("The", "MacBook", "$1999");
   }
 
   @Test
@@ -107,8 +107,7 @@ class StructureDecoderTest {
     int[] ends = { 4, 14, 23, 29 };
     String text = "food transport shopping other";
 
-    var transaction = StructureDefinition
-      .builder("transaction")
+    var transaction = StructureDefinition.builder("transaction")
       .choice(
         "category",
         FieldType.STRING,
@@ -139,8 +138,7 @@ class StructureDecoderTest {
 
   @Test
   void multipleInstances_producesOnePerCount() {
-    var transaction = StructureDefinition
-      .builder("transaction")
+    var transaction = StructureDefinition.builder("transaction")
       .string("merchant")
       .build();
 
