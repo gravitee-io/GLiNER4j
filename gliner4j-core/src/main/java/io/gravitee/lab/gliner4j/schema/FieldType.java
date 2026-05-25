@@ -13,10 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package io.gravitee.lab.gliner4j.demo;
+package io.gravitee.lab.gliner4j.schema;
 
-public enum Mode {
-  NER,
-  CLASSIFY,
-  SCHEMA,
+/**
+ * Cardinality of a {@link StructureField}.
+ * STRING extracts a single highest-scoring value; LIST keeps all values above threshold.
+ */
+public enum FieldType {
+  STRING,
+  LIST,
 }

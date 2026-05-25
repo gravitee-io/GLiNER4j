@@ -17,6 +17,11 @@ package io.gravitee.lab.gliner4j.demo;
 
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
+import io.gravitee.lab.gliner4j.schema.StructureDefinition;
+import io.gravitee.lab.gliner4j.schema.StructureInstance;
+import io.gravitee.lab.gliner4j.schema.StructureValue;
+import io.gravitee.lab.gliner4j.schema.StructureValue.ListValue;
+import io.gravitee.lab.gliner4j.schema.StructureValue.StringValue;
 import io.opentelemetry.sdk.metrics.data.LongPointData;
 import io.opentelemetry.sdk.metrics.data.MetricData;
 import java.util.*;
@@ -57,7 +62,7 @@ public class Printer {
     System.out.println(dim + "  ─────────────────────────────────────────────────────────────" + reset);
   }
 
-  public void interactiveBanner(boolean hasEntities, boolean hasLabels) {
+  public void interactiveBanner(boolean hasEntities, boolean hasLabels, boolean hasSchema) {
     System.out.println();
     System.out.println(dim + "  ─────────────────────────────────────────────────────────────" + reset);
     System.out.println();
@@ -65,6 +70,7 @@ public class Printer {
     var commands = new StringBuilder("  Commands:");
     if (hasEntities) commands.append("  /ner");
     if (hasLabels) commands.append("  /classify");
+    if (hasSchema) commands.append("  /schema");
     commands.append("  /help  /exit");
     System.out.println(dim + commands + reset);
     System.out.println();
@@ -77,6 +83,110 @@ public class Printer {
     System.out.println(bold + "  │  Named Entity Recognition with ONNX Runtime             │" + reset);
     System.out.println(bold + "  └─────────────────────────────────────────────────────────┘" + reset);
     System.out.println();
+  }
+
+  void schemaBanner() {
+    System.out.println();
+    System.out.println(bold + "  ┌─────────────────────────────────────────────────────────┐" + reset);
+    System.out.println(bold + "  │       GLiNER4jSchemaExtractor — Structure Demo          │" + reset);
+    System.out.println(bold + "  │         JSON Structure Extraction with ONNX             │" + reset);
+    System.out.println(bold + "  └─────────────────────────────────────────────────────────┘" + reset);
+    System.out.println();
+  }
+
+  public void structureLegend(List<StructureDefinition> structures) {
+    for (var structure : structures) {
+      var c = palette.colorsFor(structure.name());
+      System.out.println("  " + c[0] + " " + structure.name() + " " + reset);
+      for (var field : structure.fields()) {
+        var typeTag = field.type().name().toLowerCase();
+        var line = new StringBuilder()
+          .append("      ")
+          .append(dim)
+          .append("• ")
+          .append(reset)
+          .append(field.name())
+          .append(dim)
+          .append(" :")
+          .append(typeTag)
+          .append(reset);
+        if (!field.choices().isEmpty()) {
+          line
+            .append("  ")
+            .append(gray)
+            .append("∈ {")
+            .append(String.join(" | ", field.choices()))
+            .append("}")
+            .append(reset);
+        }
+        if (field.description() != null && !field.description().isBlank()) {
+          line.append("  ").append(dim).append("— ").append(field.description()).append(reset);
+        }
+        System.out.println(line);
+      }
+    }
+    System.out.println(dim + "  ─────────────────────────────────────────────────────────────" + reset);
+  }
+
+  public void schemaResult(int index, String text, Map<String, List<StructureInstance>> results) {
+    System.out.println();
+    System.out.println("  " + dim + index + "." + reset + " " + text);
+
+    if (results.isEmpty() || results.values().stream().allMatch(List::isEmpty)) {
+      System.out.println(gray + "     No structures found." + reset);
+      return;
+    }
+
+    for (var entry : results.entrySet()) {
+      var structureName = entry.getKey();
+      var instances = entry.getValue();
+      var c = palette.colorsFor(structureName);
+      System.out.println("     " + c[1] + structureName + reset + " [");
+      for (int i = 0; i < instances.size(); i++) {
+        var instance = instances.get(i);
+        System.out.println("       {");
+        var fieldEntries = new ArrayList<>(instance.fields().entrySet());
+        for (int f = 0; f < fieldEntries.size(); f++) {
+          var fieldEntry = fieldEntries.get(f);
+          var suffix = (f < fieldEntries.size() - 1) ? "," : "";
+          System.out.printf(
+            "         %s\"%s\"%s: %s%s%n",
+            dim,
+            fieldEntry.getKey(),
+            reset,
+            renderValue(fieldEntry.getValue()),
+            suffix
+          );
+        }
+        System.out.println("       " + ((i < instances.size() - 1) ? "}," : "}"));
+      }
+      System.out.println("     ]");
+    }
+  }
+
+  private String renderValue(StructureValue value) {
+    if (value instanceof StringValue sv) {
+      return "\"" + sv.text() + "\"" + dim + "  (" + Math.round(sv.confidence() * 100) + "%)" + reset;
+    }
+    if (value instanceof ListValue lv) {
+      var sb = new StringBuilder("[");
+      for (int i = 0; i < lv.items().size(); i++) {
+        var item = lv.items().get(i);
+        sb
+          .append("\"")
+          .append(item.text())
+          .append("\"")
+          .append(dim)
+          .append("(")
+          .append(Math.round(item.confidence() * 100))
+          .append("%)")
+          .append(reset);
+        if (i < lv.items().size() - 1) sb.append(", ");
+      }
+      sb.append("]");
+      return sb.toString();
+    }
+    return "null";
   }
 
   void classificationBanner() {
@@ -169,7 +279,7 @@ public class Printer {
     return sb.toString();
   }
 
-  public void interactiveHelp(boolean hasEntities, boolean hasLabels) {
+  public void interactiveHelp(boolean hasEntities, boolean hasLabels, boolean hasSchema) {
     System.out.println();
     System.out.println(dim + "  Available commands:" + reset);
     if (hasEntities) {
@@ -177,6 +287,11 @@ public class Printer {
     }
     if (hasLabels) {
       System.out.println("    " + bold + "/classify" + reset + dim + "  Switch to classification mode" + reset);
+    }
+    if (hasSchema) {
+      System.out.println(
+        "    " + bold + "/schema" + reset + dim + "    Switch to schema (JSON structure) mode" + reset
+      );
     }
     System.out.println("    " + bold + "/help" + reset + dim + "      Show this help" + reset);
     System.out.println("    " + bold + "/exit" + reset + dim + "      Quit the interactive session" + reset);

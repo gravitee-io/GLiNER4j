@@ -32,6 +32,8 @@ public final class Profile {
   private List<String> nerSamples;
   private List<NamedDescription> labels;
   private List<String> classifySamples;
+  private List<StructureDef> structures;
+  private List<String> schemaSamples;
 
   private Profile() {}
 
@@ -42,7 +44,9 @@ public final class Profile {
     @JsonProperty("entities") List<NamedDescription> entities,
     @JsonProperty("nerSamples") List<String> nerSamples,
     @JsonProperty("labels") List<NamedDescription> labels,
-    @JsonProperty("classifySamples") List<String> classifySamples
+    @JsonProperty("classifySamples") List<String> classifySamples,
+    @JsonProperty("structures") List<StructureDef> structures,
+    @JsonProperty("schemaSamples") List<String> schemaSamples
   ) {
     this.displayName = displayName;
     this.modelDir = modelDir;
@@ -50,6 +54,8 @@ public final class Profile {
     this.nerSamples = nerSamples;
     this.labels = labels;
     this.classifySamples = classifySamples;
+    this.structures = structures;
+    this.schemaSamples = schemaSamples;
   }
 
   private Profile(Profile profile) {
@@ -59,7 +65,9 @@ public final class Profile {
       profile.entities,
       profile.nerSamples,
       profile.labels,
-      profile.classifySamples
+      profile.classifySamples,
+      profile.structures,
+      profile.schemaSamples
     );
   }
 
@@ -87,6 +95,10 @@ public final class Profile {
     return entities != null && !entities.isEmpty();
   }
 
+  public boolean hasSchema() {
+    return structures != null && !structures.isEmpty();
+  }
+
   public String displayName() {
     return displayName;
   }
@@ -111,6 +123,14 @@ public final class Profile {
     return classifySamples;
   }
 
+  public List<StructureDef> structures() {
+    return structures;
+  }
+
+  public List<String> schemaSamples() {
+    return schemaSamples;
+  }
+
   @Override
   public boolean equals(Object obj) {
     if (obj == this) return true;
@@ -122,13 +142,24 @@ public final class Profile {
       Objects.equals(this.entities, that.entities) &&
       Objects.equals(this.nerSamples, that.nerSamples) &&
       Objects.equals(this.labels, that.labels) &&
-      Objects.equals(this.classifySamples, that.classifySamples)
+      Objects.equals(this.classifySamples, that.classifySamples) &&
+      Objects.equals(this.structures, that.structures) &&
+      Objects.equals(this.schemaSamples, that.schemaSamples)
     );
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(displayName, modelDir, entities, nerSamples, labels, classifySamples);
+    return Objects.hash(
+      displayName,
+      modelDir,
+      entities,
+      nerSamples,
+      labels,
+      classifySamples,
+      structures,
+      schemaSamples
+    );
   }
 
   @Override
@@ -152,6 +183,12 @@ public final class Profile {
       ", " +
       "classifySamples=" +
       classifySamples +
+      ", " +
+      "structures=" +
+      structures +
+      ", " +
+      "schemaSamples=" +
+      schemaSamples +
       ']'
     );
   }
