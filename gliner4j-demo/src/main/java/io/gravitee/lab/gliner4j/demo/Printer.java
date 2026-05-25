@@ -57,14 +57,16 @@ public class Printer {
     System.out.println(dim + "  ─────────────────────────────────────────────────────────────" + reset);
   }
 
-  public void interactiveBanner(boolean hasClassification) {
+  public void interactiveBanner(boolean hasEntities, boolean hasLabels) {
     System.out.println();
     System.out.println(dim + "  ─────────────────────────────────────────────────────────────" + reset);
     System.out.println();
     System.out.println(bold + "  Interactive mode" + reset + dim + " — type a sentence and press Enter" + reset);
-    System.out.println(
-      dim + (hasClassification ? "  Commands: /ner  /classify  /help  /exit" : "  Commands: /help  /exit") + reset
-    );
+    var commands = new StringBuilder("  Commands:");
+    if (hasEntities) commands.append("  /ner");
+    if (hasLabels) commands.append("  /classify");
+    commands.append("  /help  /exit");
+    System.out.println(dim + commands + reset);
     System.out.println();
   }
 
@@ -167,11 +169,13 @@ public class Printer {
     return sb.toString();
   }
 
-  public void interactiveHelp(boolean hasClassification) {
+  public void interactiveHelp(boolean hasEntities, boolean hasLabels) {
     System.out.println();
     System.out.println(dim + "  Available commands:" + reset);
-    System.out.println("    " + bold + "/ner" + reset + dim + "       Switch to NER mode" + reset);
-    if (hasClassification) {
+    if (hasEntities) {
+      System.out.println("    " + bold + "/ner" + reset + dim + "       Switch to NER mode" + reset);
+    }
+    if (hasLabels) {
       System.out.println("    " + bold + "/classify" + reset + dim + "  Switch to classification mode" + reset);
     }
     System.out.println("    " + bold + "/help" + reset + dim + "      Show this help" + reset);
