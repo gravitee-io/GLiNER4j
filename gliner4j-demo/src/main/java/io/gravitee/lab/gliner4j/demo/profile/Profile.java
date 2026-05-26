@@ -34,6 +34,8 @@ public final class Profile {
   private List<String> classifySamples;
   private List<StructureDef> structures;
   private List<String> schemaSamples;
+  private List<NamedDescription> relations;
+  private List<String> relationSamples;
 
   private Profile() {}
 
@@ -46,7 +48,9 @@ public final class Profile {
     @JsonProperty("labels") List<NamedDescription> labels,
     @JsonProperty("classifySamples") List<String> classifySamples,
     @JsonProperty("structures") List<StructureDef> structures,
-    @JsonProperty("schemaSamples") List<String> schemaSamples
+    @JsonProperty("schemaSamples") List<String> schemaSamples,
+    @JsonProperty("relations") List<NamedDescription> relations,
+    @JsonProperty("relationSamples") List<String> relationSamples
   ) {
     this.displayName = displayName;
     this.modelDir = modelDir;
@@ -56,6 +60,8 @@ public final class Profile {
     this.classifySamples = classifySamples;
     this.structures = structures;
     this.schemaSamples = schemaSamples;
+    this.relations = relations;
+    this.relationSamples = relationSamples;
   }
 
   private Profile(Profile profile) {
@@ -67,7 +73,9 @@ public final class Profile {
       profile.labels,
       profile.classifySamples,
       profile.structures,
-      profile.schemaSamples
+      profile.schemaSamples,
+      profile.relations,
+      profile.relationSamples
     );
   }
 
@@ -97,6 +105,10 @@ public final class Profile {
 
   public boolean hasSchema() {
     return structures != null && !structures.isEmpty();
+  }
+
+  public boolean hasRelations() {
+    return relations != null && !relations.isEmpty();
   }
 
   public String displayName() {
@@ -131,6 +143,14 @@ public final class Profile {
     return schemaSamples;
   }
 
+  public List<NamedDescription> relations() {
+    return relations;
+  }
+
+  public List<String> relationSamples() {
+    return relationSamples;
+  }
+
   @Override
   public boolean equals(Object obj) {
     if (obj == this) return true;
@@ -144,7 +164,9 @@ public final class Profile {
       Objects.equals(this.labels, that.labels) &&
       Objects.equals(this.classifySamples, that.classifySamples) &&
       Objects.equals(this.structures, that.structures) &&
-      Objects.equals(this.schemaSamples, that.schemaSamples)
+      Objects.equals(this.schemaSamples, that.schemaSamples) &&
+      Objects.equals(this.relations, that.relations) &&
+      Objects.equals(this.relationSamples, that.relationSamples)
     );
   }
 
@@ -158,7 +180,9 @@ public final class Profile {
       labels,
       classifySamples,
       structures,
-      schemaSamples
+      schemaSamples,
+      relations,
+      relationSamples
     );
   }
 
@@ -189,6 +213,12 @@ public final class Profile {
       ", " +
       "schemaSamples=" +
       schemaSamples +
+      ", " +
+      "relations=" +
+      relations +
+      ", " +
+      "relationSamples=" +
+      relationSamples +
       ']'
     );
   }

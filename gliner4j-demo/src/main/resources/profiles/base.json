@@ -85,5 +85,16 @@
     "Reservation at Le Bernardin for 4 people on March 15th at 7:30 PM. We'd prefer outdoor seating. Two guests are vegetarian and one is gluten-free.",
     "Recent transactions:\n- Jan 5: Starbucks $5.50 (food)\n- Jan 5: Uber $23.00 (transport)\n- Jan 6: Amazon $156.99 (shopping)",
     "Patient: Sarah Johnson, 34, presented with chest pain and shortness of breath. Prescribed: Lisinopril 10mg daily, Metoprolol 25mg twice daily. Follow-up scheduled for next Tuesday."
+  ],
+  "relations": [
+    { "name": "works_for", "description": "Employment relationship where person works at organization" },
+    { "name": "lives_in", "description": "Residence relationship where person lives at location" },
+    { "name": "acquired", "description": "Acquisition relationship where one company acquires another" }
+  ],
+  "relationSamples": [
+    "Sundar Pichai is the CEO of Google. Google acquired YouTube in 2006.",
+    "John works for Microsoft. Mary works for Google. Bob works for Apple.",
+    "Marie Curie lives in Paris and studies at the University of Paris.",
+    "Tim Cook reports to the Apple board of directors."
   ]
 }
