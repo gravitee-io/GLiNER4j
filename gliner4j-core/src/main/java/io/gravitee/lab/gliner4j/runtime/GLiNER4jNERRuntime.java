@@ -28,7 +28,7 @@ import lombok.extern.slf4j.Slf4j;
  * on top of the shared encoder from {@link BaseRuntime}.
  */
 @Slf4j
-public class GLiNER4jNERRuntime extends BaseRuntime {
+public non-sealed class GLiNER4jNERRuntime extends BaseRuntime {
 
   private OrtSession spanRepSession;
   private OrtSession scoringHeadSession;
@@ -61,18 +61,22 @@ public class GLiNER4jNERRuntime extends BaseRuntime {
   ) throws OrtException {
     int numCpus = Runtime.getRuntime().availableProcessors();
 
-    int encoderIntra = runtimeConfig.getEncoderIntraOpThreads() != null
-      ? runtimeConfig.getEncoderIntraOpThreads()
-      : numCpus;
-    int encoderInter = runtimeConfig.getEncoderInterOpThreads() != null
-      ? runtimeConfig.getEncoderInterOpThreads()
-      : Math.max(2, numCpus / 2);
-    int scoringIntra = runtimeConfig.getScoringIntraOpThreads() != null
-      ? runtimeConfig.getScoringIntraOpThreads()
-      : Math.max(2, numCpus / 4);
-    int scoringInter = runtimeConfig.getScoringInterOpThreads() != null
-      ? runtimeConfig.getScoringInterOpThreads()
-      : 1;
+    int encoderIntra = getOrDefault(
+      runtimeConfig.getEncoderIntraOpThreads(),
+      numCpus
+    );
+    int encoderInter = getOrDefault(
+      runtimeConfig.getEncoderInterOpThreads(),
+      Math.max(2, numCpus / 2)
+    );
+    int scoringIntra = getOrDefault(
+      runtimeConfig.getScoringIntraOpThreads(),
+      Math.max(2, numCpus / 4)
+    );
+    int scoringInter = getOrDefault(
+      runtimeConfig.getScoringInterOpThreads(),
+      1
+    );
 
     log.info("Loading span_rep.onnx...");
     try (
@@ -80,7 +84,7 @@ public class GLiNER4jNERRuntime extends BaseRuntime {
         encoderIntra,
         encoderInter,
         OrtSession.SessionOptions.ExecutionMode.PARALLEL,
-        runtimeConfig.getOptimizationLevel(),
+        runtimeConfig,
         cacheDir,
         "span_rep.onnx"
       )
@@ -97,7 +101,7 @@ public class GLiNER4jNERRuntime extends BaseRuntime {
         scoringIntra,
         scoringInter,
         OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL,
-        runtimeConfig.getOptimizationLevel(),
+        runtimeConfig,
         cacheDir,
         "scoring_head.onnx"
       )
@@ -124,18 +128,14 @@ public class GLiNER4jNERRuntime extends BaseRuntime {
    */
   public float[][][][] runSpanRep(float[][][] textEmbs, long[][][] spanIdx) {
     try {
-      var embTensor = OnnxTensor.createTensor(env, textEmbs);
-      var idxTensor = OnnxTensor.createTensor(env, spanIdx);
-
       try (
+        var embTensor = OnnxTensor.createTensor(env, textEmbs);
+        var idxTensor = OnnxTensor.createTensor(env, spanIdx);
         var result = spanRepSession.run(
           Map.of("token_embeddings", embTensor, "span_idx", idxTensor)
         )
       ) {
         return (float[][][][]) result.get(0).getValue();
-      } finally {
-        embTensor.close();
-        idxTensor.close();
       }
     } catch (OrtException e) {
       throw new RuntimeException("SpanRep inference failed", e);
@@ -164,22 +164,18 @@ public class GLiNER4jNERRuntime extends BaseRuntime {
       spanIdxBuf.clear().limit(totalElements);
       spanIdxBuf.put(spanIdxFlat, 0, totalElements).rewind();
 
-      var embTensor = OnnxTensor.createTensor(env, textEmbs);
-      var idxTensor = OnnxTensor.createTensor(
-        env,
-        spanIdxBuf,
-        new long[] { 1, numSpans, 2 }
-      );
-
       try (
+        var embTensor = OnnxTensor.createTensor(env, textEmbs);
+        var idxTensor = OnnxTensor.createTensor(
+          env,
+          spanIdxBuf,
+          new long[] { 1, numSpans, 2 }
+        );
         var result = spanRepSession.run(
           Map.of("token_embeddings", embTensor, "span_idx", idxTensor)
         )
       ) {
         return (float[][][][]) result.get(0).getValue();
-      } finally {
-        embTensor.close();
-        idxTensor.close();
       }
     } catch (OrtException e) {
       throw new RuntimeException("SpanRep inference failed", e);
@@ -210,22 +206,18 @@ public class GLiNER4jNERRuntime extends BaseRuntime {
       spanIdxBuf.clear().limit(totalElements);
       spanIdxBuf.put(spanIdxFlat, 0, totalElements).rewind();
 
-      var embTensor = OnnxTensor.createTensor(env, textEmbs);
-      var idxTensor = OnnxTensor.createTensor(
-        env,
-        spanIdxBuf,
-        new long[] { batchSize, maxNumSpans, 2 }
-      );
-
       try (
+        var embTensor = OnnxTensor.createTensor(env, textEmbs);
+        var idxTensor = OnnxTensor.createTensor(
+          env,
+          spanIdxBuf,
+          new long[] { batchSize, maxNumSpans, 2 }
+        );
         var result = spanRepSession.run(
           Map.of("token_embeddings", embTensor, "span_idx", idxTensor)
         )
       ) {
         return (float[][][][]) result.get(0).getValue();
-      } finally {
-        embTensor.close();
-        idxTensor.close();
       }
     } catch (OrtException e) {
       throw new RuntimeException("Batched SpanRep inference failed", e);
@@ -248,16 +240,15 @@ public class GLiNER4jNERRuntime extends BaseRuntime {
     long count
   ) {
     try {
-      var spanRepTensor = OnnxTensor.createTensor(env, spanRep);
-      var pTensor = OnnxTensor.createTensor(env, schemaEmbP);
-      var fieldsTensor = OnnxTensor.createTensor(env, schemaEmbFields);
-      var countTensor = OnnxTensor.createTensor(
-        env,
-        allocateDirectLongBuffer(new long[] { count }),
-        new long[] {}
-      );
-
       try (
+        var spanRepTensor = OnnxTensor.createTensor(env, spanRep);
+        var pTensor = OnnxTensor.createTensor(env, schemaEmbP);
+        var fieldsTensor = OnnxTensor.createTensor(env, schemaEmbFields);
+        var countTensor = OnnxTensor.createTensor(
+          env,
+          allocateDirectLongBuffer(new long[] { count }),
+          new long[] {}
+        );
         var result = scoringHeadSession.run(
           Map.of(
             "span_rep",
@@ -271,20 +262,17 @@ public class GLiNER4jNERRuntime extends BaseRuntime {
           )
         )
       ) {
-        var countLogits = (float[][]) result
-          .get("count_logits")
-          .get()
-          .getValue();
-        var spanScores = (float[][][][]) result
-          .get("span_scores")
-          .get()
-          .getValue();
-        return new ScoringResult(countLogits, spanScores);
-      } finally {
-        spanRepTensor.close();
-        pTensor.close();
-        fieldsTensor.close();
-        countTensor.close();
+        var countLogits = result.get("count_logits");
+        var spanScores = result.get("span_scores");
+        if (countLogits.isPresent() && spanScores.isPresent()) {
+          return new ScoringResult(
+            (float[][]) countLogits.get().getValue(),
+            (float[][][][]) spanScores.get().getValue()
+          );
+        }
+        throw new OrtException(
+          "ScoringHead inference failed: missing output tensors"
+        );
       }
     } catch (OrtException e) {
       throw new RuntimeException("ScoringHead inference failed", e);

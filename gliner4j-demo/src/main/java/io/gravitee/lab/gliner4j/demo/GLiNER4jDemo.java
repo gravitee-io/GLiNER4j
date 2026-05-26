@@ -26,6 +26,7 @@ import io.gravitee.lab.gliner4j.GLiNER4jRelationExtractor;
 import io.gravitee.lab.gliner4j.GLiNER4jSchemaExtractor;
 import io.gravitee.lab.gliner4j.demo.profile.Profile;
 import io.gravitee.lab.gliner4j.demo.profile.ProfileType;
+import io.gravitee.lab.gliner4j.runtime.ExecutionProvider;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
@@ -42,7 +43,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Profile-driven demo for GLiNER4j.
  *
- * <p>Pass a profile name as the first arg (default "base"). The profile JSON lives at
+ * <p>Args: {@code [profile] [variant] [executionProvider]}.
+ *   - profile (default "base"): which model + vocabulary to load.
+ *   - variant (default "onnx"): ONNX model folder (onnx | onnx_fp16 | onnx_quantized).
+ *   - executionProvider (default "cpu"): ORT backend — cpu | cuda | openvino | coreml.
+ *
+ * <p>The profile JSON lives at
  * /profiles/{name}.json on the classpath and defines:
  *   - modelDir: ONNX model dir on disk
  *   - entities: NER entity definitions
@@ -86,6 +92,8 @@ public class GLiNER4jDemo {
   public static void main(String[] args) {
     var profileName = args.length > 0 ? ProfileType.valueOf(args[0].toUpperCase()) : BASE;
     var variant = args.length > 1 ? args[1] : "onnx";
+    // 3rd arg selects the ONNX execution provider: cpu (default) | cuda | openvino | coreml.
+    var executionProvider = args.length > 2 ? ExecutionProvider.fromString(args[2]) : ExecutionProvider.CPU;
     Profile profile = new Profile(profileName);
 
     if (!profile.hasEntities() && !profile.hasLabels()) {
@@ -135,10 +143,21 @@ public class GLiNER4jDemo {
 
     var runtimeConfig = RuntimeConfig.builder()
       .optimizationLevel(OrtSession.SessionOptions.OptLevel.EXTENDED_OPT)
+      .executionProvider(executionProvider)
       .build();
 
     System.out.println();
-    System.out.println(DIM + "  Loading model from " + modelDir + " (variant=" + variant + ") ..." + RESET);
+    System.out.println(
+      DIM +
+        "  Loading model from " +
+        modelDir +
+        " (variant=" +
+        variant +
+        ", ep=" +
+        executionProvider.name().toLowerCase() +
+        ") ..." +
+        RESET
+    );
 
     GLiNER4jNER gliner = null;
     GLiNER4jClassifier classifier = null;
@@ -155,8 +174,9 @@ public class GLiNER4jDemo {
         var samples = profile.nerSamples() == null ? List.<String>of() : profile.nerSamples();
         for (int i = 0; i < samples.size(); i++) {
           var text = samples.get(i);
+          long t0 = System.nanoTime();
           var results = gliner.extract(text);
-          printer.nerResult(i + 1, text, results);
+          printer.nerResult(i + 1, text, results, elapsedMs(t0));
         }
       }
 
@@ -171,8 +191,9 @@ public class GLiNER4jDemo {
         var samples = profile.classifySamples() == null ? List.<String>of() : profile.classifySamples();
         for (int i = 0; i < samples.size(); i++) {
           var text = samples.get(i);
+          long t0 = System.nanoTime();
           var results = classifier.classify(text);
-          printer.classificationResult(i + 1, text, results);
+          printer.classificationResult(i + 1, text, results, elapsedMs(t0));
         }
       }
 
@@ -187,8 +208,9 @@ public class GLiNER4jDemo {
         var samples = profile.schemaSamples() == null ? List.<String>of() : profile.schemaSamples();
         for (int i = 0; i < samples.size(); i++) {
           var text = samples.get(i);
+          long t0 = System.nanoTime();
           var results = schemaExtractor.extract(text);
-          printer.schemaResult(i + 1, text, results);
+          printer.schemaResult(i + 1, text, results, elapsedMs(t0));
         }
       }
 
@@ -205,8 +227,9 @@ public class GLiNER4jDemo {
         var relSamples = profile.relationSamples() == null ? List.<String>of() : profile.relationSamples();
         for (int i = 0; i < relSamples.size(); i++) {
           var text = relSamples.get(i);
+          long t0 = System.nanoTime();
           var results = relationExtractor.extract(text);
-          printer.relationResult(i + 1, text, results);
+          printer.relationResult(i + 1, text, results, elapsedMs(t0));
         }
 
         printer.combinedBanner();
@@ -215,8 +238,9 @@ public class GLiNER4jDemo {
         var schema = Schema.builder().entities(entities).relations(relations).build();
         for (int i = 0; i < relSamples.size(); i++) {
           var text = relSamples.get(i);
+          long t0 = System.nanoTime();
           var result = unified.extract(text, schema);
-          printer.combinedResult(i + 1, text, result);
+          printer.combinedResult(i + 1, text, result, elapsedMs(t0));
         }
       }
 
@@ -305,15 +329,32 @@ public class GLiNER4jDemo {
           continue;
         }
 
+        long t0 = System.nanoTime();
         switch (mode) {
-          case NER -> printer.nerResult(counter.getAndIncrement(), line, gliner.extract(line));
-          case CLASSIFY -> printer.classificationResult(counter.getAndIncrement(), line, classifier.classify(line));
-          case SCHEMA -> printer.schemaResult(counter.getAndIncrement(), line, schemaExtractor.extract(line));
-          case RELATIONS -> printer.relationResult(counter.getAndIncrement(), line, relationExtractor.extract(line));
+          case NER -> printer.nerResult(counter.getAndIncrement(), line, gliner.extract(line), elapsedMs(t0));
+          case CLASSIFY -> printer.classificationResult(
+            counter.getAndIncrement(),
+            line,
+            classifier.classify(line),
+            elapsedMs(t0)
+          );
+          case SCHEMA -> printer.schemaResult(
+            counter.getAndIncrement(),
+            line,
+            schemaExtractor.extract(line),
+            elapsedMs(t0)
+          );
+          case RELATIONS -> printer.relationResult(
+            counter.getAndIncrement(),
+            line,
+            relationExtractor.extract(line),
+            elapsedMs(t0)
+          );
           case EXTRACT -> printer.combinedResult(
             counter.getAndIncrement(),
             line,
-            unified.extract(line, combinedSchema)
+            unified.extract(line, combinedSchema),
+            elapsedMs(t0)
           );
         }
       }
@@ -335,5 +376,10 @@ public class GLiNER4jDemo {
     System.out.println(DIM + "  Relations: " + relations.size() + " relation types" + RESET);
     System.out.println();
     printer.entity(relations, RelationDefinition::name);
+  }
+
+  /** Milliseconds elapsed since {@code startNanos}, for per-prediction latency display. */
+  private static double elapsedMs(long startNanos) {
+    return (System.nanoTime() - startNanos) / 1_000_000.0;
   }
 }

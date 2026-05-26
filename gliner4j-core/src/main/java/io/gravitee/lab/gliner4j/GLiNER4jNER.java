@@ -237,9 +237,7 @@ public class GLiNER4jNER implements AutoCloseable {
 
     // Steps 4-10 are identical to the default extract path
     var result = extractFromHiddenStates(hiddenStates, input, text, threshold);
-    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-    long entityCount = result.values().stream().mapToLong(List::size).sum();
-    telemetry.record(durationMs, 1, entityCount);
+    recordTelemetry(startNanos, result);
     return result;
   }
 
@@ -412,7 +410,7 @@ public class GLiNER4jNER implements AutoCloseable {
             spanRep,
             schemaEmbs.schemaEmbP(),
             schemaEmbs.schemaEmbFields(),
-            (long) config.getMaxCount()
+            config.getMaxCount()
           );
 
           int predCount = argmax(scoringResult.countLogits()[0]);
@@ -501,10 +499,9 @@ public class GLiNER4jNER implements AutoCloseable {
     );
 
     // 4-10. Extract embeddings, score spans, decode, and group
+
     var result = extractFromHiddenStates(hiddenStates, input, text, threshold);
-    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-    long entityCount = result.values().stream().mapToLong(List::size).sum();
-    telemetry.record(durationMs, 1, entityCount);
+    recordTelemetry(startNanos, result);
     return result;
   }
 
@@ -685,5 +682,14 @@ public class GLiNER4jNER implements AutoCloseable {
         seenWord[mapping.origIdx()] = true;
       }
     }
+  }
+
+  private void recordTelemetry(
+    long startNanos,
+    Map<String, List<EntitySpan>> result
+  ) {
+    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
+    long entityCount = result.values().stream().mapToLong(List::size).sum();
+    telemetry.record(durationMs, 1, entityCount);
   }
 }

@@ -47,6 +47,9 @@
         <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <onnxruntime.version>1.21.0</onnxruntime.version>
+        <!-- ONNX Runtime native artifact: "onnxruntime" (CPU + CoreML) by default,
+             switched to "onnxruntime_gpu" (CUDA/TensorRT) by the "cuda" profile. -->
+        <onnxruntime.artifactId>onnxruntime</onnxruntime.artifactId>
         <djl-tokenizers.version>0.31.0</djl-tokenizers.version>
         <jackson.version>2.17.2</jackson.version>
         <lombok.version>1.18.44</lombok.version>
@@ -61,6 +64,18 @@
             <dependency>
                 <groupId>com.microsoft.onnxruntime</groupId>
                 <artifactId>onnxruntime</artifactId>
+                <version>${onnxruntime.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.microsoft.onnxruntime</groupId>
+                <artifactId>onnxruntime_gpu</artifactId>
+                <version>${onnxruntime.version}</version>
+            </dependency>
+            <!-- No official OpenVINO build exists for Java; build + install it locally via
+                 scripts/build_ort_openvino.sh, then select it with the "openvino" profile. -->
+            <dependency>
+                <groupId>com.microsoft.onnxruntime</groupId>
+                <artifactId>onnxruntime_openvino</artifactId>
                 <version>${onnxruntime.version}</version>
             </dependency>
             <dependency>
@@ -204,4 +219,32 @@
             </plugins>
         </pluginManagement>
     </build>
+
+    <profiles>
+        <!--
+            CUDA / GPU build. Activate with `-Pcuda` to swap the CPU ONNX Runtime native artifact
+            for `onnxruntime_gpu` (CUDA + TensorRT execution providers). Requires a CUDA-capable
+            host with matching CUDA/cuDNN runtime libraries at run time. Select the provider at run
+            time with the demo's 3rd arg (`cuda`) or the benchmark param (`-p executionProvider=cuda`).
+        -->
+        <profile>
+            <id>cuda</id>
+            <properties>
+                <onnxruntime.artifactId>onnxruntime_gpu</onnxruntime.artifactId>
+            </properties>
+        </profile>
+        <!--
+            OpenVINO build. Activate with `-Popenvino` to use the locally-built OpenVINO ONNX Runtime
+            (com.microsoft.onnxruntime:onnxruntime_openvino), produced by scripts/build_ort_openvino.sh.
+            There is no official OpenVINO artifact for Java, so the jar must be installed locally first.
+            At run time the OpenVINO runtime libraries must be on the loader path (setupvars.sh), and the
+            provider is selected with the demo's 3rd arg (`openvino`) or `-p executionProvider=openvino`.
+        -->
+        <profile>
+            <id>openvino</id>
+            <properties>
+                <onnxruntime.artifactId>onnxruntime_openvino</onnxruntime.artifactId>
+            </properties>
+        </profile>
+    </profiles>
 </project>

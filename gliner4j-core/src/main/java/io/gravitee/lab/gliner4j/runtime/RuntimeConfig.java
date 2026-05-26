@@ -65,6 +65,25 @@ public class RuntimeConfig {
   private final boolean optimizedModelCacheEnabled = true;
 
   /**
+   * Execution provider (hardware backend) for all ONNX sessions. Defaults to {@link ExecutionProvider#CPU}.
+   * Non-CPU providers require a matching native runtime; when unavailable the runtime warns and falls back to CPU.
+   */
+  @Builder.Default
+  private final ExecutionProvider executionProvider = ExecutionProvider.CPU;
+
+  /** GPU device ordinal used by the {@link ExecutionProvider#CUDA} provider. */
+  @Builder.Default
+  private final int gpuDeviceId = 0;
+
+  /**
+   * OpenVINO device_type for the {@link ExecutionProvider#OPENVINO} provider — one of
+   * "CPU", "GPU", "NPU", "AUTO" (or "GPU.0", HETERO/MULTI variants). OpenVINO rejects an empty
+   * value, so a blank here is treated as "CPU".
+   */
+  @Builder.Default
+  private final String openVinoDeviceType = "CPU";
+
+  /**
    * Returns the default configuration (identical to the current hardcoded behavior).
    *
    * @return default runtime configuration

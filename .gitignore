@@ -10,6 +10,7 @@ target/
 .classpath
 
 models/
+.cuda-runtime/
 dependency-reduced-pom.xml
 .gravitee/
 .task
@@ -17,3 +18,4 @@ dependency-reduced-pom.xml
 .venv/
 uv.lock
 results/
+.ort-openvino-build/

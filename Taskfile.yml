@@ -70,6 +70,11 @@ tasks:
     cmds:
       - mvn clean install -DskipTests
 
+  build:openvino:
+    desc: 'Build the OpenVINO ONNX Runtime jar and install it locally (override OPENVINO_DEVICE=CPU|GPU|NPU)'
+    cmds:
+      - scripts/build_ort_openvino.sh
+
   test:
     desc: Run tests
     deps:
@@ -79,17 +84,60 @@ tasks:
       - mvn test
 
   benchmark:
-    desc: Run JMH benchmarks (host JVM, all profiles × entityCounts × batchSizes)
+    desc: Run JMH benchmarks (host JVM). Override EP=cuda|openvino|coreml (CUDA also needs MVN_FLAGS=-Pcuda)
     deps:
       - check:maven
+    vars:
+      EP: '{{.EP | default "cpu"}}'
     cmds:
-      - mvn -pl gliner4j-benchmark -am package -DskipTests
-      - java -jar gliner4j-benchmark/target/gliner4j-benchmark.jar {{.JMH_ARGS | default ""}}
+      - mvn -pl gliner4j-benchmark -am package -DskipTests {{.MVN_FLAGS | default ""}}
+      - java -jar gliner4j-benchmark/target/gliner4j-benchmark.jar -p executionProvider={{.EP}} {{.JMH_ARGS | default ""}}
+
+  benchmark:cuda:
+    desc: Run JMH benchmarks on the CUDA execution provider (requires an NVIDIA GPU + CUDA/cuDNN runtime)
+    cmds:
+      - task: benchmark
+        vars: { EP: cuda, MVN_FLAGS: '-Pcuda' }
+
+  benchmark:openvino:
+    desc: Run JMH benchmarks on the OpenVINO execution provider (run build:openvino first)
+    cmds:
+      - task: benchmark
+        vars: { EP: openvino, MVN_FLAGS: '-Popenvino' }
+
+  benchmark:coreml:
+    desc: Run JMH benchmarks on the CoreML execution provider (Apple Silicon)
+    cmds:
+      - task: benchmark
+        vars: { EP: coreml }
 
   benchmark:docker:build:
     desc: Build the benchmark Docker image (`gliner4j-benchmark:latest`)
     cmds:
       - docker build -f gliner4j-benchmark/Dockerfile -t gliner4j-benchmark:latest .
+
+  benchmark:docker:openvino:
+    desc: 'Run the OpenVINO benchmark in Docker (run build:openvino on the host first; override OPENVINO_VERSION, CPUSET, RESULTS_FILE)'
+    vars:
+      OPENVINO_VERSION: '{{.OPENVINO_VERSION | default "2026.1.0"}}'
+      CPUSET: '{{.CPUSET | default "0-3"}}'
+      RESULTS_FILE: '{{.RESULTS_FILE | default "bench-openvino.json"}}'
+    cmds:
+      # 1. build the uber-jar on the host, against the locally-installed onnxruntime_openvino jar
+      - mvn -pl gliner4j-benchmark -am package -DskipTests -Popenvino
+      # 2. bake it into an Intel OpenVINO runtime image (version must match what you built against)
+      - docker build -f gliner4j-benchmark/Dockerfile.openvino --build-arg OPENVINO_VERSION={{.OPENVINO_VERSION}} -t gliner4j-benchmark:openvino .
+      # 3. run, selecting the OpenVINO provider
+      - mkdir -p results
+      - >
+        docker run --rm
+        --cpuset-cpus={{.CPUSET}}
+        -v $PWD/models:/app/models
+        -v $PWD/results:/app/results
+        gliner4j-benchmark:openvino
+        -p executionProvider=openvino
+        -rf json -rff /app/results/{{.RESULTS_FILE}}
+        {{.JMH_ARGS | default ""}}
 
   analyze:
     desc: Analyze JMH JSON output(s) — produces results/{summary.csv,report.md,plots/*.png}
@@ -177,13 +225,32 @@ tasks:
       - rm -rf {{.BASE_ONNX_OUTPUT_DIR}}
 
   demo:base:
-    desc: 'Run the GLiNER4j demo against the base profile (override VARIANT=onnx_fp16|onnx_quantized)'
+    desc: 'Run the GLiNER4j demo against the base profile (override VARIANT=onnx_fp16|onnx_quantized, EP=cuda|openvino|coreml)'
     deps:
       - check:maven
     vars:
       VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
     cmds:
-      - mvn exec:java -pl gliner4j-demo -Dexec.args="base {{.VARIANT}}" 2>/dev/null
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="base {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  demo:base:cuda:
+    desc: 'Run the base demo on the CUDA execution provider (requires an NVIDIA GPU + CUDA/cuDNN runtime)'
+    cmds:
+      - task: demo:base
+        vars: { EP: cuda, MVN_FLAGS: '-Pcuda', VARIANT: '{{.VARIANT | default "onnx"}}' }
+
+  demo:base:openvino:
+    desc: 'Run the base demo on the OpenVINO execution provider (run build:openvino first)'
+    cmds:
+      - task: demo:base
+        vars: { EP: openvino, MVN_FLAGS: '-Popenvino', VARIANT: '{{.VARIANT | default "onnx"}}' }
+
+  demo:base:coreml:
+    desc: 'Run the base demo on the CoreML execution provider (Apple Silicon)'
+    cmds:
+      - task: demo:base
+        vars: { EP: coreml, VARIANT: '{{.VARIANT | default "onnx"}}' }
 
   hf-upload:base:
     desc: Upload the base ONNX model directory to HuggingFace Hub
@@ -244,13 +311,14 @@ tasks:
       - rm -rf {{.PII_ONNX_OUTPUT_DIR}}
 
   demo:pii:
-    desc: 'Run the GLiNER4j demo against the PII profile (42 PII labels — override VARIANT=onnx_fp16|onnx_quantized)'
+    desc: 'Run the GLiNER4j demo against the PII profile (42 PII labels — override VARIANT=onnx_fp16|onnx_quantized, EP=cuda|openvino|coreml)'
     deps:
       - check:maven
     vars:
       VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
     cmds:
-      - mvn exec:java -pl gliner4j-demo -Dexec.args="pii {{.VARIANT}}" 2>/dev/null
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="pii {{.VARIANT}} {{.EP}}" 2>/dev/null
 
   hf-upload:pii:
     desc: Upload the PII ONNX model directory to HuggingFace Hub
@@ -310,13 +378,14 @@ tasks:
       - rm -rf {{.GLIGUARD_ONNX_OUTPUT_DIR}}
 
   demo:gliguard:
-    desc: 'Run the GLiNER4j demo against the GLiGuard profile (LLM guardrail classification — override VARIANT=onnx_fp16|onnx_quantized)'
+    desc: 'Run the GLiNER4j demo against the GLiGuard profile (LLM guardrail classification — override VARIANT=onnx_fp16|onnx_quantized, EP=cuda|openvino|coreml)'
     deps:
       - check:maven
     vars:
       VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
     cmds:
-      - mvn exec:java -pl gliner4j-demo -Dexec.args="gliguard {{.VARIANT}}" 2>/dev/null
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliguard {{.VARIANT}} {{.EP}}" 2>/dev/null
 
   hf-upload:gliguard:
     desc: Upload the GLiGuard ONNX model directory to HuggingFace Hub

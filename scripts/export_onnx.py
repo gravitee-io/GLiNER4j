@@ -33,9 +33,6 @@
 #     "onnxconverter-common>=1.14",
 #     "gliner2",
 # ]
-#
-# [tool.uv.sources]
-# gliner2 = { git = "https://github.com/fastino-ai/GLiNER2" }
 # ///
 """GLiNER2 → ONNX export script for gliner4j.
 
@@ -424,6 +421,135 @@ class ClassifierWrapper(nn.Module):
 # ===========================================================================
 
 
+def _patch_deberta_for_onnx() -> int:
+    """De-script DeBERTa-v2/v3's relative-position control flow before ONNX export.
+
+    ``transformers.models.deberta_v2.modeling_deberta_v2`` defines ``build_rpos``
+    with ``@torch.jit.script``::
+
+        @torch.jit.script
+        def build_rpos(query_layer, key_layer, relative_pos, position_buckets, max_relative_positions):
+            if key_layer.size(-2) != query_layer.size(-2):
+                return build_relative_position(key_layer, key_layer, ...)  # rank 3
+            else:
+                return relative_pos                                        # rank 4
+
+    Because it is *scripted*, that ``if`` compiles to a real ONNX ``If`` node —
+    one per layer — whose then/else branches have different rank (3 vs 4). The
+    node therefore has dynamic rank, which OpenVINO's CPU plugin cannot
+    compile::
+
+        CPU plug-in doesn't support If operation with dynamic rank
+
+    Our encoder always runs plain square self-attention, so ``query_size ==
+    key_size`` and the ``else`` branch (``return relative_pos``) is always
+    taken. Replacing the scripted ``build_rpos`` with a plain Python equivalent
+    lets the tracer evaluate the size comparison at export time and bake in that
+    single branch — no ``If`` nodes — with identical numerics (kept honest by
+    the ``_verify_encoder`` PT-vs-ONNX check, atol 1e-4).
+
+    Also unwraps any ``@torch.jit.script_if_tracing`` helpers, which older
+    transformers releases used for the same relative-position code.
+
+    Returns the number of helpers patched.
+    """
+    try:
+        import transformers.models.deberta_v2.modeling_deberta_v2 as dv2
+    except ImportError:
+        return 0
+
+    patched = 0
+
+    # Older transformers: relative-position helpers used @torch.jit.script_if_tracing.
+    for name in dir(dv2):
+        obj = getattr(dv2, name)
+        original = getattr(obj, "__original_fn", None)
+        if original is not None and getattr(obj, "__script_if_tracing_wrapper", False):
+            setattr(dv2, name, original)
+            console.print(f"  [dim]unwrapped script_if_tracing: {name}[/dim]")
+            patched += 1
+
+    # Current transformers (>=5.x): build_rpos is @torch.jit.script. Replace it
+    # with a traceable Python version that calls the module's (unscripted)
+    # build_relative_position, so the size comparison folds at trace time.
+    if hasattr(dv2, "build_rpos"):
+
+        def build_rpos(query_layer, key_layer, relative_pos, position_buckets, max_relative_positions):
+            if key_layer.size(-2) != query_layer.size(-2):
+                return dv2.build_relative_position(
+                    key_layer,
+                    key_layer,
+                    bucket_size=position_buckets,
+                    max_position=max_relative_positions,
+                )
+            return relative_pos
+
+        dv2.build_rpos = build_rpos
+        console.print("  [dim]de-scripted build_rpos[/dim]")
+        patched += 1
+
+    return patched
+
+
+def _count_if_nodes(path: Path) -> int:
+    """Count ONNX ``If`` nodes in a model (used to confirm the DeBERTa unwrap worked)."""
+    model = onnx.load(str(path))
+    return sum(1 for n in model.graph.node if n.op_type == "If")
+
+
+def _sanitize_onnx_names(path: Path) -> int:
+    """Replace ``/`` in every tensor/node name so the model runs on OpenVINO.
+
+    PyTorch's ONNX exporter names intermediate tensors like
+    ``/encoder/Reshape_output_0`` — leading slash, multiple slashes. ONNX
+    Runtime's OpenVINO execution provider, when a constant-folded tensor becomes
+    a subgraph-boundary output, truncates the output name at the first ``/``
+    (``backend_utils.cc`` ``GetOutputTensor``) and looks the result up in the
+    subgraph's output map. A name starting with ``/`` truncates to ``""`` and the
+    lookup throws::
+
+        [OpenVINO-EP] Output names mismatch between OpenVINO and ONNX
+
+    Replacing ``/`` with ``_`` everywhere — node names, tensor names,
+    initializers, all references, recursing into subgraphs — removes the
+    trigger. Names are pure identifiers and the declared graph I/O contains no
+    ``/``, so the model's interface and numerics are unchanged (and CPU/CUDA
+    ignore names entirely). Run before the fp16/quantized conversions so every
+    variant inherits the clean names.
+
+    Returns the number of names rewritten.
+    """
+    model = onnx.load(str(path))
+    count = 0
+
+    def fix(name: str) -> str:
+        nonlocal count
+        if name and "/" in name:
+            count += 1
+            return name.replace("/", "_")
+        return name
+
+    def sanitize(graph) -> None:
+        for init in graph.initializer:
+            init.name = fix(init.name)
+        for vi in list(graph.value_info) + list(graph.input) + list(graph.output):
+            vi.name = fix(vi.name)
+        for node in graph.node:
+            node.name = fix(node.name)
+            node.input[:] = [fix(x) for x in node.input]
+            node.output[:] = [fix(x) for x in node.output]
+            for attr in node.attribute:
+                if attr.type == onnx.AttributeProto.GRAPH:
+                    sanitize(attr.g)
+                for sg in attr.graphs:
+                    sanitize(sg)
+
+    sanitize(model.graph)
+    if count:
+        onnx.save(model, str(path))
+    return count
+
+
 def _disable_transformer_fast_path(module: nn.Module) -> None:
     """Recursively disable the fused fast-path on TransformerEncoder layers.
 
@@ -467,6 +593,14 @@ def _export_encoder(
     wrapper = EncoderWrapper(model.encoder)
     wrapper.eval()
 
+    # DeBERTa backbones emit per-layer `If` nodes (dynamic rank) from their
+    # @torch.jit.script_if_tracing relative-position helper, which OpenVINO's
+    # CPU plugin cannot compile. Unwrap them so the export bakes in the single
+    # static branch our usage always takes. No-op for non-DeBERTa backbones.
+    patched = _patch_deberta_for_onnx()
+    if patched:
+        console.print(f"  patched {patched} DeBERTa relative-position helper(s) for ONNX")
+
     batch, seq_len = 1, 32
     dummy_ids = torch.ones(batch, seq_len, dtype=torch.long)
     dummy_mask = torch.ones(batch, seq_len, dtype=torch.long)
@@ -486,7 +620,13 @@ def _export_encoder(
             "last_hidden_state": {0: "batch", 1: "seq_len"},
         },
     )
-    console.print(f"  [green]✓[/green] encoder.onnx ({path.stat().st_size / 1e6:.1f} MB)")
+    if_nodes = _count_if_nodes(path)
+    if_note = (
+        f", [green]0 If nodes[/green]"
+        if if_nodes == 0
+        else f", [red]{if_nodes} If nodes remain (OpenVINO will reject)[/red]"
+    )
+    console.print(f"  [green]✓[/green] encoder.onnx ({path.stat().st_size / 1e6:.1f} MB{if_note})")
     return path
 
 
@@ -1018,6 +1158,43 @@ def _dedupe_constant_nodes(model: onnx.ModelProto) -> int:
     return len(nodes_to_remove)
 
 
+def _align_fp16_cast_nodes(model: onnx.ModelProto) -> int:
+    """Make ``Cast`` ``to`` attributes agree with the fp16 types the converter assigned.
+
+    ``onnxconverter_common.float16.convert_float_to_float16`` rewrites
+    intermediate tensors (and their ``value_info``) to float16 but leaves the
+    ``to`` attribute of *pre-existing* ``Cast`` nodes untouched. DeBERTa's
+    embeddings have ``embeddings * mask.to(dtype)`` → a ``Cast(to=FLOAT)`` whose
+    output feeds a ``Mul``. After conversion the converter marks that Cast's
+    output ``value_info`` as float16, but the node still casts to float32 — so it
+    emits float32 into a float16 graph and ORT refuses to load it::
+
+        Type (tensor(float16)) of output arg (...Cast_output_0) ... does not
+        match expected type (tensor(float))
+
+    For every ``Cast`` whose declared output type is float16 but whose ``to`` is
+    still ``FLOAT``, set ``to`` to ``FLOAT16`` — aligning the node with the
+    converter's own type decision (and keeping the downstream ``Mul`` all-fp16).
+
+    Returns the number of Cast nodes realigned.
+    """
+    declared: dict[str, int] = {}
+    for vi in list(model.graph.value_info) + list(model.graph.output) + list(model.graph.input):
+        declared[vi.name] = vi.type.tensor_type.elem_type
+
+    fixed = 0
+    for node in model.graph.node:
+        if node.op_type != "Cast" or not node.output:
+            continue
+        to_attr = next((a for a in node.attribute if a.name == "to"), None)
+        if to_attr is None:
+            continue
+        if to_attr.i == onnx.TensorProto.FLOAT and declared.get(node.output[0]) == onnx.TensorProto.FLOAT16:
+            to_attr.i = onnx.TensorProto.FLOAT16
+            fixed += 1
+    return fixed
+
+
 def _convert_to_fp16(base_dir: Path, output_dir: Path) -> None:
     """Convert base ONNX models to FP16.
 
@@ -1025,6 +1202,8 @@ def _convert_to_fp16(base_dir: Path, output_dir: Path) -> None:
         base_dir: Directory containing base FP32 ONNX models.
         output_dir: Directory to write FP16 models.
     """
+    import shutil
+
     from onnxconverter_common import float16
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1034,10 +1213,32 @@ def _convert_to_fp16(base_dir: Path, output_dir: Path) -> None:
         # Fold duplicate Constants back into shared initializers
         # (works around the unrolled-loop bloat introduced by the converter).
         removed = _dedupe_constant_nodes(model_fp16)
+        # Align pre-existing Cast nodes with the converter's fp16 value_info so
+        # the model actually loads in ONNX Runtime (see _align_fp16_cast_nodes).
+        realigned = _align_fp16_cast_nodes(model_fp16)
         onnx.save(model_fp16, str(output_dir / name))
+        # Re-sanitize: the float16 converter / dedupe pass can mint new names.
+        _sanitize_onnx_names(output_dir / name)
+
+        # Validate the fp16 model actually loads, and ship the FP32 base if it
+        # doesn't, so the bundle is always usable (mirrors the quantized
+        # fallback). This guard matters because the export's verification step
+        # (_verify_*) only checks the *base* FP32 models numerically — the
+        # fp16/quantized variants are never otherwise load-tested, so without
+        # this check a non-loadable variant ships silently. That is exactly how
+        # the Cast/value_info mismatch above went unnoticed until a consumer
+        # first tried to load an fp16 model.
+        try:
+            ort.InferenceSession(str(output_dir / name))
+            note = f" (deduped {removed}, realigned {realigned} casts)" if removed or realigned else ""
+        except Exception as e:
+            shutil.copy(base_dir / name, output_dir / name)
+            note = " (fp16 invalid, copied FP32 instead)"
+            console.print(f"  [yellow]![/yellow] {name}: {str(e).splitlines()[0]}")
+
         size_mb = (output_dir / name).stat().st_size / 1e6
-        note = f" (deduped {removed} constants)" if removed else ""
-        console.print(f"  [green]✓[/green] {name} ({size_mb:.1f} MB){note}")
+        marker = "[yellow]→[/yellow]" if "invalid" in note else "[green]✓[/green]"
+        console.print(f"  {marker} {name} ({size_mb:.1f} MB){note}")
 
 
 def _convert_to_quantized(base_dir: Path, output_dir: Path) -> None:
@@ -1077,6 +1278,9 @@ def _convert_to_quantized(base_dir: Path, output_dir: Path) -> None:
             shutil.copy(base_dir / name, output_dir / name)
             note = " (quantization invalid, copied FP32 instead)"
             console.print(f"  [yellow]![/yellow] {name}: {e}")
+
+        # Re-sanitize: quantize_dynamic can mint new '/'-named tensors.
+        _sanitize_onnx_names(output_dir / name)
 
         size_mb = (output_dir / name).stat().st_size / 1e6
         marker = "[yellow]→[/yellow]" if note else "[green]✓[/green]"
@@ -1143,6 +1347,14 @@ def export(
         _export_span_rep(model, base_dir, opset, hidden_size, max_width)
         _export_scoring_head(model, base_dir, opset, hidden_size, max_width, counting_layer)
         _export_classifier_head(model, base_dir, opset, hidden_size)
+
+    # Step 4b: Strip '/' from tensor names so the models run on the OpenVINO EP.
+    # Done before the fp16/quantized conversions so every variant inherits the
+    # clean names (see _sanitize_onnx_names for the OpenVINO EP details).
+    console.print(f"\n[bold]Sanitizing tensor names for OpenVINO...[/bold]")
+    for name in ONNX_MODEL_FILES:
+        renamed = _sanitize_onnx_names(base_dir / name)
+        console.print(f"  [green]✓[/green] {name} ({renamed} names rewritten)")
 
     # Step 5: Write config to root
     console.print(f"\n[bold]Writing config and tokenizer...[/bold]")
