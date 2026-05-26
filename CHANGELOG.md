@@ -1,3 +1,10 @@
+# [1.0.0-alpha.5](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0-alpha.4...1.0.0-alpha.5) (2026-05-26)
+
+
+### Features
+
+* **relation-extraction:** implement relation extraction ([#25](https://github.com/gravitee-io/GLiNER4j/issues/25)) ([40f1356](https://github.com/gravitee-io/GLiNER4j/commit/40f13564f406852fb616faec930ccc5c7c51f44e))
+
 # [1.0.0-alpha.4](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0-alpha.3...1.0.0-alpha.4) (2026-05-25)
 
 
