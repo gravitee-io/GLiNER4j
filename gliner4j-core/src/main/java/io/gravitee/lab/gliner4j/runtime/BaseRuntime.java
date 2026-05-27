@@ -32,7 +32,9 @@ import lombok.extern.slf4j.Slf4j;
  * Subclasses add task-specific heads (span_rep + scoring_head for NER, classifier_head for classification).
  */
 @Slf4j
-public abstract class BaseRuntime implements AutoCloseable {
+public abstract sealed class BaseRuntime
+  implements AutoCloseable
+  permits GLiNER4jClassifierRuntime, GLiNER4jNERRuntime {
 
   /** Default ONNX variant folder name (base FP32). */
   public static final String DEFAULT_VARIANT = "onnx";
@@ -69,10 +71,25 @@ public abstract class BaseRuntime implements AutoCloseable {
         : Math.max(2, numCpus / 2);
 
       var variantDir = modelDir.resolve(variant);
+      var provider = runtimeConfig.getExecutionProvider() == null
+        ? ExecutionProvider.CPU
+        : runtimeConfig.getExecutionProvider();
+      // Each backend gets its own optimized-model cache dir (the optimized graph is provider-specific).
+      // Providers that emit compiled nodes (CUDA/CoreML/OpenVINO) cannot serialize their graph, so the
+      // cache is skipped for them rather than failing the load with an ORT serialization error.
       Path cacheDir = null;
       if (runtimeConfig.isOptimizedModelCacheEnabled()) {
-        cacheDir = modelDir.resolve(variant + "_optimized");
-        cacheDir.toFile().mkdirs();
+        if (provider.supportsOptimizedModelCache()) {
+          cacheDir = modelDir.resolve(
+            variant + "_optimized_" + provider.cacheTag()
+          );
+          cacheDir.toFile().mkdirs();
+        } else {
+          log.info(
+            "Optimized-model cache disabled for execution provider {} (it emits non-serializable compiled nodes)",
+            provider
+          );
+        }
       }
 
       log.info(
@@ -87,7 +104,7 @@ public abstract class BaseRuntime implements AutoCloseable {
           encoderIntra,
           encoderInter,
           OrtSession.SessionOptions.ExecutionMode.PARALLEL,
-          runtimeConfig.getOptimizationLevel(),
+          runtimeConfig,
           cacheDir,
           "encoder.onnx"
         )
@@ -295,7 +312,7 @@ public abstract class BaseRuntime implements AutoCloseable {
     int intraOpThreads,
     int interOpThreads,
     OrtSession.SessionOptions.ExecutionMode executionMode,
-    OrtSession.SessionOptions.OptLevel optLevel,
+    RuntimeConfig config,
     Path cacheDir,
     String modelFileName
   ) throws OrtException {
@@ -303,13 +320,45 @@ public abstract class BaseRuntime implements AutoCloseable {
     opts.setIntraOpNumThreads(intraOpThreads);
     opts.setInterOpNumThreads(interOpThreads);
     opts.setExecutionMode(executionMode);
-    opts.setOptimizationLevel(optLevel);
+    opts.setOptimizationLevel(config.getOptimizationLevel());
     if (cacheDir != null) {
       opts.setOptimizedModelFilePath(
         cacheDir.resolve(modelFileName).toString()
       );
     }
+    applyExecutionProvider(opts, config, modelFileName);
     return opts;
+  }
+
+  /**
+   * Registers the configured execution provider on the session options. Falls back to CPU
+   * (the ORT default) with a warning if the provider is unavailable in the loaded native runtime,
+   * so a misconfigured GPU/OpenVINO build degrades gracefully instead of failing the model load.
+   */
+  private static void applyExecutionProvider(
+    OrtSession.SessionOptions opts,
+    RuntimeConfig config,
+    String modelFileName
+  ) {
+    var ep = config.getExecutionProvider();
+    if (ep == null || ep == ExecutionProvider.CPU) {
+      return;
+    }
+    try {
+      ep.configure(
+        opts,
+        config.getGpuDeviceId(),
+        config.getOpenVinoDeviceType()
+      );
+      log.info("Registered {} execution provider for {}", ep, modelFileName);
+    } catch (OrtException | RuntimeException | UnsatisfiedLinkError e) {
+      log.warn(
+        "Could not register {} execution provider for {} — falling back to CPU. Cause: {}",
+        ep,
+        modelFileName,
+        e.getMessage()
+      );
+    }
   }
 
   protected static LongBuffer allocateDirectLongBuffer(long[] data) {
@@ -324,5 +373,9 @@ public abstract class BaseRuntime implements AutoCloseable {
     return ByteBuffer.allocateDirect(capacity * Long.BYTES)
       .order(ByteOrder.nativeOrder())
       .asLongBuffer();
+  }
+
+  protected static int getOrDefault(Integer value, int defaultValue) {
+    return value != null ? value : defaultValue;
   }
 }

@@ -27,7 +27,7 @@ import lombok.extern.slf4j.Slf4j;
  * on top of the shared encoder from {@link BaseRuntime}.
  */
 @Slf4j
-public class GLiNER4jClassifierRuntime extends BaseRuntime {
+public non-sealed class GLiNER4jClassifierRuntime extends BaseRuntime {
 
   private OrtSession classifierHeadSession;
 
@@ -47,12 +47,14 @@ public class GLiNER4jClassifierRuntime extends BaseRuntime {
   ) throws OrtException {
     int numCpus = Runtime.getRuntime().availableProcessors();
 
-    int scoringIntra = runtimeConfig.getScoringIntraOpThreads() != null
-      ? runtimeConfig.getScoringIntraOpThreads()
-      : Math.max(2, numCpus / 4);
-    int scoringInter = runtimeConfig.getScoringInterOpThreads() != null
-      ? runtimeConfig.getScoringInterOpThreads()
-      : 1;
+    int scoringIntra = getOrDefault(
+      runtimeConfig.getScoringIntraOpThreads(),
+      Math.max(2, numCpus / 4)
+    );
+    int scoringInter = getOrDefault(
+      runtimeConfig.getScoringInterOpThreads(),
+      1
+    );
 
     log.info("Loading classifier_head.onnx...");
     try (
@@ -60,7 +62,7 @@ public class GLiNER4jClassifierRuntime extends BaseRuntime {
         scoringIntra,
         scoringInter,
         OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL,
-        runtimeConfig.getOptimizationLevel(),
+        runtimeConfig,
         cacheDir,
         "classifier_head.onnx"
       )
@@ -85,16 +87,13 @@ public class GLiNER4jClassifierRuntime extends BaseRuntime {
    */
   public float[][] runClassifierHead(float[][] labelEmbeddings) {
     try {
-      var embTensor = OnnxTensor.createTensor(env, labelEmbeddings);
-
       try (
+        var embTensor = OnnxTensor.createTensor(env, labelEmbeddings);
         var result = classifierHeadSession.run(
           Map.of("label_embeddings", embTensor)
         )
       ) {
         return (float[][]) result.get(0).getValue();
-      } finally {
-        embTensor.close();
       }
     } catch (OrtException e) {
       throw new RuntimeException("Classifier head inference failed", e);

@@ -38,6 +38,7 @@
         <dependency>
             <groupId>com.microsoft.onnxruntime</groupId>
             <artifactId>onnxruntime</artifactId>
+            <scope>provided</scope>
         </dependency>
 
         <!-- HuggingFace Tokenizers via DJL -->

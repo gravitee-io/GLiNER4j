@@ -9,6 +9,7 @@ Java library for running [GLiNER2](https://github.com/fastino-ai/GLiNER2) Named 
 - Per-call entity override for dynamic use cases
 - Batch processing with parallelized scoring
 - Support for ONNX model variants (default, fp16, quantized)
+- Selectable execution providers: CPU (default), CUDA, OpenVINO, CoreML — see [Execution providers](#execution-providers)
 
 ## Prerequisites
 
@@ -170,6 +171,57 @@ task hf-upload:gliguard HF_REPO=<your-username>/gliguard-onnx
 > # Create a private repo
 > uvx --from huggingface-hub hf repo create gliner4j-onnx --type model --private
 > ```
+
+## Execution providers
+
+GLiNER4j runs every ONNX session on a selectable execution provider (the hardware backend). The
+provider is chosen at run time via `RuntimeConfig.executionProvider`; the demo takes it as a 3rd
+arg and the benchmark as a JMH param. If a requested provider is missing from the native runtime,
+GLiNER4j logs a warning and falls back to CPU rather than failing the load.
+
+| Provider   | `RuntimeConfig` value        | Native artifact                          | Notes |
+|------------|------------------------------|------------------------------------------|-------|
+| CPU        | `ExecutionProvider.CPU`      | `com.microsoft.onnxruntime:onnxruntime`  | Default. Always available. |
+| CUDA       | `ExecutionProvider.CUDA`     | `com.microsoft.onnxruntime:onnxruntime_gpu` (build with `-Pcuda`) | Needs an NVIDIA GPU + matching CUDA/cuDNN runtime libraries. |
+| OpenVINO   | `ExecutionProvider.OPENVINO` | `onnxruntime_openvino` (build locally with `task build:openvino`, then `-Popenvino`) | No official Java artifact exists; the script builds ORT with the OpenVINO EP and installs it. Run-time needs the OpenVINO runtime on the loader path. |
+| CoreML     | `ExecutionProvider.COREML`   | `com.microsoft.onnxruntime:onnxruntime` (macOS) | Apple's accelerator, bundled in the standard macOS jar. |
+
+The build defaults to the CPU artifact. Build with `-Pcuda` to swap in `onnxruntime_gpu`:
+
+```bash
+# CPU (default)
+task demo:base
+task benchmark
+
+# CUDA: build against the GPU runtime, then select the provider at run time
+task demo:base EP=cuda MVN_FLAGS=-Pcuda
+task benchmark EP=cuda MVN_FLAGS=-Pcuda
+
+# CoreML on macOS (no special build needed)
+task demo:base EP=coreml
+
+# OpenVINO: build the (unofficial) OpenVINO ONNX Runtime jar once, then select it with -Popenvino
+task build:openvino                 # builds + installs com.microsoft.onnxruntime:onnxruntime_openvino
+task demo:base:openvino             # uses -Popenvino under the hood
+```
+
+Programmatically:
+
+```java
+var config = RuntimeConfig.builder()
+    .executionProvider(ExecutionProvider.CUDA)
+    .gpuDeviceId(0)
+    .build();
+try (var gliner = GLiNER4jNER.load(modelDir, entities, "onnx", config)) {
+    var results = gliner.extract("John works at Google.");
+}
+```
+
+The benchmark exposes the provider as a JMH param (default `cpu`), so override it per run:
+
+```bash
+java -jar gliner4j-benchmark/target/gliner4j-benchmark.jar -p executionProvider=cuda
+```
 
 ## Benchmarks
 

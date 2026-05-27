@@ -17,6 +17,8 @@ package io.gravitee.lab.gliner4j.benchmark;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.gravitee.lab.gliner4j.GLiNER4jNER;
+import io.gravitee.lab.gliner4j.runtime.ExecutionProvider;
+import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -74,6 +76,11 @@ public class InferenceBenchmark {
   @Param({ "onnx_quantized" })
   private String variant;
 
+  // ONNX execution provider. Defaults to cpu so the suite runs anywhere; override on a capable
+  // host with e.g. -p executionProvider=cuda (needs -Pcuda build), openvino, or coreml.
+  @Param({ "cpu" })
+  private String executionProvider;
+
   @Param({ "tiny", "short", "medium", "long" })
   private String textLength;
 
@@ -110,7 +117,7 @@ public class InferenceBenchmark {
       }
     }
 
-    var entities = (entityCount > 0 && entityCount < allEntities.size())
+    var entities = entityCount < allEntities.size()
       ? allEntities.subList(0, entityCount)
       : allEntities;
 
@@ -133,7 +140,15 @@ public class InferenceBenchmark {
       );
     }
 
-    gliner = GLiNER4jNER.load(Path.of(modelDir), entities, variant);
+    var runtimeConfig = RuntimeConfig.builder()
+      .executionProvider(ExecutionProvider.fromString(executionProvider))
+      .build();
+    gliner = GLiNER4jNER.load(
+      Path.of(modelDir),
+      entities,
+      variant,
+      runtimeConfig
+    );
     cursor = 0;
   }
 

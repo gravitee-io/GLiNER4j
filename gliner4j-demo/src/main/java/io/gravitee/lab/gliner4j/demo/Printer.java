@@ -131,9 +131,9 @@ public class Printer {
     System.out.println(dim + "  ─────────────────────────────────────────────────────────────" + reset);
   }
 
-  public void schemaResult(int index, String text, Map<String, List<StructureInstance>> results) {
+  public void schemaResult(int index, String text, Map<String, List<StructureInstance>> results, double elapsedMs) {
     System.out.println();
-    System.out.println("  " + dim + index + "." + reset + " " + text);
+    System.out.println("  " + dim + index + "." + reset + " " + text + elapsed(elapsedMs));
 
     if (results.isEmpty() || results.values().stream().allMatch(List::isEmpty)) {
       System.out.println(gray + "     No structures found." + reset);
@@ -219,7 +219,7 @@ public class Printer {
     System.out.println();
   }
 
-  public void nerResult(int index, String text, Map<String, List<EntitySpan>> results) {
+  public void nerResult(int index, String text, Map<String, List<EntitySpan>> results, double elapsedMs) {
     System.out.println();
     var allSpans = new ArrayList<EntitySpan>();
     results.values().forEach(allSpans::addAll);
@@ -236,7 +236,7 @@ public class Printer {
       pos = span.end();
     }
     if (pos < text.length()) System.out.print(text.substring(pos));
-    System.out.println();
+    System.out.println(elapsed(elapsedMs));
 
     if (allSpans.isEmpty()) {
       System.out.println(gray + "     No entities found." + reset);
@@ -258,9 +258,9 @@ public class Printer {
     }
   }
 
-  public void relationResult(int index, String text, Map<String, List<RelationInstance>> results) {
+  public void relationResult(int index, String text, Map<String, List<RelationInstance>> results, double elapsedMs) {
     System.out.println();
-    System.out.println("  " + dim + index + "." + reset + " " + text);
+    System.out.println("  " + dim + index + "." + reset + " " + text + elapsed(elapsedMs));
 
     boolean any = results
       .values()
@@ -281,9 +281,9 @@ public class Printer {
     }
   }
 
-  public void combinedResult(int index, String text, ExtractionResult result) {
+  public void combinedResult(int index, String text, ExtractionResult result, double elapsedMs) {
     System.out.println();
-    System.out.println("  " + dim + index + "." + reset + " " + text);
+    System.out.println("  " + dim + index + "." + reset + " " + text + elapsed(elapsedMs));
 
     var entitySpans = new ArrayList<EntitySpan>();
     result.entities().values().forEach(entitySpans::addAll);
@@ -347,9 +347,9 @@ public class Printer {
     }
   }
 
-  public void classificationResult(int index, String text, List<ClassificationResult> results) {
+  public void classificationResult(int index, String text, List<ClassificationResult> results, double elapsedMs) {
     System.out.println();
-    System.out.println("  " + dim + index + "." + reset + " " + text);
+    System.out.println("  " + dim + index + "." + reset + " " + text + elapsed(elapsedMs));
     if (results.isEmpty()) {
       System.out.println(gray + "     No labels matched." + reset);
       return;
@@ -367,6 +367,11 @@ public class Printer {
         reset
       );
     }
+  }
+
+  /** Dim, right-trailing per-prediction latency annotation, e.g. {@code "  (87.4 ms)"}. */
+  private String elapsed(double elapsedMs) {
+    return String.format("  %s(%.1f ms)%s", dim, elapsedMs, reset);
   }
 
   private String confidenceBar(float confidence) {

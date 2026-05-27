@@ -45,6 +45,13 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- ONNX Runtime native (CPU+CoreML by default; onnxruntime_gpu under -Pcuda).
+             Core declares this as provided, so consuming modules supply the runtime artifact. -->
+        <dependency>
+            <groupId>com.microsoft.onnxruntime</groupId>
+            <artifactId>${onnxruntime.artifactId}</artifactId>
+        </dependency>
+
         <!-- JMH -->
         <dependency>
             <groupId>org.openjdk.jmh</groupId>

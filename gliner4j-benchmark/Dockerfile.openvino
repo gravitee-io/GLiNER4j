@@ -1,0 +1,60 @@
+#
+# Copyright © 2015 The Gravitee team (http://gravitee.io)
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# GLiNER4j JMH benchmark runner on the OpenVINO execution provider.
+#
+# Unlike the CPU Dockerfile, this image does NOT build the jar — the OpenVINO ONNX Runtime
+# artifact (com.microsoft.onnxruntime:onnxruntime_openvino) only exists in your local Maven repo
+# (installed by scripts/build_ort_openvino.sh), not on Maven Central. So build the uber-jar on the
+# HOST first, then bake it into an Intel OpenVINO *runtime* image that supplies libopenvino at run time.
+#
+# 1. Build the jar on the host (where the onnxruntime_openvino jar is installed):
+#       mvn -pl gliner4j-benchmark -am package -DskipTests -Popenvino
+#
+# 2. Build this image from the repo root. The OpenVINO version MUST match what you built against:
+#       docker build -f gliner4j-benchmark/Dockerfile.openvino \
+#         --build-arg OPENVINO_VERSION=2026.1.0 -t gliner4j-benchmark:openvino .
+#
+# 3. Run it (mount models + results, select the provider):
+#       docker run --rm --cpuset-cpus=0-3 \
+#         -v $PWD/models:/app/models -v $PWD/results:/app/results \
+#         gliner4j-benchmark:openvino \
+#         -p executionProvider=openvino -rf json -rff /app/results/bench-openvino.json
+#
+# `task benchmark:docker:openvino` does all three steps.
+
+# Intel's official OpenVINO runtime image already contains libopenvino + the device plugins and
+# sets up the loader path. Pin the tag to the OpenVINO version your ORT jar was built against.
+ARG OPENVINO_VERSION=2026.1.0
+FROM openvino/ubuntu24_runtime:${OPENVINO_VERSION}
+
+# Add a JRE (the runtime image has no Java). Need root; the base image runs as the "openvino" user.
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openjdk-21-jre-headless \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# The host-built uber-jar bundles the OpenVINO-enabled ORT native; libopenvino comes from the base image.
+COPY gliner4j-benchmark/target/gliner4j-benchmark.jar /app/gliner4j-benchmark.jar
+
+# Source the OpenVINO environment (if the base provides setupvars) so the EP's dynamic libs resolve,
+# then exec JMH, forwarding all `docker run` args.
+ENTRYPOINT ["/bin/bash", "-lc", \
+  "[ -f /opt/intel/openvino/setupvars.sh ] && source /opt/intel/openvino/setupvars.sh; exec java -jar /app/gliner4j-benchmark.jar \"$@\"", \
+  "bash"]
+CMD ["-h"]
