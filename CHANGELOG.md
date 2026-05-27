@@ -1,3 +1,10 @@
+# [1.0.0-alpha.6](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0-alpha.5...1.0.0-alpha.6) (2026-05-27)
+
+
+### Features
+
+* openvino and cuda ([#26](https://github.com/gravitee-io/GLiNER4j/issues/26)) ([08a1be1](https://github.com/gravitee-io/GLiNER4j/commit/08a1be171d4f50c510b39d7c189e50a7c992c69e))
+
 # [1.0.0-alpha.5](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0-alpha.4...1.0.0-alpha.5) (2026-05-26)
 
 
