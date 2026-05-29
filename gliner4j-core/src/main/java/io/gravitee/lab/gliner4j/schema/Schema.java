@@ -42,9 +42,9 @@ public final class Schema {
     List<ClassificationLabel> classifications,
     List<RelationDefinition> relations
   ) {
-    this.entities = List.copyOf(entities);
-    this.classifications = List.copyOf(classifications);
-    this.relations = List.copyOf(relations);
+    this.entities = entities;
+    this.classifications = classifications;
+    this.relations = relations;
   }
 
   public List<EntityDefinition> entities() {

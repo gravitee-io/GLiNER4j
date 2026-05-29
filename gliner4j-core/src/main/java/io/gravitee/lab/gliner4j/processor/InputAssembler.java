@@ -37,6 +37,10 @@ public class InputAssembler {
   private final long[] schemaPrefixIds;
   private final int numFields;
   private final List<String> fieldNames;
+  // Pre-resolved positions of [P] (index 0) and each special-marker token (indices 1..numFields)
+  // within cachedSchemaIds. Same shape as MultiSchemaInputAssembler's UnitLayout — turns runtime
+  // [P]/marker lookups from O(seqLen) input-id walks into O(1) array reads.
+  private final int[] schemaTokenPositions;
 
   /**
    * Creates an InputAssembler that pre-computes schema and separator tokenization.
@@ -60,10 +64,21 @@ public class InputAssembler {
     int schemaPos = 0;
     int fieldIdx = -1;
 
+    // schemaTokenPositions[0] = [P]'s subword position; schemaTokenPositions[1+f] = the
+    // position of the f-th special marker. Captured as we walk the schema tokens.
+    var positions = new int[1 + numFields];
+    Arrays.fill(positions, -1);
+
     for (int i = 0; i < schemaEncoder.getSchemaTokens().size(); i++) {
       var token = schemaEncoder.getSchemaTokens().get(i);
+      if ("[P]".equals(token) && positions[0] == -1) {
+        positions[0] = schemaPos;
+      }
       if (specialToken.equals(token)) {
         fieldIdx++;
+        if (fieldIdx < numFields) {
+          positions[1 + fieldIdx] = schemaPos;
+        }
       }
       var result = tokenizer.tokenizeWithIds(token);
       for (long id : result.ids()) {
@@ -86,6 +101,7 @@ public class InputAssembler {
 
     this.cachedSchemaIds = Arrays.copyOf(schemaIds, schemaPos);
     this.cachedSchemaMappings = Arrays.copyOf(schemaMappings, schemaPos);
+    this.schemaTokenPositions = positions;
 
     // Pre-tokenize [SEP_TEXT] separator
     var sepResult = tokenizer.tokenizeWithIds("[SEP_TEXT]");
@@ -154,10 +170,12 @@ public class InputAssembler {
       pos++;
     }
 
-    // 3. Tokenize text words (per-request)
+    // 3. Warm the tokenizer cache for all text words in one JNI call, then fold each word's
+    //    tokens into ids/mappings inline (every tokenizeWithIds below is now a pure cache hit).
+    var words = textEncoder.getWords();
+    tokenizer.prefetchTokens(words);
     for (int w = 0; w < textEncoder.getTextLen(); w++) {
-      var word = textEncoder.getWords().get(w);
-      var result = tokenizer.tokenizeWithIds(word);
+      var result = tokenizer.tokenizeWithIds(words.get(w));
       var textMapping = new TokenMapping(SegmentType.TEXT, w, -1);
       for (long id : result.ids()) {
         if (pos >= ids.length) {
@@ -187,6 +205,7 @@ public class InputAssembler {
       textEncoder.getTextLen(),
       numFields,
       fieldNames,
+      schemaTokenPositions,
       textEncoder.getOriginalText()
     );
   }

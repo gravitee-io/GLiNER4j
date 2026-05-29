@@ -17,11 +17,11 @@ package io.gravitee.lab.gliner4j;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.gravitee.lab.gliner4j.processor.TextEncoder;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
-import io.gravitee.lab.gliner4j.tokenizer.WhitespaceTokenSplitter;
 import org.junit.jupiter.api.Test;
 
 class GLiNER4jNERTest {
@@ -54,42 +54,44 @@ class GLiNER4jNERTest {
   }
 
   @Test
-  void whitespaceTokenSplitterBasic() {
-    var splitter = new WhitespaceTokenSplitter();
-    var tokens = splitter.tokenize("Hello world");
-    assertThat(tokens).hasSize(2);
-    assertThat(tokens.get(0).text()).isEqualTo("Hello");
-    assertThat(tokens.get(0).start()).isZero();
-    assertThat(tokens.get(0).end()).isEqualTo(5);
-    assertThat(tokens.get(1).text()).isEqualTo("world");
-    assertThat(tokens.get(1).start()).isEqualTo(6);
-    assertThat(tokens.get(1).end()).isEqualTo(11);
+  void textEncoderBasic() {
+    var enc = new TextEncoder("Hello world");
+    assertThat(enc.getTextLen()).isEqualTo(2);
+    assertThat(enc.getWords()).containsExactly("Hello", "world");
+    assertThat(enc.getWordStartChars()).containsExactly(0, 6);
+    assertThat(enc.getWordEndChars()).containsExactly(5, 11);
   }
 
   @Test
-  void whitespaceTokenSplitterWithPunctuation() {
-    var splitter = new WhitespaceTokenSplitter();
-    var tokens = splitter.tokenize("John works at Google.");
-    assertThat(tokens).hasSize(5);
-    assertThat(tokens.get(0).text()).isEqualTo("John");
-    assertThat(tokens.get(3).text()).isEqualTo("Google");
-    assertThat(tokens.get(4).text()).isEqualTo(".");
+  void textEncoderWithPunctuation() {
+    var enc = new TextEncoder("John works at Google.");
+    assertThat(enc.getTextLen()).isEqualTo(5);
+    assertThat(enc.getWords()).containsExactly(
+      "John",
+      "works",
+      "at",
+      "Google",
+      "."
+    );
   }
 
   @Test
-  void whitespaceTokenSplitterEmptyInput() {
-    var splitter = new WhitespaceTokenSplitter();
-    var tokens = splitter.tokenize("");
-    assertThat(tokens).isEmpty();
+  void textEncoderEmptyInput() {
+    var enc = new TextEncoder("");
+    assertThat(enc.getTextLen()).isZero();
+    assertThat(enc.getWords()).isEmpty();
+    assertThat(enc.getWordStartChars()).isEmpty();
+    assertThat(enc.getWordEndChars()).isEmpty();
   }
 
   @Test
-  void whitespaceTokenSplitterHyphenatedWords() {
-    var splitter = new WhitespaceTokenSplitter();
-    var tokens = splitter.tokenize("well-known state-of-the-art");
-    assertThat(tokens).hasSize(2);
-    assertThat(tokens.get(0).text()).isEqualTo("well-known");
-    assertThat(tokens.get(1).text()).isEqualTo("state-of-the-art");
+  void textEncoderHyphenatedWords() {
+    var enc = new TextEncoder("well-known state-of-the-art");
+    assertThat(enc.getTextLen()).isEqualTo(2);
+    assertThat(enc.getWords()).containsExactly(
+      "well-known",
+      "state-of-the-art"
+    );
   }
 
   // --- Classification records ---

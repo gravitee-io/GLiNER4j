@@ -17,6 +17,7 @@ package io.gravitee.lab.gliner4j;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.gravitee.lab.gliner4j.extractor.RelationExtractor;
 import io.gravitee.lab.gliner4j.schema.RelationDefinition;
 import io.gravitee.lab.gliner4j.schema.RelationInstance;
 import java.nio.file.Files;
@@ -45,7 +46,7 @@ class GLiNER4jRelationExtractorPerCallOverrideTest {
   void perCallOverrideReplacesRelationSet() {
     var defaults = List.of(new RelationDefinition("works_for"));
 
-    try (var extractor = GLiNER4jRelationExtractor.load(MODEL_DIR, defaults)) {
+    try (var extractor = RelationExtractor.load(MODEL_DIR, defaults)) {
       var overrideRelations = List.of(new RelationDefinition("lives_in"));
       Map<String, List<RelationInstance>> results = extractor.extract(
         "Mary lives in Paris.",
@@ -61,7 +62,7 @@ class GLiNER4jRelationExtractorPerCallOverrideTest {
   void defaultRelationsStillWorkAfterOverrideCall() {
     var defaults = List.of(new RelationDefinition("works_for"));
 
-    try (var extractor = GLiNER4jRelationExtractor.load(MODEL_DIR, defaults)) {
+    try (var extractor = RelationExtractor.load(MODEL_DIR, defaults)) {
       // First call: override
       extractor.extract(
         "Mary lives in Paris.",
@@ -80,7 +81,7 @@ class GLiNER4jRelationExtractorPerCallOverrideTest {
   void perCallOverrideWithThreshold() {
     var defaults = List.of(new RelationDefinition("works_for"));
 
-    try (var extractor = GLiNER4jRelationExtractor.load(MODEL_DIR, defaults)) {
+    try (var extractor = RelationExtractor.load(MODEL_DIR, defaults)) {
       var override = List.of(new RelationDefinition("lives_in"));
       Map<String, List<RelationInstance>> results = extractor.extract(
         "Mary lives in Paris.",

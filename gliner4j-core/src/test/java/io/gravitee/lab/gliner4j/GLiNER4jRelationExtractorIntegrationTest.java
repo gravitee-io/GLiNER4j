@@ -17,6 +17,7 @@ package io.gravitee.lab.gliner4j;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.gravitee.lab.gliner4j.extractor.RelationExtractor;
 import io.gravitee.lab.gliner4j.schema.RelationDefinition;
 import io.gravitee.lab.gliner4j.schema.RelationInstance;
 import java.nio.file.Files;
@@ -50,7 +51,7 @@ class GLiNER4jRelationExtractorIntegrationTest {
   void extractsSingleWorksForRelation() {
     var relations = List.of(new RelationDefinition("works_for"));
 
-    try (var extractor = GLiNER4jRelationExtractor.load(MODEL_DIR, relations)) {
+    try (var extractor = RelationExtractor.load(MODEL_DIR, relations)) {
       Map<String, List<RelationInstance>> results = extractor.extract(
         "John works for Apple."
       );
@@ -72,7 +73,7 @@ class GLiNER4jRelationExtractorIntegrationTest {
   void extractsMultipleInstancesOfSameRelation() {
     var relations = List.of(new RelationDefinition("works_for"));
 
-    try (var extractor = GLiNER4jRelationExtractor.load(MODEL_DIR, relations)) {
+    try (var extractor = RelationExtractor.load(MODEL_DIR, relations)) {
       Map<String, List<RelationInstance>> results = extractor.extract(
         "John works for Microsoft. Mary works for Google. Bob works for Apple."
       );
@@ -89,7 +90,7 @@ class GLiNER4jRelationExtractorIntegrationTest {
       new RelationDefinition("lives_in")
     );
 
-    try (var extractor = GLiNER4jRelationExtractor.load(MODEL_DIR, relations)) {
+    try (var extractor = RelationExtractor.load(MODEL_DIR, relations)) {
       Map<String, List<RelationInstance>> results = extractor.extract(
         "John works for Apple and lives in San Francisco."
       );
@@ -115,7 +116,7 @@ class GLiNER4jRelationExtractorIntegrationTest {
       new RelationDefinition("partnered_with")
     );
 
-    try (var extractor = GLiNER4jRelationExtractor.load(MODEL_DIR, relations)) {
+    try (var extractor = RelationExtractor.load(MODEL_DIR, relations)) {
       Map<String, List<RelationInstance>> results = extractor.extract(
         "Pure technical noise that contains no real relations."
       );
@@ -137,7 +138,7 @@ class GLiNER4jRelationExtractorIntegrationTest {
       new RelationDefinition("lives_in")
     );
 
-    try (var extractor = GLiNER4jRelationExtractor.load(MODEL_DIR, relations)) {
+    try (var extractor = RelationExtractor.load(MODEL_DIR, relations)) {
       Map<String, List<RelationInstance>> results = extractor.extract("");
 
       assertThat(results).isEmpty();
@@ -150,7 +151,7 @@ class GLiNER4jRelationExtractorIntegrationTest {
     var text =
       "John works for Microsoft. Mary works for Google. Bob works for Apple.";
 
-    try (var extractor = GLiNER4jRelationExtractor.load(MODEL_DIR, relations)) {
+    try (var extractor = RelationExtractor.load(MODEL_DIR, relations)) {
       var lowThreshold = extractor.extract(text, 0.3f);
       var highThreshold = extractor.extract(text, 0.95f);
 
@@ -169,7 +170,7 @@ class GLiNER4jRelationExtractorIntegrationTest {
       )
     );
 
-    try (var extractor = GLiNER4jRelationExtractor.load(MODEL_DIR, relations)) {
+    try (var extractor = RelationExtractor.load(MODEL_DIR, relations)) {
       Map<String, List<RelationInstance>> results = extractor.extract(
         "John works for Apple."
       );
@@ -192,7 +193,7 @@ class GLiNER4jRelationExtractorIntegrationTest {
       )
     );
 
-    try (var extractor = GLiNER4jRelationExtractor.load(MODEL_DIR, relations)) {
+    try (var extractor = RelationExtractor.load(MODEL_DIR, relations)) {
       Map<String, List<RelationInstance>> results = extractor.extract(
         "John works for Apple.",
         0.3f
@@ -211,7 +212,7 @@ class GLiNER4jRelationExtractorIntegrationTest {
   void instanceConfidenceIsMinimumAcrossFields() {
     var relations = List.of(new RelationDefinition("works_for"));
 
-    try (var extractor = GLiNER4jRelationExtractor.load(MODEL_DIR, relations)) {
+    try (var extractor = RelationExtractor.load(MODEL_DIR, relations)) {
       Map<String, List<RelationInstance>> results = extractor.extract(
         "John works for Apple."
       );

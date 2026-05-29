@@ -36,7 +36,6 @@ public record RelationDefinition(
   private static final List<String> DEFAULT_FIELDS = List.of("head", "tail");
 
   public RelationDefinition {
-    fields = List.copyOf(fields);
     if (fields.isEmpty()) {
       throw new IllegalArgumentException(
         "RelationDefinition '" + name + "' must declare at least one field"

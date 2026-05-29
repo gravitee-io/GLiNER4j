@@ -17,6 +17,7 @@ package io.gravitee.lab.gliner4j;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.gravitee.lab.gliner4j.extractor.SchemaExtractor;
 import io.gravitee.lab.gliner4j.schema.StructureDefinition;
 import io.gravitee.lab.gliner4j.schema.StructureInstance;
 import java.nio.file.Files;
@@ -50,7 +51,7 @@ class GLiNER4jSchemaExtractorEdgeCaseTest {
 
   @Test
   void extract_nullText_returnsEmpty() {
-    try (var extractor = GLiNER4jSchemaExtractor.load(MODEL_DIR, STRUCTURES)) {
+    try (var extractor = SchemaExtractor.load(MODEL_DIR, STRUCTURES)) {
       Map<String, List<StructureInstance>> result = extractor.extract(
         (String) null
       );
@@ -60,7 +61,7 @@ class GLiNER4jSchemaExtractorEdgeCaseTest {
 
   @Test
   void extract_emptyText_returnsEmpty() {
-    try (var extractor = GLiNER4jSchemaExtractor.load(MODEL_DIR, STRUCTURES)) {
+    try (var extractor = SchemaExtractor.load(MODEL_DIR, STRUCTURES)) {
       Map<String, List<StructureInstance>> result = extractor.extract("");
       assertThat(result).isEmpty();
     }
@@ -68,7 +69,7 @@ class GLiNER4jSchemaExtractorEdgeCaseTest {
 
   @Test
   void extract_blankText_returnsEmpty() {
-    try (var extractor = GLiNER4jSchemaExtractor.load(MODEL_DIR, STRUCTURES)) {
+    try (var extractor = SchemaExtractor.load(MODEL_DIR, STRUCTURES)) {
       Map<String, List<StructureInstance>> result = extractor.extract("   ");
       assertThat(result).isEmpty();
     }
@@ -78,7 +79,7 @@ class GLiNER4jSchemaExtractorEdgeCaseTest {
 
   @Test
   void extractWithOverride_blankText_returnsEmpty() {
-    try (var extractor = GLiNER4jSchemaExtractor.load(MODEL_DIR, STRUCTURES)) {
+    try (var extractor = SchemaExtractor.load(MODEL_DIR, STRUCTURES)) {
       var override = List.of(
         StructureDefinition.builder("contact").string("name").build()
       );
@@ -95,7 +96,7 @@ class GLiNER4jSchemaExtractorEdgeCaseTest {
 
   @Test
   void extractBatch_nullList_returnsEmpty() {
-    try (var extractor = GLiNER4jSchemaExtractor.load(MODEL_DIR, STRUCTURES)) {
+    try (var extractor = SchemaExtractor.load(MODEL_DIR, STRUCTURES)) {
       List<Map<String, List<StructureInstance>>> result =
         extractor.extractBatch(null);
       assertThat(result).isEmpty();
@@ -104,7 +105,7 @@ class GLiNER4jSchemaExtractorEdgeCaseTest {
 
   @Test
   void extractBatch_allBlankTexts_returnsEmptyMaps() {
-    try (var extractor = GLiNER4jSchemaExtractor.load(MODEL_DIR, STRUCTURES)) {
+    try (var extractor = SchemaExtractor.load(MODEL_DIR, STRUCTURES)) {
       var texts = List.of("", " ", "  \t  ");
       List<Map<String, List<StructureInstance>>> result =
         extractor.extractBatch(texts);
@@ -115,7 +116,7 @@ class GLiNER4jSchemaExtractorEdgeCaseTest {
 
   @Test
   void extractBatch_mixedNullAndNormal_returnsCorrectShape() {
-    try (var extractor = GLiNER4jSchemaExtractor.load(MODEL_DIR, STRUCTURES)) {
+    try (var extractor = SchemaExtractor.load(MODEL_DIR, STRUCTURES)) {
       var texts = new ArrayList<String>();
       texts.add(null);
       texts.add("  ");

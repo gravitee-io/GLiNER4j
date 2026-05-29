@@ -15,10 +15,10 @@
  */
 package io.gravitee.lab.gliner4j;
 
+import io.gravitee.lab.gliner4j.processor.BatchPreprocessor;
 import io.gravitee.lab.gliner4j.processor.InputAssembler;
 import io.gravitee.lab.gliner4j.processor.PreprocessedInput;
 import io.gravitee.lab.gliner4j.processor.SchemaEncoder;
-import io.gravitee.lab.gliner4j.processor.TextEncoder;
 import io.gravitee.lab.gliner4j.runtime.BaseRuntime;
 import io.gravitee.lab.gliner4j.runtime.GLiNER4jClassifierRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
@@ -26,7 +26,6 @@ import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
-import io.gravitee.lab.gliner4j.tokenizer.WhitespaceTokenSplitter;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -50,30 +49,26 @@ import lombok.extern.slf4j.Slf4j;
  * }</pre>
  */
 @Slf4j
-public class GLiNER4jClassifier implements AutoCloseable {
-
-  private final GLiNER4jConfig config;
-  private final List<ClassificationLabel> labels;
-  private final DjlTokenizerWrapper tokenizer;
-  private final GLiNER4jClassifierRuntime runtime;
-  private final InputAssembler inputAssembler;
-  private final WhitespaceTokenSplitter splitter;
-  private final GLiNER4jTelemetry telemetry;
+public final class GLiNER4jClassifier
+  extends AbstractNLP<
+    ClassificationLabel,
+    List<ClassificationResult>,
+    GLiNER4jClassifierRuntime
+  > {
 
   private GLiNER4jClassifier(
     GLiNER4jConfig config,
-    List<ClassificationLabel> labels,
     DjlTokenizerWrapper tokenizer,
     GLiNER4jClassifierRuntime runtime,
     InputAssembler inputAssembler
   ) {
-    this.config = config;
-    this.labels = List.copyOf(labels);
-    this.tokenizer = tokenizer;
-    this.runtime = runtime;
-    this.inputAssembler = inputAssembler;
-    this.splitter = new WhitespaceTokenSplitter();
-    this.telemetry = new GLiNER4jTelemetry("classify");
+    super(
+      config,
+      tokenizer,
+      runtime,
+      inputAssembler,
+      new GLiNER4jTelemetry("classify")
+    );
   }
 
   /**
@@ -156,19 +151,13 @@ public class GLiNER4jClassifier implements AutoCloseable {
       variant,
       runtimeConfig
     );
-    var schemaEncoder = createSchemaEncoder(labels);
+    var schemaEncoder = labelSchemaEncoder(labels);
     var inputAssembler = new InputAssembler(tokenizer, schemaEncoder);
 
     runtime.initEncoderBuffers(inputAssembler.getSchemaPrefixIds());
 
     log.info("GLiNER4jClassifier loaded successfully");
-    return new GLiNER4jClassifier(
-      config,
-      labels,
-      tokenizer,
-      runtime,
-      inputAssembler
-    );
+    return new GLiNER4jClassifier(config, tokenizer, runtime, inputAssembler);
   }
 
   /**
@@ -178,7 +167,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
    * @return list of classification results above threshold
    */
   public List<ClassificationResult> classify(String text) {
-    return classify(text, config.getDefaultThreshold());
+    return doExtractOnce(text, config.getDefaultThreshold());
   }
 
   /**
@@ -189,28 +178,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
    * @return list of classification results above threshold, sorted by confidence descending
    */
   public List<ClassificationResult> classify(String text, float threshold) {
-    long startNanos = System.nanoTime();
-    if (text == null || text.isBlank()) {
-      telemetry.record(0.0, 1, 0);
-      return List.of();
-    }
-
-    var textEncoder = new TextEncoder(text, splitter);
-    if (textEncoder.getTextLen() == 0) {
-      telemetry.record(0.0, 1, 0);
-      return List.of();
-    }
-
-    var input = inputAssembler.assemble(textEncoder);
-    var hiddenStates = runtime.runEncoder(
-      input.inputIds(),
-      input.attentionMask()
-    );
-
-    var result = classifyFromHiddenStates(hiddenStates, input, threshold);
-    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-    telemetry.record(durationMs, 1, result.size());
-    return result;
+    return doExtractOnce(text, threshold);
   }
 
   /**
@@ -224,7 +192,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
     String text,
     List<ClassificationLabel> labels
   ) {
-    return classify(text, labels, config.getDefaultThreshold());
+    return doExtractOverride(text, labels, config.getDefaultThreshold());
   }
 
   /**
@@ -240,31 +208,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
     List<ClassificationLabel> labels,
     float threshold
   ) {
-    long startNanos = System.nanoTime();
-    if (text == null || text.isBlank()) {
-      telemetry.record(0.0, 1, 0);
-      return List.of();
-    }
-
-    var schemaEncoder = createSchemaEncoder(labels);
-    var overrideAssembler = new InputAssembler(tokenizer, schemaEncoder);
-
-    var textEncoder = new TextEncoder(text, splitter);
-    if (textEncoder.getTextLen() == 0) {
-      telemetry.record(0.0, 1, 0);
-      return List.of();
-    }
-
-    var input = overrideAssembler.assemble(textEncoder);
-    var hiddenStates = runtime.runEncoderFull(
-      input.inputIds(),
-      input.attentionMask()
-    );
-
-    var result = classifyFromHiddenStates(hiddenStates, input, threshold);
-    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-    telemetry.record(durationMs, 1, result.size());
-    return result;
+    return doExtractOverride(text, labels, threshold);
   }
 
   /**
@@ -294,26 +238,9 @@ public class GLiNER4jClassifier implements AutoCloseable {
     long startNanos = System.nanoTime();
     int batchSize = texts.size();
 
-    // 1. Preprocess all texts and find max sequence length
-    var inputs = new PreprocessedInput[batchSize];
-    int maxSeqLen = 0;
-    int nonEmptyCount = 0;
-
-    for (int i = 0; i < batchSize; i++) {
-      var text = texts.get(i);
-      if (text == null || text.isBlank()) {
-        inputs[i] = null;
-        continue;
-      }
-      var textEncoder = new TextEncoder(text, splitter);
-      if (textEncoder.getTextLen() == 0) {
-        inputs[i] = null;
-        continue;
-      }
-      inputs[i] = inputAssembler.assemble(textEncoder);
-      maxSeqLen = Math.max(maxSeqLen, inputs[i].inputIds().length);
-      nonEmptyCount++;
-    }
+    // 1. Preprocess and pack the contiguous batch (shared with other facades)
+    var preproc = BatchPreprocessor.preprocess(texts, inputAssembler);
+    int nonEmptyCount = preproc.nonEmptyCount();
 
     // Short-circuit: all texts are empty
     if (nonEmptyCount == 0) {
@@ -326,35 +253,26 @@ public class GLiNER4jClassifier implements AutoCloseable {
       return emptyResults;
     }
 
-    // 2. Build batched encoder inputs (only non-empty texts)
-    var batchInputIds = new long[nonEmptyCount][];
-    var batchAttentionMask = new long[nonEmptyCount][];
-    var batchIndices = new int[nonEmptyCount];
-    int slot = 0;
+    var inputs = preproc.inputs();
+    var batchIndices = preproc.batchIndices();
 
-    for (int i = 0; i < batchSize; i++) {
-      if (inputs[i] != null) {
-        batchInputIds[slot] = inputs[i].inputIds();
-        batchAttentionMask[slot] = inputs[i].attentionMask();
-        batchIndices[slot] = i;
-        slot++;
-      }
-    }
-
-    // 3. Single batched encoder call
+    // 2. Single batched encoder call
     var batchedHiddenStates = runtime.runEncoderBatch(
-      batchInputIds,
-      batchAttentionMask,
-      maxSeqLen
+      preproc.batchInputIds(),
+      preproc.batchAttentionMask(),
+      preproc.maxSeqLen()
     );
 
-    // 4. Per-text: extract label embeddings and run classifier head via virtual threads
-    @SuppressWarnings("unchecked")
-    var futures = new Future[nonEmptyCount];
+    // 3. Per-text fanout: extract label embeddings + classifier head MLP on virtual threads.
     var results = new ArrayList<List<ClassificationResult>>(batchSize);
     for (int i = 0; i < batchSize; i++) {
       results.add(List.of());
     }
+
+    @SuppressWarnings("unchecked")
+    var futures = (Future<
+      List<ClassificationResult>
+    >[]) new Future[nonEmptyCount];
 
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
       for (int s = 0; s < nonEmptyCount; s++) {
@@ -362,7 +280,6 @@ public class GLiNER4jClassifier implements AutoCloseable {
         futures[si] = executor.submit(() -> {
           int origIdx = batchIndices[si];
           var input = inputs[origIdx];
-
           var labelEmbs = extractLabelEmbeddings(
             batchedHiddenStates[si],
             input
@@ -373,10 +290,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
 
       for (int s = 0; s < nonEmptyCount; s++) {
         try {
-          int origIdx = batchIndices[s];
-          @SuppressWarnings("unchecked")
-          var result = (List<ClassificationResult>) futures[s].get();
-          results.set(origIdx, result);
+          results.set(batchIndices[s], futures[s].get());
         } catch (ExecutionException e) {
           throw new RuntimeException(
             "Classifier head failed for batch slot " + s,
@@ -384,44 +298,63 @@ public class GLiNER4jClassifier implements AutoCloseable {
           );
         } catch (InterruptedException e) {
           Thread.currentThread().interrupt();
-          throw new RuntimeException("Batch classification interrupted", e);
+          throw new RuntimeException("Classifier batch fanout interrupted", e);
         }
       }
     }
 
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-    long totalEntities = results.stream().mapToLong(List::size).sum();
-    telemetry.record(durationMs, batchSize, totalEntities);
+    long totalLabels = results.stream().mapToLong(List::size).sum();
+    telemetry.record(durationMs, batchSize, totalLabels);
     return results;
   }
 
-  private List<ClassificationResult> classifyFromHiddenStates(
+  // ---- AbstractTaskFacade hooks -------------------------------------------
+
+  @Override
+  protected SchemaEncoder buildSchemaEncoder(
+    List<ClassificationLabel> definitions
+  ) {
+    return labelSchemaEncoder(definitions);
+  }
+
+  @Override
+  protected List<ClassificationResult> emptyResult() {
+    return List.of();
+  }
+
+  @Override
+  protected long resultSize(List<ClassificationResult> result) {
+    return result.size();
+  }
+
+  @Override
+  protected List<ClassificationResult> decodeFromHiddenStates(
     float[][][] hiddenStates,
     PreprocessedInput input,
+    String text,
     float threshold
   ) {
     var labelEmbs = extractLabelEmbeddings(hiddenStates[0], input);
     return applyClassifierHead(labelEmbs, input, threshold);
   }
 
+  // ---- classifier-specific helpers ----------------------------------------
+
   /**
-   * Extracts label embeddings from hidden states at [L] token positions.
+   * Extracts label embeddings from hidden states at the precomputed [L] marker positions.
+   * Positions are baked into the assembler at construction time (skips index 0 which holds [P]).
    */
   private float[][] extractLabelEmbeddings(
     float[][] hiddenState,
     PreprocessedInput input
   ) {
-    int hiddenSize = config.getHiddenSize();
-    long lTokenId = config.getSpecialTokenIds().getOrDefault("L", -1L);
-
-    var labelEmbsList = new ArrayList<float[]>();
-    for (int i = 0; i < input.inputIds().length; i++) {
-      if (input.inputIds()[i] == lTokenId) {
-        labelEmbsList.add(hiddenState[i]);
-      }
+    var positions = input.schemaTokenPositions();
+    var labelEmbs = new float[positions.length - 1][];
+    for (int i = 0; i < labelEmbs.length; i++) {
+      labelEmbs[i] = hiddenState[positions[i + 1]];
     }
-
-    return labelEmbsList.toArray(new float[0][]);
+    return labelEmbs;
   }
 
   /**
@@ -454,7 +387,7 @@ public class GLiNER4jClassifier implements AutoCloseable {
     return results;
   }
 
-  private static SchemaEncoder createSchemaEncoder(
+  private static SchemaEncoder labelSchemaEncoder(
     List<ClassificationLabel> labels
   ) {
     return new SchemaEncoder(
@@ -467,12 +400,5 @@ public class GLiNER4jClassifier implements AutoCloseable {
 
   private static float sigmoid(float x) {
     return 1.0f / (1.0f + (float) Math.exp(-x));
-  }
-
-  @Override
-  public void close() {
-    runtime.close();
-    tokenizer.close();
-    log.info("GLiNER4jClassifier closed");
   }
 }

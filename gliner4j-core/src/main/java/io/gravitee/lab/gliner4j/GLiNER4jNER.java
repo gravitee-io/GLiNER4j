@@ -16,10 +16,10 @@
 package io.gravitee.lab.gliner4j;
 
 import io.gravitee.lab.gliner4j.postprocess.SpanDecoder;
+import io.gravitee.lab.gliner4j.processor.BatchPreprocessor;
 import io.gravitee.lab.gliner4j.processor.InputAssembler;
 import io.gravitee.lab.gliner4j.processor.PreprocessedInput;
 import io.gravitee.lab.gliner4j.processor.SchemaEncoder;
-import io.gravitee.lab.gliner4j.processor.TextEncoder;
 import io.gravitee.lab.gliner4j.runtime.BaseRuntime;
 import io.gravitee.lab.gliner4j.runtime.GLiNER4jNERRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
@@ -28,7 +28,6 @@ import io.gravitee.lab.gliner4j.schema.EntitySpan;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
 import io.gravitee.lab.gliner4j.tokenizer.TokenMapping;
-import io.gravitee.lab.gliner4j.tokenizer.WhitespaceTokenSplitter;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
@@ -49,32 +48,29 @@ import lombok.extern.slf4j.Slf4j;
  * }</pre>
  */
 @Slf4j
-public class GLiNER4jNER implements AutoCloseable {
+public final class GLiNER4jNER
+  extends AbstractNLP<
+    EntityDefinition,
+    Map<String, List<EntitySpan>>,
+    GLiNER4jNERRuntime
+  > {
 
-  private final GLiNER4jConfig config;
-  private final List<EntityDefinition> entities;
-  private final DjlTokenizerWrapper tokenizer;
-  private final GLiNER4jNERRuntime runtime;
-  private final InputAssembler inputAssembler;
-  private final WhitespaceTokenSplitter splitter;
   private final SpanDecoder spanDecoder;
-  private final GLiNER4jTelemetry telemetry;
 
   private GLiNER4jNER(
     GLiNER4jConfig config,
-    List<EntityDefinition> entities,
     DjlTokenizerWrapper tokenizer,
     GLiNER4jNERRuntime runtime,
     InputAssembler inputAssembler
   ) {
-    this.config = config;
-    this.entities = List.copyOf(entities);
-    this.tokenizer = tokenizer;
-    this.runtime = runtime;
-    this.inputAssembler = inputAssembler;
-    this.splitter = new WhitespaceTokenSplitter();
+    super(
+      config,
+      tokenizer,
+      runtime,
+      inputAssembler,
+      new GLiNER4jTelemetry("extract")
+    );
     this.spanDecoder = new SpanDecoder();
-    this.telemetry = new GLiNER4jTelemetry("extract");
   }
 
   /**
@@ -156,20 +152,14 @@ public class GLiNER4jNER implements AutoCloseable {
     var config = GLiNER4jConfig.load(modelDir);
     var tokenizer = new DjlTokenizerWrapper(modelDir);
     var runtime = new GLiNER4jNERRuntime(modelDir, variant, runtimeConfig);
-    var schemaEncoder = createSchemaEncoder(entities);
+    var schemaEncoder = entitySchemaEncoder(entities);
     var inputAssembler = new InputAssembler(tokenizer, schemaEncoder);
 
     // Pre-allocate encoder buffers with the constant schema prefix
     runtime.initEncoderBuffers(inputAssembler.getSchemaPrefixIds());
 
     log.info("GLiNER4jNER model loaded successfully");
-    return new GLiNER4jNER(
-      config,
-      entities,
-      tokenizer,
-      runtime,
-      inputAssembler
-    );
+    return new GLiNER4jNER(config, tokenizer, runtime, inputAssembler);
   }
 
   /**
@@ -179,7 +169,18 @@ public class GLiNER4jNER implements AutoCloseable {
    * @return map of entity type to list of detected spans
    */
   public Map<String, List<EntitySpan>> extract(String text) {
-    return extract(text, config.getDefaultThreshold());
+    return doExtractOnce(text, config.getDefaultThreshold());
+  }
+
+  /**
+   * Extracts entities from the given text using the specified threshold.
+   *
+   * @param text the input text to analyze
+   * @param threshold minimum confidence score (0..1) for span inclusion
+   * @return map of entity type to list of detected spans
+   */
+  public Map<String, List<EntitySpan>> extract(String text, float threshold) {
+    return doExtractOnce(text, threshold);
   }
 
   /**
@@ -193,7 +194,7 @@ public class GLiNER4jNER implements AutoCloseable {
     String text,
     List<EntityDefinition> entities
   ) {
-    return extract(text, entities, config.getDefaultThreshold());
+    return doExtractOverride(text, entities, config.getDefaultThreshold());
   }
 
   /**
@@ -209,36 +210,7 @@ public class GLiNER4jNER implements AutoCloseable {
     List<EntityDefinition> entities,
     float threshold
   ) {
-    long startNanos = System.nanoTime();
-    if (text == null || text.isBlank()) {
-      telemetry.record(0.0, 1, 0);
-      return Map.of();
-    }
-
-    // Build a fresh schema encoder and input assembler for the override entities
-    var schemaEncoder = createSchemaEncoder(entities);
-    var overrideAssembler = new InputAssembler(tokenizer, schemaEncoder);
-
-    // Split text into words with char offsets
-    var textEncoder = new TextEncoder(text, splitter);
-    if (textEncoder.getTextLen() == 0) {
-      telemetry.record(0.0, 1, 0);
-      return Map.of();
-    }
-
-    // Assemble full token sequence with the override schema
-    var input = overrideAssembler.assemble(textEncoder);
-
-    // Run encoder without buffer cache (schema prefix differs from load-time)
-    var hiddenStates = runtime.runEncoderFull(
-      input.inputIds(),
-      input.attentionMask()
-    );
-
-    // Steps 4-10 are identical to the default extract path
-    var result = extractFromHiddenStates(hiddenStates, input, text, threshold);
-    recordTelemetry(startNanos, result);
-    return result;
+    return doExtractOverride(text, entities, threshold);
   }
 
   /**
@@ -274,26 +246,9 @@ public class GLiNER4jNER implements AutoCloseable {
     long startNanos = System.nanoTime();
     int batchSize = texts.size();
 
-    // 1. Preprocess all texts and find max sequence length
-    var inputs = new PreprocessedInput[batchSize];
-    int maxSeqLen = 0;
-    int nonEmptyCount = 0;
-
-    for (int i = 0; i < batchSize; i++) {
-      var text = texts.get(i);
-      if (text == null || text.isBlank()) {
-        inputs[i] = null;
-        continue;
-      }
-      var textEncoder = new TextEncoder(text, splitter);
-      if (textEncoder.getTextLen() == 0) {
-        inputs[i] = null;
-        continue;
-      }
-      inputs[i] = inputAssembler.assemble(textEncoder);
-      maxSeqLen = Math.max(maxSeqLen, inputs[i].inputIds().length);
-      nonEmptyCount++;
-    }
+    // 1. Preprocess and pack the contiguous batch (shared with other facades)
+    var preproc = BatchPreprocessor.preprocess(texts, inputAssembler);
+    int nonEmptyCount = preproc.nonEmptyCount();
 
     // Short-circuit: all texts are empty
     if (nonEmptyCount == 0) {
@@ -308,36 +263,23 @@ public class GLiNER4jNER implements AutoCloseable {
       return emptyResults;
     }
 
-    // 2. Build batched encoder inputs (only non-empty texts)
-    var batchInputIds = new long[nonEmptyCount][];
-    var batchAttentionMask = new long[nonEmptyCount][];
-    var batchIndices = new int[nonEmptyCount]; // maps batch slot -> original index
-    int slot = 0;
+    var inputs = preproc.inputs();
+    var batchIndices = preproc.batchIndices();
 
-    for (int i = 0; i < batchSize; i++) {
-      if (inputs[i] != null) {
-        batchInputIds[slot] = inputs[i].inputIds();
-        batchAttentionMask[slot] = inputs[i].attentionMask();
-        batchIndices[slot] = i;
-        slot++;
-      }
-    }
-
-    // 3. Single batched encoder call
+    // 2. Single batched encoder call
     var batchedHiddenStates = runtime.runEncoderBatch(
-      batchInputIds,
-      batchAttentionMask,
-      maxSeqLen
+      preproc.batchInputIds(),
+      preproc.batchAttentionMask(),
+      preproc.maxSeqLen()
     );
 
-    // 4. Extract schema embeddings once (identical for all texts in the batch)
-    var firstInput = inputs[batchIndices[0]];
+    // 3. Extract schema embeddings once (identical for all texts in the batch)
     var schemaEmbs = extractSchemaEmbeddings(
       batchedHiddenStates[0],
-      firstInput
+      inputs[batchIndices[0]]
     );
 
-    // 5. Extract text embeddings and find maxTextLen
+    // 4. Extract text embeddings and find maxTextLen
     int hiddenSize = config.getHiddenSize();
     int maxWidth = config.getMaxWidth();
     int maxTextLen = 0;
@@ -353,7 +295,7 @@ public class GLiNER4jNER implements AutoCloseable {
       extractTextEmbeddings(batchedHiddenStates[s], input, perTextEmbs[s]);
     }
 
-    // 6. Build padded batch for span_rep (single ONNX call)
+    // 5. Build padded batch for span_rep (single ONNX call)
     int maxNumSpans = maxTextLen * maxWidth;
     var batchTextEmbs = new float[nonEmptyCount][maxTextLen][hiddenSize];
     var batchSpanIdxFlat = new long[nonEmptyCount * maxNumSpans * 2];
@@ -383,14 +325,18 @@ public class GLiNER4jNER implements AutoCloseable {
       maxNumSpans
     );
 
-    // 7. Per-text: run scoring_head and decode in parallel via virtual threads
-    //    OrtSession.run() is thread-safe; scoring_head creates fresh tensors per call
-    @SuppressWarnings("unchecked")
-    var futures = new Future[nonEmptyCount];
+    // 6. Per-text fanout: scoring_head + decode on virtual threads.
+    //    OrtSession.run() is thread-safe; on CUDA, independent runs can dispatch onto
+    //    separate streams and the GPU overlaps their kernels on its SMs.
     var results = new ArrayList<Map<String, List<EntitySpan>>>(batchSize);
     for (int i = 0; i < batchSize; i++) {
       results.add(Map.of());
     }
+
+    @SuppressWarnings("unchecked")
+    var futures = (Future<
+      Map<String, List<EntitySpan>>
+    >[]) new Future[nonEmptyCount];
 
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
       for (int s = 0; s < nonEmptyCount; s++) {
@@ -400,11 +346,9 @@ public class GLiNER4jNER implements AutoCloseable {
           var input = inputs[origIdx];
           int textLen = textLens[si];
 
-          // Extract the per-text span_rep slice [textLen][maxWidth][hiddenSize]
-          var spanRep = new float[textLen][maxWidth][hiddenSize];
-          for (int i = 0; i < textLen; i++) {
-            System.arraycopy(batchSpanRep4d[si][i], 0, spanRep[i], 0, maxWidth);
-          }
+          // Slice the per-text span_rep view [textLen][maxWidth][hiddenSize]
+          // from the padded batch tensor. Reference-only copy; inner rows are shared.
+          var spanRep = Arrays.copyOfRange(batchSpanRep4d[si], 0, textLen);
 
           var scoringResult = runtime.runScoringHead(
             spanRep,
@@ -440,21 +384,17 @@ public class GLiNER4jNER implements AutoCloseable {
         });
       }
 
-      // Collect results preserving original order
       for (int s = 0; s < nonEmptyCount; s++) {
         try {
-          int origIdx = batchIndices[s];
-          @SuppressWarnings("unchecked")
-          var result = (Map<String, List<EntitySpan>>) futures[s].get();
-          results.set(origIdx, result);
+          results.set(batchIndices[s], futures[s].get());
         } catch (ExecutionException e) {
           throw new RuntimeException(
-            "Scoring head failed for batch slot " + s,
+            "NER scoring head failed for batch slot " + s,
             e.getCause()
           );
         } catch (InterruptedException e) {
           Thread.currentThread().interrupt();
-          throw new RuntimeException("Batch scoring interrupted", e);
+          throw new RuntimeException("NER batch fanout interrupted", e);
         }
       }
     }
@@ -468,53 +408,34 @@ public class GLiNER4jNER implements AutoCloseable {
     return results;
   }
 
-  /**
-   * Extracts entities from the given text using the specified threshold.
-   *
-   * @param text the input text to analyze
-   * @param threshold minimum confidence score (0..1) for span inclusion
-   * @return map of entity type to list of detected spans
-   */
-  public Map<String, List<EntitySpan>> extract(String text, float threshold) {
-    long startNanos = System.nanoTime();
-    if (text == null || text.isBlank()) {
-      telemetry.record(0.0, 1, 0);
-      return Map.of();
-    }
+  // ---- AbstractTaskFacade hooks -------------------------------------------
 
-    // 1. Split text into words with char offsets
-    var textEncoder = new TextEncoder(text, splitter);
-    if (textEncoder.getTextLen() == 0) {
-      telemetry.record(0.0, 1, 0);
-      return Map.of();
-    }
-
-    // 2. Assemble full token sequence
-    var input = inputAssembler.assemble(textEncoder);
-
-    // 3. Run encoder (uses cached schema prefix buffer)
-    var hiddenStates = runtime.runEncoder(
-      input.inputIds(),
-      input.attentionMask()
-    );
-
-    // 4-10. Extract embeddings, score spans, decode, and group
-
-    var result = extractFromHiddenStates(hiddenStates, input, text, threshold);
-    recordTelemetry(startNanos, result);
-    return result;
+  @Override
+  protected SchemaEncoder buildSchemaEncoder(
+    List<EntityDefinition> definitions
+  ) {
+    return entitySchemaEncoder(definitions);
   }
 
-  private Map<String, List<EntitySpan>> extractFromHiddenStates(
+  @Override
+  protected Map<String, List<EntitySpan>> emptyResult() {
+    return Map.of();
+  }
+
+  @Override
+  protected long resultSize(Map<String, List<EntitySpan>> result) {
+    return result.values().stream().mapToLong(List::size).sum();
+  }
+
+  @Override
+  protected Map<String, List<EntitySpan>> decodeFromHiddenStates(
     float[][][] hiddenStates,
     PreprocessedInput input,
     String text,
     float threshold
   ) {
-    // 4. Extract embeddings from hidden states
     var embeddings = extractEmbeddings(hiddenStates[0], input);
 
-    // 5. Build flat span indices and run span_rep
     int maxWidth = config.getMaxWidth();
     int textLen = input.textLen();
     int numSpans = textLen * maxWidth;
@@ -525,7 +446,6 @@ public class GLiNER4jNER implements AutoCloseable {
     var spanRep4d = runtime.runSpanRepFlat(textEmbs3d, spanIdxFlat, numSpans);
     var spanRep = spanRep4d[0];
 
-    // 7. Run scoring head once with maxCount
     var scoringResult = runtime.runScoringHead(
       spanRep,
       embeddings.schemaEmbP,
@@ -533,14 +453,12 @@ public class GLiNER4jNER implements AutoCloseable {
       (long) config.getMaxCount()
     );
 
-    // 8. Predict count from logits
     int predCount = argmax(scoringResult.countLogits()[0]);
     log.debug("Predicted count: {}", predCount);
     if (predCount == 0) {
       return Map.of();
     }
 
-    // 9. Decode spans
     var spans = spanDecoder.decode(
       scoringResult.spanScores(),
       input.fieldNames(),
@@ -551,7 +469,6 @@ public class GLiNER4jNER implements AutoCloseable {
       threshold
     );
 
-    // 10. Group by type
     return spans
       .stream()
       .collect(
@@ -562,6 +479,8 @@ public class GLiNER4jNER implements AutoCloseable {
         )
       );
   }
+
+  // ---- NER-specific helpers -----------------------------------------------
 
   private ExtractedEmbeddings extractEmbeddings(
     float[][] hiddenState,
@@ -608,7 +527,7 @@ public class GLiNER4jNER implements AutoCloseable {
     return maxIdx;
   }
 
-  private static SchemaEncoder createSchemaEncoder(
+  private static SchemaEncoder entitySchemaEncoder(
     List<EntityDefinition> entities
   ) {
     return new SchemaEncoder(
@@ -617,13 +536,6 @@ public class GLiNER4jNER implements AutoCloseable {
       entities.stream().map(EntityDefinition::name).toList(),
       entities.stream().map(EntityDefinition::description).toList()
     );
-  }
-
-  @Override
-  public void close() {
-    runtime.close();
-    tokenizer.close();
-    log.info("GLiNER4jNER closed");
   }
 
   private record ExtractedEmbeddings(
@@ -641,28 +553,16 @@ public class GLiNER4jNER implements AutoCloseable {
     float[][] hiddenState,
     PreprocessedInput input
   ) {
-    int hiddenSize = config.getHiddenSize();
-    var specialTokenIds = config.getSpecialTokenIds();
-    long pTokenId = specialTokenIds.getOrDefault("P", -1L);
-    long eTokenId = specialTokenIds.getOrDefault("E", -1L);
-
-    var schemaEmbsList = new ArrayList<float[]>();
-    for (int i = 0; i < input.inputIds().length; i++) {
-      long tokenId = input.inputIds()[i];
-      if (tokenId == pTokenId || tokenId == eTokenId) {
-        schemaEmbsList.add(hiddenState[i]);
-      }
+    // Positions of [P] and each [E] marker are baked into the assembler at construction time —
+    // O(numFields) array lookups instead of an O(seqLen) input-id scan.
+    var positions = input.schemaTokenPositions();
+    float[] schemaEmbP = positions[0] >= 0
+      ? hiddenState[positions[0]]
+      : new float[config.getHiddenSize()];
+    var schemaEmbFields = new float[positions.length - 1][];
+    for (int i = 0; i < schemaEmbFields.length; i++) {
+      schemaEmbFields[i] = hiddenState[positions[i + 1]];
     }
-
-    float[] schemaEmbP = schemaEmbsList.isEmpty()
-      ? new float[hiddenSize]
-      : schemaEmbsList.get(0);
-    float[][] schemaEmbFields = new float[schemaEmbsList.size() -
-    1][hiddenSize];
-    for (int i = 1; i < schemaEmbsList.size(); i++) {
-      schemaEmbFields[i - 1] = schemaEmbsList.get(i);
-    }
-
     return new SchemaEmbeddings(schemaEmbP, schemaEmbFields);
   }
 
@@ -682,14 +582,5 @@ public class GLiNER4jNER implements AutoCloseable {
         seenWord[mapping.origIdx()] = true;
       }
     }
-  }
-
-  private void recordTelemetry(
-    long startNanos,
-    Map<String, List<EntitySpan>> result
-  ) {
-    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-    long entityCount = result.values().stream().mapToLong(List::size).sum();
-    telemetry.record(durationMs, 1, entityCount);
   }
 }

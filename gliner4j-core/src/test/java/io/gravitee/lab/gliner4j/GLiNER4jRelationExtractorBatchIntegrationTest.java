@@ -17,6 +17,7 @@ package io.gravitee.lab.gliner4j;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.gravitee.lab.gliner4j.extractor.RelationExtractor;
 import io.gravitee.lab.gliner4j.schema.RelationDefinition;
 import io.gravitee.lab.gliner4j.schema.RelationInstance;
 import java.nio.file.Files;
@@ -53,7 +54,7 @@ class GLiNER4jRelationExtractorBatchIntegrationTest {
       "Bob works for Google and lives in Berlin."
     );
 
-    try (var extractor = GLiNER4jRelationExtractor.load(MODEL_DIR, relations)) {
+    try (var extractor = RelationExtractor.load(MODEL_DIR, relations)) {
       List<Map<String, List<RelationInstance>>> batchResults =
         extractor.extractBatch(texts);
 
@@ -74,7 +75,7 @@ class GLiNER4jRelationExtractorBatchIntegrationTest {
       "Mary works for Google."
     );
 
-    try (var extractor = GLiNER4jRelationExtractor.load(MODEL_DIR, relations)) {
+    try (var extractor = RelationExtractor.load(MODEL_DIR, relations)) {
       List<Map<String, List<RelationInstance>>> batchResults =
         extractor.extractBatch(texts);
 
@@ -91,7 +92,7 @@ class GLiNER4jRelationExtractorBatchIntegrationTest {
     var relations = List.of(new RelationDefinition("works_for"));
     var texts = List.of("John works for Apple.", "Mary works for Google.");
 
-    try (var extractor = GLiNER4jRelationExtractor.load(MODEL_DIR, relations)) {
+    try (var extractor = RelationExtractor.load(MODEL_DIR, relations)) {
       var serial = texts.stream().map(extractor::extract).toList();
       var batch = extractor.extractBatch(texts);
 

@@ -36,7 +36,6 @@ import java.util.Objects;
 public record StructureDefinition(String name, List<StructureField> fields) {
   public StructureDefinition {
     Objects.requireNonNull(name, "name");
-    fields = List.copyOf(fields);
   }
 
   /**

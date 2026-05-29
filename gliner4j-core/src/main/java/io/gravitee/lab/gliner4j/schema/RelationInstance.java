@@ -15,7 +15,6 @@
  */
 package io.gravitee.lab.gliner4j.schema;
 
-import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -34,10 +33,6 @@ public record RelationInstance(
   Map<String, FieldSpan> fields,
   float confidence
 ) {
-  public RelationInstance {
-    fields = Map.copyOf(new LinkedHashMap<>(fields));
-  }
-
   /**
    * Convenience accessor for the conventional "head" field.
    *
