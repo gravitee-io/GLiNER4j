@@ -13,44 +13,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package io.gravitee.lab.gliner4j.arch.gliner2;
+package io.gravitee.lab.gliner4j.arch.gliclass;
 
 import io.gravitee.lab.gliner4j.arch.Architecture;
 import io.gravitee.lab.gliner4j.arch.LoadContext;
 import io.gravitee.lab.gliner4j.arch.ModelArchitecture;
 import io.gravitee.lab.gliner4j.arch.TaskType;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
-import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.strategy.ClassificationStrategy;
-import io.gravitee.lab.gliner4j.strategy.NerStrategy;
-import io.gravitee.lab.gliner4j.strategy.gliner2.Gliner2ClassificationStrategy;
-import io.gravitee.lab.gliner4j.strategy.gliner2.Gliner2NerStrategy;
+import io.gravitee.lab.gliner4j.strategy.gliclass.GliclassClassificationStrategy;
 import java.util.List;
 
 /**
- * The fastino GLiNER2 family. Supports every task GLiNER4j implements (NER, classification,
- * relation, structure) via the encoder → span_rep → count-aware scoring_head / classifier_head
- * graph set.
+ * The GLiClass family: zero-shot text classification via a uni-encoder + dot-product score head
+ * (e.g. gliclass-modern-base-v3.0, ModernBERT backbone). Classification only.
  */
-public final class Gliner2Architecture implements ModelArchitecture {
+public final class GliclassArchitecture implements ModelArchitecture {
 
   @Override
   public Architecture id() {
-    return Architecture.GLINER2;
+    return Architecture.GLICLASS;
   }
 
   @Override
   public boolean supports(TaskType task) {
-    // GLiNER2 is the original family and serves all currently implemented tasks.
-    return true;
-  }
-
-  @Override
-  public NerStrategy newNerStrategy(
-    LoadContext ctx,
-    List<EntityDefinition> entities
-  ) {
-    return Gliner2NerStrategy.create(ctx, entities);
+    return task == TaskType.CLASSIFICATION;
   }
 
   @Override
@@ -58,6 +45,6 @@ public final class Gliner2Architecture implements ModelArchitecture {
     LoadContext ctx,
     List<ClassificationLabel> labels
   ) {
-    return Gliner2ClassificationStrategy.create(ctx, labels);
+    return GliclassClassificationStrategy.create(ctx, labels);
   }
 }

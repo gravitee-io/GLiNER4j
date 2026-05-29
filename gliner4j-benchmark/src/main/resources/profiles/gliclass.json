@@ -1,0 +1,14 @@
+{
+  "displayName": "GLiClass Zero-Shot Topic Classification (ModernBERT-base v3)",
+  "modelDir": "models/gliclass-modern-base-onnx",
+  "labels": [
+    { "name": "technology", "description": "Computing, software, gadgets, AI, and the internet" },
+    { "name": "sports", "description": "Athletics, teams, matches, and competitions" },
+    { "name": "politics", "description": "Government, elections, legislation, and policy" },
+    { "name": "business", "description": "Companies, markets, finance, and the economy" },
+    { "name": "entertainment", "description": "Film, music, television, and celebrity culture" },
+    { "name": "science", "description": "Research, discoveries, space, and the natural world" },
+    { "name": "health", "description": "Medicine, wellness, fitness, and healthcare" },
+    { "name": "travel", "description": "Tourism, destinations, and journeys" }
+  ]
+}

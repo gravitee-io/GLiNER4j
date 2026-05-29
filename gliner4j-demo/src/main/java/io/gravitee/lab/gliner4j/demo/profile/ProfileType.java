@@ -18,7 +18,9 @@ package io.gravitee.lab.gliner4j.demo.profile;
 public enum ProfileType {
   BASE("base.json"),
   PII("pii.json"),
-  GLIGUARD("gliguard.json");
+  GLIGUARD("gliguard.json"),
+  GLICLASS("gliclass.json"),
+  GLICLASS_SENTIMENT("gliclass-sentiment.json");
 
   public final String filename;
 

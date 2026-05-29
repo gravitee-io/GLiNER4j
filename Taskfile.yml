@@ -33,6 +33,10 @@ vars:
   GLIGUARD_HF_LOCAL_DIR: "models/gliguard-hf"
   GLIGUARD_ONNX_OUTPUT_DIR: "models/gliguard-onnx"
 
+  # GLiClass model (knowledgator/gliclass-modern-base-v3.0 — ModernBERT zero-shot classification)
+  GLICLASS_HF_MODEL: "knowledgator/gliclass-modern-base-v3.0"
+  GLICLASS_ONNX_OUTPUT_DIR: "models/gliclass-modern-base-onnx"
+
 tasks:
   default:
     desc: Default — runs the base all-in-one chain (download + export, FP16 + INT8)
@@ -399,3 +403,46 @@ tasks:
         msg: "GLiGuard ONNX model directory not found. Run: task model:export:gliguard"
     cmds:
       - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.GLIGUARD_ONNX_OUTPUT_DIR}} . --commit-message "Upload GLiGuard ONNX model files (all variants) + model card"
+
+  # ── GLiClass model chain (knowledgator/gliclass-modern-base-v3.0) ───────────
+
+  gliclass:
+    desc: Export the GLiClass model to ONNX (encoder + score_head; FP32 + FP16 + INT8; verified vs PyTorch). Downloads the model from HuggingFace on first run.
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_gliclass_onnx.py --model-path {{.GLICLASS_HF_MODEL}} --output-dir {{.GLICLASS_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+    sources:
+      - scripts/export_gliclass_onnx.py
+    generates:
+      - "{{.GLICLASS_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
+      - "{{.GLICLASS_ONNX_OUTPUT_DIR}}/onnx/score_head.onnx"
+      - "{{.GLICLASS_ONNX_OUTPUT_DIR}}/onnx_quantized/encoder.onnx"
+      - "{{.GLICLASS_ONNX_OUTPUT_DIR}}/gliner4j_config.json"
+      - "{{.GLICLASS_ONNX_OUTPUT_DIR}}/tokenizer.json"
+
+  model:clean:gliclass:
+    desc: Remove exported GLiClass model files
+    prompt: This will delete all GLiClass model files. Continue?
+    cmds:
+      - rm -rf {{.GLICLASS_ONNX_OUTPUT_DIR}}
+
+  demo:gliclass:
+    desc: 'Run the GLiNER4j demo against the GLiClass zero-shot topic-classification profile (override VARIANT=onnx, EP=cuda|openvino|coreml)'
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliclass {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  demo:gliclass-sentiment:
+    desc: 'Run the GLiNER4j demo against the GLiClass zero-shot sentiment/emotion profile (same model, different labels)'
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliclass_sentiment {{.VARIANT}} {{.EP}}" 2>/dev/null

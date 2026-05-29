@@ -65,6 +65,38 @@ public class GLiNER4jConfig {
   private final Map<String, Long> specialTokenIds = Map.of();
 
   /**
+   * Family-specific config keys, kept under the {@code "architecture_config"} block so each model
+   * family can carry its own knobs without forking the shared schema. Empty for bundles that
+   * declare none. Read it through {@link #archInt}/{@link #archLong}/{@link #archBoolean}/{@link #archString}.
+   */
+  @Builder.Default
+  private final Map<String, Object> architectureConfig = Map.of();
+
+  /** Returns the {@code architecture_config} value for {@code key} as an int, or {@code def} if absent. */
+  public int archInt(String key, int def) {
+    var v = architectureConfig.get(key);
+    return v instanceof Number n ? n.intValue() : def;
+  }
+
+  /** Returns the {@code architecture_config} value for {@code key} as a long, or {@code def} if absent. */
+  public long archLong(String key, long def) {
+    var v = architectureConfig.get(key);
+    return v instanceof Number n ? n.longValue() : def;
+  }
+
+  /** Returns the {@code architecture_config} value for {@code key} as a boolean, or {@code def} if absent. */
+  public boolean archBoolean(String key, boolean def) {
+    var v = architectureConfig.get(key);
+    return v instanceof Boolean b ? b : def;
+  }
+
+  /** Returns the {@code architecture_config} value for {@code key} as a String, or {@code def} if absent. */
+  public String archString(String key, String def) {
+    var v = architectureConfig.get(key);
+    return v != null ? v.toString() : def;
+  }
+
+  /**
    * Loads configuration from gliner4j_config.json in the model directory.
    *
    * @param modelDir path to the model directory
@@ -94,6 +126,9 @@ public class GLiNER4jConfig {
         .usesSpanIdx(json.usesSpanIdx)
         .tokenPooling(json.tokenPooling)
         .specialTokenIds(json.specialTokenIds)
+        .architectureConfig(
+          json.architectureConfig != null ? json.architectureConfig : Map.of()
+        )
         .build();
     } catch (IOException e) {
       throw new RuntimeException("Failed to load config from " + configFile, e);
@@ -123,5 +158,8 @@ public class GLiNER4jConfig {
 
     @JsonProperty("special_token_ids")
     Map<String, Long> specialTokenIds = Map.of();
+
+    @JsonProperty("architecture_config")
+    Map<String, Object> architectureConfig = Map.of();
   }
 }

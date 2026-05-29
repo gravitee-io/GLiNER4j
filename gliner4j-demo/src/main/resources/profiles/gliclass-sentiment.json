@@ -1,0 +1,20 @@
+{
+  "displayName": "GLiClass Zero-Shot Sentiment & Emotion (ModernBERT-base v3)",
+  "modelDir": "models/gliclass-modern-base-onnx",
+  "labels": [
+    { "name": "positive", "description": "Expresses approval, satisfaction, or a favorable opinion" },
+    { "name": "negative", "description": "Expresses disapproval, dissatisfaction, or an unfavorable opinion" },
+    { "name": "neutral", "description": "Factual or impartial with no clear sentiment" },
+    { "name": "joy", "description": "Happiness, delight, or excitement" },
+    { "name": "anger", "description": "Frustration, irritation, or outrage" },
+    { "name": "sadness", "description": "Disappointment, grief, or sorrow" }
+  ],
+  "classifySamples": [
+    "I absolutely loved this product — it exceeded every one of my expectations!",
+    "This is the worst experience I have ever had with a company. Totally unacceptable.",
+    "The package arrived on Tuesday as scheduled.",
+    "I'm so excited, I can't wait for the trip next week!",
+    "I'm heartbroken that the show got cancelled after just one season.",
+    "The update is fine, though nothing about it really stands out."
+  ]
+}

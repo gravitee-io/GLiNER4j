@@ -1,0 +1,23 @@
+{
+  "displayName": "GLiClass Zero-Shot Topic Classification (ModernBERT-base v3)",
+  "modelDir": "models/gliclass-modern-base-onnx",
+  "labels": [
+    { "name": "technology", "description": "Computing, software, gadgets, AI, and the internet" },
+    { "name": "sports", "description": "Athletics, teams, matches, and competitions" },
+    { "name": "politics", "description": "Government, elections, legislation, and policy" },
+    { "name": "business", "description": "Companies, markets, finance, and the economy" },
+    { "name": "entertainment", "description": "Film, music, television, and celebrity culture" },
+    { "name": "science", "description": "Research, discoveries, space, and the natural world" },
+    { "name": "health", "description": "Medicine, wellness, fitness, and healthcare" },
+    { "name": "travel", "description": "Tourism, destinations, and journeys" }
+  ],
+  "classifySamples": [
+    "Apple unveiled its new M4 chip, promising a major leap in on-device neural engine performance.",
+    "The striker scored a hat-trick as the team clinched the championship title in stoppage time.",
+    "The senate passed the controversial bill after weeks of heated cross-party debate.",
+    "Astronomers discovered a new exoplanet orbiting within the habitable zone of a nearby star.",
+    "Doctors recommend regular exercise and a balanced diet to help lower blood pressure.",
+    "The startup raised $50M in a Series B round to expand its platform into new markets.",
+    "A week-long trek through the Himalayas rewards hikers with breathtaking mountain views."
+  ]
+}

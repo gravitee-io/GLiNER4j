@@ -15,7 +15,9 @@
  */
 package io.gravitee.lab.gliner4j.arch;
 
+import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
+import io.gravitee.lab.gliner4j.strategy.ClassificationStrategy;
 import io.gravitee.lab.gliner4j.strategy.NerStrategy;
 import java.util.List;
 
@@ -39,14 +41,46 @@ public interface ModelArchitecture {
   boolean supports(TaskType task);
 
   /**
-   * Builds the NER strategy for this family.
+   * Builds the NER strategy for this family. Default-throws so families that do not serve NER
+   * (e.g. a classification-only family) need not implement it.
    *
    * @param ctx the family-agnostic load inputs
    * @param entities the load-time entity schema
    * @return a ready NER strategy
    * @throws UnsupportedOperationException if this family does not support NER
    */
-  NerStrategy newNerStrategy(LoadContext ctx, List<EntityDefinition> entities);
+  default NerStrategy newNerStrategy(
+    LoadContext ctx,
+    List<EntityDefinition> entities
+  ) {
+    throw unsupported(TaskType.NER);
+  }
+
+  /**
+   * Builds the text-classification strategy for this family. Default-throws so families that do
+   * not serve classification need not implement it.
+   *
+   * @param ctx the family-agnostic load inputs
+   * @param labels the load-time classification labels
+   * @return a ready classification strategy
+   * @throws UnsupportedOperationException if this family does not support classification
+   */
+  default ClassificationStrategy newClassificationStrategy(
+    LoadContext ctx,
+    List<ClassificationLabel> labels
+  ) {
+    throw unsupported(TaskType.CLASSIFICATION);
+  }
+
+  private UnsupportedOperationException unsupported(TaskType task) {
+    return new UnsupportedOperationException(
+      "Model family '" +
+        id().configValue() +
+        "' does not support task " +
+        task +
+        " in this version of GLiNER4j."
+    );
+  }
 
   /**
    * Throws if this family cannot serve {@code task}. Used by facades whose task is not yet routed

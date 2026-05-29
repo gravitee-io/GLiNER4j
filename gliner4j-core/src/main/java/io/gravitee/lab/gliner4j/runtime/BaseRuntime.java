@@ -34,7 +34,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public abstract sealed class BaseRuntime
   implements ArchitectureRuntime
-  permits GLiNER4jClassifierRuntime, GLiNER4jNERRuntime {
+  permits GLiNER4jClassifierRuntime, GLiNER4jNERRuntime, GliclassRuntime {
 
   /** Default ONNX variant folder name (base FP32). */
   public static final String DEFAULT_VARIANT = "onnx";
