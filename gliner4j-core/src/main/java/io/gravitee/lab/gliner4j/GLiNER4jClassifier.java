@@ -15,6 +15,8 @@
  */
 package io.gravitee.lab.gliner4j;
 
+import io.gravitee.lab.gliner4j.arch.ModelArchitectures;
+import io.gravitee.lab.gliner4j.arch.TaskType;
 import io.gravitee.lab.gliner4j.processor.BatchPreprocessor;
 import io.gravitee.lab.gliner4j.processor.InputAssembler;
 import io.gravitee.lab.gliner4j.processor.PreprocessedInput;
@@ -145,6 +147,9 @@ public final class GLiNER4jClassifier
     );
 
     var config = GLiNER4jConfig.load(modelDir);
+    ModelArchitectures.forId(config.getArchitecture()).requireSupported(
+      TaskType.CLASSIFICATION
+    );
     var tokenizer = new DjlTokenizerWrapper(modelDir);
     var runtime = new GLiNER4jClassifierRuntime(
       modelDir,

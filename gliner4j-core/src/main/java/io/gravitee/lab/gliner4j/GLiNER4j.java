@@ -15,6 +15,8 @@
  */
 package io.gravitee.lab.gliner4j;
 
+import io.gravitee.lab.gliner4j.arch.ModelArchitectures;
+import io.gravitee.lab.gliner4j.arch.TaskType;
 import io.gravitee.lab.gliner4j.postprocess.RelationDecoder;
 import io.gravitee.lab.gliner4j.postprocess.SpanDecoder;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaEmbeddings;
@@ -113,6 +115,9 @@ public class GLiNER4j implements AutoCloseable {
       variant
     );
     var config = GLiNER4jConfig.load(modelDir);
+    ModelArchitectures.forId(config.getArchitecture()).requireSupported(
+      TaskType.RELATION
+    );
     var tokenizer = new DjlTokenizerWrapper(modelDir);
     var runtime = new GLiNER4jNERRuntime(modelDir, variant, runtimeConfig);
     log.info("GLiNER4j unified model loaded successfully");

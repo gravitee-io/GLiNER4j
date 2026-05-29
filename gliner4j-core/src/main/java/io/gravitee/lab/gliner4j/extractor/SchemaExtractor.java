@@ -16,6 +16,8 @@
 package io.gravitee.lab.gliner4j.extractor;
 
 import io.gravitee.lab.gliner4j.GLiNER4jConfig;
+import io.gravitee.lab.gliner4j.arch.ModelArchitectures;
+import io.gravitee.lab.gliner4j.arch.TaskType;
 import io.gravitee.lab.gliner4j.postprocess.StructureDecoder;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaEmbeddings;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaInput;
@@ -106,6 +108,9 @@ public final class SchemaExtractor
     );
 
     var config = GLiNER4jConfig.load(modelDir);
+    ModelArchitectures.forId(config.getArchitecture()).requireSupported(
+      TaskType.STRUCTURE
+    );
     var tokenizer = new DjlTokenizerWrapper(modelDir);
     var runtime = new GLiNER4jNERRuntime(modelDir, variant, runtimeConfig);
     var assembler = assemblerFor(tokenizer, structures);
