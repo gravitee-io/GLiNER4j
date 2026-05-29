@@ -29,6 +29,10 @@ import java.util.List;
  * @param textLen number of text words
  * @param numFields number of entity fields
  * @param fieldNames ordered list of entity field names
+ * @param schemaTokenPositions positions in {@code inputIds} of {@code [P]} (index 0) and each
+ *                             special-marker token (indices {@code 1..numFields}); resolved
+ *                             at assembler construction time so per-call embedding extraction
+ *                             is O(numFields) instead of an O(seqLen) token-id walk
  * @param originalText the original input text
  */
 public record PreprocessedInput(
@@ -40,5 +44,6 @@ public record PreprocessedInput(
   int textLen,
   int numFields,
   List<String> fieldNames,
+  int[] schemaTokenPositions,
   String originalText
 ) {}

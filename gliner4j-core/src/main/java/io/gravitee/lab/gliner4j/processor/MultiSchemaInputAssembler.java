@@ -133,7 +133,7 @@ public class MultiSchemaInputAssembler {
       this.cachedPrefixIds[i] = ids.get(i);
     }
     this.textTokenStartPos = cachedPrefixIds.length;
-    this.unitLayouts = List.copyOf(layouts);
+    this.unitLayouts = layouts;
   }
 
   /**
@@ -168,9 +168,12 @@ public class MultiSchemaInputAssembler {
 
     var wordFirstSubwordPos = new int[textLen];
 
+    // Warm the tokenizer cache for all text words in one JNI call, then read per-word
+    // tokens inline (every tokenizeWithIds below is now a pure cache hit).
+    var words = textEncoder.getWords();
+    tokenizer.prefetchTokens(words);
     for (int w = 0; w < textLen; w++) {
-      var word = textEncoder.getWords().get(w);
-      var result = tokenizer.tokenizeWithIds(word);
+      var result = tokenizer.tokenizeWithIds(words.get(w));
       wordFirstSubwordPos[w] = pos;
       for (long id : result.ids()) {
         if (pos >= ids.length) {

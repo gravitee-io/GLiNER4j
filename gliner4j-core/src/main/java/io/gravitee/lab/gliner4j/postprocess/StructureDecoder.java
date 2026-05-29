@@ -89,11 +89,9 @@ public class StructureDecoder {
         StructureValue value;
         if (field.type() == FieldType.STRING) {
           candidates.sort(
-            Comparator.comparingDouble((StringValue v) ->
-              v.confidence()
-            ).reversed()
+            Comparator.comparingDouble(StringValue::confidence).reversed()
           );
-          value = candidates.get(0);
+          value = candidates.getFirst();
         } else {
           var nonOverlapping = greedyNonOverlap(candidates);
           nonOverlapping.sort(Comparator.comparingInt(StringValue::start));

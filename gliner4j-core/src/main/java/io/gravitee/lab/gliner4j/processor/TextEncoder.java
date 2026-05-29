@@ -15,8 +15,9 @@
  */
 package io.gravitee.lab.gliner4j.processor;
 
-import io.gravitee.lab.gliner4j.tokenizer.WhitespaceTokenSplitter;
+import java.util.Arrays;
 import java.util.List;
+import java.util.regex.Pattern;
 import lombok.Getter;
 
 /**
@@ -25,6 +26,14 @@ import lombok.Getter;
  */
 @Getter
 public class TextEncoder {
+
+  /**
+   * The compiled regex used to split text into word-level tokens — port of the upstream
+   * GLiNER tokenizer regex.
+   */
+  public static final Pattern TOKEN_PATTERN = Pattern.compile(
+    "\\w+(?:[-_]\\w+)*|\\S"
+  );
 
   private final List<String> words;
   private final int[] wordStartChars;
@@ -35,24 +44,43 @@ public class TextEncoder {
   /**
    * Splits a text string into word-level tokens with character positions.
    *
+   * <p>Runs a single matcher loop that writes directly into primitive arrays — no intermediate
+   * {@code List<Token>} and no per-field stream pipeline.
+   *
    * @param text the input text to encode
-   * @param splitter the whitespace-level tokenizer
    */
-  public TextEncoder(String text, WhitespaceTokenSplitter splitter) {
+  public TextEncoder(String text) {
     this.originalText = text;
-    var tokens = splitter.tokenize(text);
-    this.textLen = tokens.size();
-    this.words = tokens
-      .stream()
-      .map(WhitespaceTokenSplitter.Token::text)
-      .toList();
-    this.wordStartChars = tokens
-      .stream()
-      .mapToInt(WhitespaceTokenSplitter.Token::start)
-      .toArray();
-    this.wordEndChars = tokens
-      .stream()
-      .mapToInt(WhitespaceTokenSplitter.Token::end)
-      .toArray();
+
+    // Capacity estimate: ~1 token per 5 chars (typical English). Grows by doubling on overflow.
+    int initCap = Math.max(8, text.length() / 5);
+    var wordsArr = new String[initCap];
+    var starts = new int[initCap];
+    var ends = new int[initCap];
+    int n = 0;
+
+    var matcher = TOKEN_PATTERN.matcher(text);
+    while (matcher.find()) {
+      if (n == wordsArr.length) {
+        int newCap = wordsArr.length << 1;
+        wordsArr = Arrays.copyOf(wordsArr, newCap);
+        starts = Arrays.copyOf(starts, newCap);
+        ends = Arrays.copyOf(ends, newCap);
+      }
+      wordsArr[n] = matcher.group();
+      starts[n] = matcher.start();
+      ends[n] = matcher.end();
+      n++;
+    }
+
+    this.textLen = n;
+    // Arrays.asList returns a RandomAccess view — O(1) get(w) for InputAssembler.assemble.
+    this.words = Arrays.asList(
+      n == wordsArr.length ? wordsArr : Arrays.copyOf(wordsArr, n)
+    );
+    this.wordStartChars = n == starts.length
+      ? starts
+      : Arrays.copyOf(starts, n);
+    this.wordEndChars = n == ends.length ? ends : Arrays.copyOf(ends, n);
   }
 }

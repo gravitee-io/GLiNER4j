@@ -23,8 +23,4 @@ import java.util.Map;
  *
  * @param fields field-name → extracted value
  */
-public record StructureInstance(Map<String, StructureValue> fields) {
-  public StructureInstance {
-    fields = Map.copyOf(fields);
-  }
-}
+public record StructureInstance(Map<String, StructureValue> fields) {}

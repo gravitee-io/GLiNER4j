@@ -17,6 +17,7 @@ package io.gravitee.lab.gliner4j;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.gravitee.lab.gliner4j.extractor.SchemaExtractor;
 import io.gravitee.lab.gliner4j.schema.FieldType;
 import io.gravitee.lab.gliner4j.schema.StructureDefinition;
 import io.gravitee.lab.gliner4j.schema.StructureInstance;
@@ -53,9 +54,7 @@ class GLiNER4jSchemaExtractorIntegrationTest {
       .list("features")
       .build();
 
-    try (
-      var extractor = GLiNER4jSchemaExtractor.load(MODEL_DIR, List.of(product))
-    ) {
+    try (var extractor = SchemaExtractor.load(MODEL_DIR, List.of(product))) {
       Map<String, List<StructureInstance>> result = extractor.extract(
         "The MacBook Pro costs $1999 and features M3 chip, 16GB RAM, and 512GB storage."
       );
@@ -97,10 +96,7 @@ class GLiNER4jSchemaExtractorIntegrationTest {
       .build();
 
     try (
-      var extractor = GLiNER4jSchemaExtractor.load(
-        MODEL_DIR,
-        List.of(reservation)
-      )
+      var extractor = SchemaExtractor.load(MODEL_DIR, List.of(reservation))
     ) {
       var result = extractor.extract(
         "Reservation at Le Bernardin for 4 people on March 15th at 7:30 PM. " +
@@ -131,10 +127,7 @@ class GLiNER4jSchemaExtractorIntegrationTest {
       .build();
 
     try (
-      var extractor = GLiNER4jSchemaExtractor.load(
-        MODEL_DIR,
-        List.of(transaction)
-      )
+      var extractor = SchemaExtractor.load(MODEL_DIR, List.of(transaction))
     ) {
       var result = extractor.extract(
         """
@@ -176,7 +169,7 @@ class GLiNER4jSchemaExtractorIntegrationTest {
       .build();
 
     try (
-      var extractor = GLiNER4jSchemaExtractor.load(
+      var extractor = SchemaExtractor.load(
         MODEL_DIR,
         List.of(patient, prescription)
       )
@@ -216,9 +209,7 @@ class GLiNER4jSchemaExtractorIntegrationTest {
       .list("features")
       .build();
 
-    try (
-      var extractor = GLiNER4jSchemaExtractor.load(MODEL_DIR, List.of(product))
-    ) {
+    try (var extractor = SchemaExtractor.load(MODEL_DIR, List.of(product))) {
       var lowThreshold = extractor.extract(
         "The MacBook Pro features M3 chip, 16GB RAM.",
         0.1f
@@ -251,10 +242,7 @@ class GLiNER4jSchemaExtractorIntegrationTest {
       .build();
 
     try (
-      var extractor = GLiNER4jSchemaExtractor.load(
-        MODEL_DIR,
-        List.of(defaultStructure)
-      )
+      var extractor = SchemaExtractor.load(MODEL_DIR, List.of(defaultStructure))
     ) {
       var override = StructureDefinition.builder("contact")
         .string("name", "Contact name")

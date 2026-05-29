@@ -47,61 +47,29 @@ public class SchemaEncoder {
     List<String> fieldNames,
     List<String> descriptions
   ) {
-    this.fieldNames = List.copyOf(fieldNames);
+    this.fieldNames = fieldNames;
     this.numFields = fieldNames.size();
     this.specialToken = specialToken;
-    this.schemaTokens = buildSchemaTokens(
-      taskKeyword,
-      specialToken,
-      fieldNames,
-      descriptions
-    );
-  }
 
-  /**
-   * Builds a SchemaEncoder from a pre-computed token list. Used by composers like
-   * {@code MultiSchemaEncoder} that need to join multiple per-structure schemas with separator tokens.
-   *
-   * @param specialToken the special token marking each field (used by InputAssembler to track field indices)
-   * @param fieldNames the combined field names in order
-   * @param schemaTokens the pre-built token list
-   */
-  public SchemaEncoder(
-    String specialToken,
-    List<String> fieldNames,
-    List<String> schemaTokens
-  ) {
-    this.fieldNames = List.copyOf(fieldNames);
-    this.numFields = fieldNames.size();
-    this.specialToken = specialToken;
-    this.schemaTokens = List.copyOf(schemaTokens);
-  }
-
-  private static List<String> buildSchemaTokens(
-    String taskKeyword,
-    String specialToken,
-    List<String> names,
-    List<String> descriptions
-  ) {
     var tokens = new ArrayList<String>();
     tokens.add("(");
     tokens.add("[P]");
     tokens.add(taskKeyword);
-    for (int i = 0; i < names.size(); i++) {
+    for (int i = 0; i < fieldNames.size(); i++) {
       var desc = descriptions.get(i);
       if (desc != null && !desc.isBlank()) {
         tokens.add("[DESCRIPTION]");
-        tokens.add(names.get(i) + ":");
+        tokens.add(fieldNames.get(i) + ":");
         tokens.add(desc);
       }
     }
     tokens.add("(");
-    for (var name : names) {
+    for (var name : fieldNames) {
       tokens.add(specialToken);
       tokens.add(name);
     }
     tokens.add(")");
     tokens.add(")");
-    return List.copyOf(tokens);
+    this.schemaTokens = tokens;
   }
 }

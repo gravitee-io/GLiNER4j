@@ -22,10 +22,10 @@ import ai.onnxruntime.OrtSession;
 import io.gravitee.lab.gliner4j.GLiNER4j;
 import io.gravitee.lab.gliner4j.GLiNER4jClassifier;
 import io.gravitee.lab.gliner4j.GLiNER4jNER;
-import io.gravitee.lab.gliner4j.GLiNER4jRelationExtractor;
-import io.gravitee.lab.gliner4j.GLiNER4jSchemaExtractor;
 import io.gravitee.lab.gliner4j.demo.profile.Profile;
 import io.gravitee.lab.gliner4j.demo.profile.ProfileType;
+import io.gravitee.lab.gliner4j.extractor.RelationExtractor;
+import io.gravitee.lab.gliner4j.extractor.SchemaExtractor;
 import io.gravitee.lab.gliner4j.runtime.ExecutionProvider;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
@@ -161,8 +161,8 @@ public class GLiNER4jDemo {
 
     GLiNER4jNER gliner = null;
     GLiNER4jClassifier classifier = null;
-    GLiNER4jSchemaExtractor schemaExtractor = null;
-    GLiNER4jRelationExtractor relationExtractor = null;
+    SchemaExtractor schemaExtractor = null;
+    RelationExtractor relationExtractor = null;
     GLiNER4j unified = null;
     try {
       // Optional NER demo (skipped for classification-only profiles)
@@ -199,7 +199,7 @@ public class GLiNER4jDemo {
 
       // Optional schema extraction demo
       if (profile.hasSchema()) {
-        schemaExtractor = GLiNER4jSchemaExtractor.load(modelDir, structures, variant, runtimeConfig);
+        schemaExtractor = SchemaExtractor.load(modelDir, structures, variant, runtimeConfig);
         printer.schemaBanner();
         System.out.println(DIM + "  Model: " + modelDir + RESET);
         System.out.println();
@@ -216,7 +216,7 @@ public class GLiNER4jDemo {
 
       // Optional relation + combined extraction demos
       if (profile.hasRelations()) {
-        relationExtractor = GLiNER4jRelationExtractor.load(modelDir, relations, variant, runtimeConfig);
+        relationExtractor = RelationExtractor.load(modelDir, relations, variant, runtimeConfig);
         unified = GLiNER4j.load(modelDir, variant, runtimeConfig);
 
         printer.relationBanner();
@@ -261,8 +261,8 @@ public class GLiNER4jDemo {
     Profile profile,
     GLiNER4jNER gliner,
     GLiNER4jClassifier classifier,
-    GLiNER4jSchemaExtractor schemaExtractor,
-    GLiNER4jRelationExtractor relationExtractor,
+    SchemaExtractor schemaExtractor,
+    RelationExtractor relationExtractor,
     GLiNER4j unified,
     List<EntityDefinition> entities,
     List<RelationDefinition> relations

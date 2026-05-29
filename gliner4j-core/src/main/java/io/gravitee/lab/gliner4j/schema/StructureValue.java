@@ -43,9 +43,5 @@ public sealed interface StructureValue
    *
    * @param items extracted values, ordered by character position
    */
-  record ListValue(List<StringValue> items) implements StructureValue {
-    public ListValue {
-      items = List.copyOf(items);
-    }
-  }
+  record ListValue(List<StringValue> items) implements StructureValue {}
 }

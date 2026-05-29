@@ -15,10 +15,11 @@
  */
 package io.gravitee.lab.gliner4j.tokenizer;
 
+import ai.djl.huggingface.tokenizers.Encoding;
 import ai.djl.huggingface.tokenizers.HuggingFaceTokenizer;
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -61,14 +62,8 @@ public class DjlTokenizerWrapper implements AutoCloseable {
    * @param word the word to tokenize
    * @return list of subword token strings
    */
-  public List<String> tokenize(String word) {
-    var encoding = tokenizer.encode(word, false, false);
-    var tokens = encoding.getTokens();
-    var result = new ArrayList<String>(tokens.length);
-    for (var token : tokens) {
-      result.add(token);
-    }
-    return result;
+  public Encoding tokenize(String word) {
+    return tokenizer.encode(word, false, false);
   }
 
   /**
@@ -83,13 +78,55 @@ public class DjlTokenizerWrapper implements AutoCloseable {
   }
 
   private TokenizationResult tokenizeUncached(String word) {
-    var encoding = tokenizer.encode(word, false, false);
+    var encoding = tokenize(word);
     return new TokenizationResult(encoding.getTokens(), encoding.getIds());
+  }
+
+  /**
+   * Warms {@link #tokenCache} for the given words via a single batched JNI call. After this
+   * returns, every {@link #tokenizeWithIds(String)} call for any word in {@code words} is a
+   * pure cache hit (no JNI). Callers can then iterate their words and use {@code tokenizeWithIds}
+   * inline, avoiding the intermediate result-list materialization.
+   *
+   * <p>Per-word tokenization semantics are preserved (each word is still encoded independently,
+   * matching how GLiNER was trained). Only the JNI dispatch is amortized.
+   *
+   * @param words the words whose tokenizations should be available from the cache afterwards
+   */
+  public void prefetchTokens(List<String> words) {
+    if (words.isEmpty()) {
+      return;
+    }
+
+    // Collect unique uncached words while preserving first-seen order.
+    var uniqueUncached = new LinkedHashSet<String>();
+    for (var w : words) {
+      if (!tokenCache.containsKey(w)) {
+        uniqueUncached.add(w);
+      }
+    }
+
+    if (uniqueUncached.isEmpty()) {
+      return;
+    }
+
+    var uncachedArr = uniqueUncached.toArray(new String[0]);
+    Encoding[] encodings = tokenizer.batchEncode(uncachedArr, false, false);
+    for (int i = 0; i < uncachedArr.length; i++) {
+      var enc = encodings[i];
+      // putIfAbsent: a concurrent computeIfAbsent for the same word would arrive at the
+      // same value, so duplicating the put is harmless.
+      tokenCache.putIfAbsent(
+        uncachedArr[i],
+        new TokenizationResult(enc.getTokens(), enc.getIds())
+      );
+    }
   }
 
   @Override
   public void close() {
     // HuggingFaceTokenizer doesn't have explicit close, but we keep the interface
+    tokenCache.clear();
     log.debug("DjlTokenizerWrapper closed");
   }
 }

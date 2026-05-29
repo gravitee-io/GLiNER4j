@@ -18,6 +18,7 @@ package io.gravitee.lab.gliner4j.processor;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.RelationDefinition;
+import io.gravitee.lab.gliner4j.schema.StructureDefinition;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -48,11 +49,10 @@ public record SchemaUnit(
     ENTITIES,
     CLASSIFICATIONS,
     RELATION,
+    STRUCTURE,
   }
 
   public SchemaUnit {
-    childNames = List.copyOf(childNames);
-    childDescriptions = List.copyOf(childDescriptions);
     if (childNames.size() != childDescriptions.size()) {
       throw new IllegalArgumentException(
         "childNames and childDescriptions must have the same size"
@@ -119,5 +119,30 @@ public record SchemaUnit(
       descs.add(i == 0 ? desc : "");
     }
     return new SchemaUnit(Kind.RELATION, relation.name(), "[R]", fields, descs);
+  }
+
+  /**
+   * Builds a structure unit from a single {@link StructureDefinition}. Parent label is the
+   * structure name; child marker is {@code [C]}; child names and descriptions come from the
+   * structure's fields.
+   *
+   * @param structure the structure definition
+   * @return the schema unit
+   */
+  public static SchemaUnit forStructure(StructureDefinition structure) {
+    var fields = structure.fields();
+    var names = new ArrayList<String>(fields.size());
+    var descs = new ArrayList<String>(fields.size());
+    for (var f : fields) {
+      names.add(f.name());
+      descs.add(f.description() == null ? "" : f.description());
+    }
+    return new SchemaUnit(
+      Kind.STRUCTURE,
+      structure.name(),
+      "[C]",
+      names,
+      descs
+    );
   }
 }

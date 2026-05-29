@@ -35,6 +35,6 @@ public record StructureField(
   public StructureField {
     Objects.requireNonNull(name, "name");
     Objects.requireNonNull(type, "type");
-    choices = choices == null ? List.of() : List.copyOf(choices);
+    choices = choices == null ? List.of() : choices;
   }
 }
