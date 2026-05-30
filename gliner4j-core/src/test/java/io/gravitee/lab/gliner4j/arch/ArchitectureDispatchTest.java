@@ -70,9 +70,12 @@ class ArchitectureDispatchTest {
 
   @Test
   void resolvingAnUnimplementedFamilyFailsFast() {
-    assertThatThrownBy(() -> ModelArchitectures.forId(Architecture.GLINER_BI))
+    // GLINER_DECODER is the remaining unregistered family (GLINER2/GLiClass/uni/bi are implemented).
+    assertThatThrownBy(() ->
+      ModelArchitectures.forId(Architecture.GLINER_DECODER)
+    )
       .isInstanceOf(UnsupportedOperationException.class)
-      .hasMessageContaining("gliner-bi")
+      .hasMessageContaining("gliner-decoder")
       .hasMessageContaining("not yet supported");
   }
 }

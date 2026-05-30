@@ -1,0 +1,20 @@
+{
+  "displayName": "GLiClass Edge — Tiny/Fast Zero-Shot Topic Classification (ettin-32m, ~32M)",
+  "modelDir": "models/gliclass-edge-onnx",
+  "labels": [
+    { "name": "technology", "description": "Computing, software, gadgets, AI, and the internet" },
+    { "name": "sports", "description": "Athletics, teams, matches, and competitions" },
+    { "name": "politics", "description": "Government, elections, legislation, and policy" },
+    { "name": "business", "description": "Companies, markets, finance, and the economy" },
+    { "name": "entertainment", "description": "Film, music, television, and celebrity culture" },
+    { "name": "health", "description": "Medicine, wellness, fitness, and healthcare" }
+  ],
+  "classifySamples": [
+    "Apple unveiled a new chip with a much faster on-device neural engine.",
+    "The striker scored a hat-trick to win the championship final.",
+    "The senate passed the new bill after weeks of heated debate.",
+    "The startup raised forty million dollars in its latest funding round.",
+    "The pop star announced a world tour and released a surprise new album.",
+    "Doctors recommend regular exercise and a balanced diet to lower blood pressure."
+  ]
+}

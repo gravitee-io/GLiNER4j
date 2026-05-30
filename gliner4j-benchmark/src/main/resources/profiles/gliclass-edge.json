@@ -1,0 +1,14 @@
+{
+  "displayName": "GLiClass edge (ettin-32m)",
+  "modelDir": "models/gliclass-edge-onnx",
+  "labels": [
+    { "name": "technology" },
+    { "name": "sports" },
+    { "name": "politics" },
+    { "name": "business" },
+    { "name": "health" },
+    { "name": "travel" },
+    { "name": "science" },
+    { "name": "entertainment" }
+  ]
+}

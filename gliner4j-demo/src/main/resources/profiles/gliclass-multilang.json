@@ -1,0 +1,20 @@
+{
+  "displayName": "GLiClass-X Multilingual Zero-Shot Topic Classification (mDeBERTa)",
+  "modelDir": "models/gliclass-x-onnx",
+  "labels": [
+    { "name": "technology", "description": "Computing, software, gadgets, AI, and the internet" },
+    { "name": "sports", "description": "Athletics, teams, matches, and competitions" },
+    { "name": "politics", "description": "Government, elections, legislation, and policy" },
+    { "name": "business", "description": "Companies, markets, finance, and the economy" },
+    { "name": "health", "description": "Medicine, wellness, fitness, and healthcare" },
+    { "name": "travel", "description": "Tourism, destinations, and journeys" }
+  ],
+  "classifySamples": [
+    "The new smartphone features a faster on-device neural processing chip.",
+    "Le président a signé une nouvelle loi sur la réforme des retraites.",
+    "Die Mannschaft gewann das Finale mit drei zu eins in der Verlängerung.",
+    "La empresa recaudó cincuenta millones de dólares en su última ronda de financiación.",
+    "I medici raccomandano di fare esercizio fisico regolarmente per il cuore.",
+    "Uma viagem de uma semana pela costa oferece praias deslumbrantes."
+  ]
+}

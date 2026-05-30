@@ -17,6 +17,8 @@ package io.gravitee.lab.gliner4j.arch;
 
 import io.gravitee.lab.gliner4j.arch.gliclass.GliclassArchitecture;
 import io.gravitee.lab.gliner4j.arch.gliner2.Gliner2Architecture;
+import io.gravitee.lab.gliner4j.arch.glinerbi.GlinerBiArchitecture;
+import io.gravitee.lab.gliner4j.arch.glineruni.GlinerUniArchitecture;
 import java.util.EnumMap;
 import java.util.Map;
 
@@ -36,6 +38,8 @@ public final class ModelArchitectures {
   static {
     register(new Gliner2Architecture());
     register(new GliclassArchitecture());
+    register(new GlinerUniArchitecture());
+    register(new GlinerBiArchitecture());
   }
 
   private ModelArchitectures() {}

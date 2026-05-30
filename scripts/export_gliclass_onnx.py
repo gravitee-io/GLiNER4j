@@ -155,6 +155,93 @@ def _prepare_modernbert_for_onnx(encoder: nn.Module) -> None:
     cfg._attn_implementation = "eager"
 
 
+def _patch_deberta_for_onnx() -> int:
+    """De-script DeBERTa-v2/v3's relative-position control flow before ONNX export.
+
+    DeBERTa's ``build_rpos`` is ``@torch.jit.script``, so its ``if`` compiles to a real ONNX
+    ``If`` node per layer whose then/else branches have different rank (3 vs 4). Such rank-mismatched
+    ``If`` nodes break FP16 conversion (the fp16 converter can't reconcile the branch types and ORT
+    rejects the model). Our encoder always runs square self-attention, so the ``else`` branch is
+    always taken — replacing the scripted helper with a plain Python equivalent bakes in that single
+    branch with no ``If`` nodes (identical numerics, kept honest by the PT-vs-ONNX verify). No-op for
+    non-DeBERTa backbones (ModernBERT, mT5). Returns the number of helpers patched.
+    """
+    try:
+        import transformers.models.deberta_v2.modeling_deberta_v2 as dv2
+    except ImportError:
+        return 0
+
+    patched = 0
+    for name in dir(dv2):
+        obj = getattr(dv2, name)
+        original = getattr(obj, "__original_fn", None)
+        if original is not None and getattr(obj, "__script_if_tracing_wrapper", False):
+            setattr(dv2, name, original)
+            patched += 1
+
+    if hasattr(dv2, "build_rpos"):
+
+        def build_rpos(query_layer, key_layer, relative_pos, position_buckets, max_relative_positions):
+            if key_layer.size(-2) != query_layer.size(-2):
+                return dv2.build_relative_position(
+                    key_layer,
+                    key_layer,
+                    bucket_size=position_buckets,
+                    max_position=max_relative_positions,
+                )
+            return relative_pos
+
+        dv2.build_rpos = build_rpos
+        patched += 1
+
+    return patched
+
+
+def _count_if_nodes(path: Path) -> int:
+    model = onnx.load(str(path))
+    return sum(1 for n in model.graph.node if n.op_type == "If")
+
+
+def _sanitize_onnx_names(path: Path) -> int:
+    """Replace ``/`` in every tensor/node name so the model runs on the OpenVINO EP.
+
+    PyTorch names intermediate tensors like ``/encoder/Reshape_output_0``. ORT's OpenVINO EP
+    truncates such names at the first ``/`` for subgraph-boundary outputs and then fails the lookup
+    (``Output names mismatch between OpenVINO and ONNX``). Replacing ``/`` with ``_`` everywhere
+    (names are pure identifiers; declared graph I/O has no ``/``) removes the trigger with no change
+    to the model's interface or numerics. Returns the number of names rewritten.
+    """
+    model = onnx.load(str(path))
+    count = 0
+
+    def fix(name: str) -> str:
+        nonlocal count
+        if name and "/" in name:
+            count += 1
+            return name.replace("/", "_")
+        return name
+
+    def sanitize(graph) -> None:
+        for init in graph.initializer:
+            init.name = fix(init.name)
+        for vi in list(graph.value_info) + list(graph.input) + list(graph.output):
+            vi.name = fix(vi.name)
+        for node in graph.node:
+            node.name = fix(node.name)
+            node.input[:] = [fix(x) for x in node.input]
+            node.output[:] = [fix(x) for x in node.output]
+            for attr in node.attribute:
+                if attr.type == onnx.AttributeProto.GRAPH:
+                    sanitize(attr.g)
+                for sg in attr.graphs:
+                    sanitize(sg)
+
+    sanitize(model.graph)
+    if count:
+        onnx.save(model, str(path))
+    return count
+
+
 # ===========================================================================
 # Export
 # ===========================================================================
@@ -163,6 +250,11 @@ def _prepare_modernbert_for_onnx(encoder: nn.Module) -> None:
 def _export_encoder(model: nn.Module, out_dir: Path, opset: int) -> Path:
     encoder = model.encoder_model
     _prepare_modernbert_for_onnx(encoder)
+    # DeBERTa backbones emit per-layer dynamic-rank `If` nodes from their scripted relative-position
+    # helper; these break FP16 conversion and the OpenVINO CPU plugin. Bake in the single branch.
+    patched = _patch_deberta_for_onnx()
+    if patched:
+        console.print(f"  patched {patched} DeBERTa relative-position helper(s)")
     wrapper = EncoderWrapper(encoder).eval()
 
     dummy_ids = torch.ones(1, 32, dtype=torch.long)
@@ -183,8 +275,14 @@ def _export_encoder(model: nn.Module, out_dir: Path, opset: int) -> Path:
             "last_hidden_state": {0: "batch", 1: "seq_len"},
         },
     )
+    if_nodes = _count_if_nodes(path)
+    if_note = (
+        ", [green]0 If nodes[/green]"
+        if if_nodes == 0
+        else f", [red]{if_nodes} If nodes remain[/red]"
+    )
     console.print(
-        f"  [green]✓[/green] encoder.onnx ({path.stat().st_size / 1e6:.1f} MB)"
+        f"  [green]✓[/green] encoder.onnx ({path.stat().st_size / 1e6:.1f} MB{if_note})"
     )
     return path
 
@@ -351,6 +449,7 @@ def _convert_to_fp16(base_dir: Path, out_dir: Path) -> None:
         model_fp16 = float16.convert_float_to_float16(model, keep_io_types=True)
         realigned = _align_fp16_cast_nodes(model_fp16)
         onnx.save(model_fp16, str(out_dir / name))
+        _sanitize_onnx_names(out_dir / name)  # float16 pass can mint new '/'-named tensors
         try:
             ort.InferenceSession(str(out_dir / name))
             note = f" (realigned {realigned} casts)" if realigned else ""
@@ -383,6 +482,7 @@ def _convert_to_quantized(base_dir: Path, out_dir: Path) -> None:
             reduce_range=True,
             extra_options={"DefaultTensorType": onnx.TensorProto.FLOAT},
         )
+        _sanitize_onnx_names(out_dir / name)  # quantize_dynamic can mint new '/'-named tensors
         try:
             ort.InferenceSession(str(out_dir / name))
             note = ""
@@ -464,6 +564,11 @@ def export(
     with torch.no_grad():
         _export_encoder(uni, onnx_dir, opset)
         _export_score_head(uni, onnx_dir, opset, enc_hidden)
+
+    # Strip '/' from tensor names for the OpenVINO EP — before variants so they inherit clean names.
+    for fname in ONNX_MODEL_FILES:
+        renamed = _sanitize_onnx_names(onnx_dir / fname)
+        console.print(f"  [green]✓[/green] sanitized {fname} ({renamed} names)")
 
     console.print("\n[bold]Writing config and tokenizer...[/bold]")
     _write_config(model, tokenizer, out, enc_hidden)

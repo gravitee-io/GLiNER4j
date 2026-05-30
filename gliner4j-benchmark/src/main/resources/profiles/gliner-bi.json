@@ -1,0 +1,12 @@
+{
+  "displayName": "GLiNER bi-encoder (deberta text + MiniLM label)",
+  "modelDir": "models/gliner-bi-small-onnx",
+  "entities": [
+    { "name": "person" },
+    { "name": "organization" },
+    { "name": "location" },
+    { "name": "date" },
+    { "name": "product" },
+    { "name": "event" }
+  ]
+}

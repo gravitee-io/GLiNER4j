@@ -1,0 +1,19 @@
+{
+  "displayName": "GLiNER PII — Zero-Shot NER (uni-encoder, deberta-v3-small markerV0)",
+  "modelDir": "models/gliner-pii-base-onnx",
+  "entities": [
+    { "name": "person", "description": "Names of individuals" },
+    { "name": "email", "description": "Email addresses" },
+    { "name": "phone number", "description": "Telephone numbers" },
+    { "name": "address", "description": "Physical postal addresses" },
+    { "name": "credit card number", "description": "Payment card numbers" },
+    { "name": "organization", "description": "Companies and institutions" },
+    { "name": "date", "description": "Calendar dates" }
+  ],
+  "nerSamples": [
+    "Please contact Jane Doe at jane.doe@example.com or call 555-0123.",
+    "John Smith lives at 42 Maple Street, Springfield, and works at Acme Corp.",
+    "Charge card 4111 1111 1111 1111 for the invoice dated March 3, 2024.",
+    "Dr. Alice Brown can be reached at alice.brown@hospital.org or +1-202-555-0199."
+  ]
+}

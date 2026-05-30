@@ -20,7 +20,11 @@ public enum ProfileType {
   PII("pii.json"),
   GLIGUARD("gliguard.json"),
   GLICLASS("gliclass.json"),
-  GLICLASS_SENTIMENT("gliclass-sentiment.json");
+  GLICLASS_SENTIMENT("gliclass-sentiment.json"),
+  GLICLASS_MULTILANG("gliclass-multilang.json"),
+  GLICLASS_EDGE("gliclass-edge.json"),
+  GLINER_PII("gliner-pii.json"),
+  GLINER_BI("gliner-bi.json");
 
   public final String filename;
 

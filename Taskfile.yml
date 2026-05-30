@@ -37,6 +37,22 @@ vars:
   GLICLASS_HF_MODEL: "knowledgator/gliclass-modern-base-v3.0"
   GLICLASS_ONNX_OUTPUT_DIR: "models/gliclass-modern-base-onnx"
 
+  # GLiClass V3 config-swap variants (same uni-encoder + score-head pipeline — export & load, no code)
+  GLICLASS_X_HF_MODEL: "knowledgator/gliclass-x-base" # multilingual (mdeberta-v3-base)
+  GLICLASS_X_ONNX_OUTPUT_DIR: "models/gliclass-x-onnx"
+  GLICLASS_MODERN_LARGE_HF_MODEL: "knowledgator/gliclass-modern-large-v3.0"
+  GLICLASS_MODERN_LARGE_ONNX_OUTPUT_DIR: "models/gliclass-modern-large-onnx"
+  GLICLASS_LARGE_HF_MODEL: "knowledgator/gliclass-large-v3.0"
+  GLICLASS_LARGE_ONNX_OUTPUT_DIR: "models/gliclass-large-onnx"
+  GLICLASS_EDGE_HF_MODEL: "knowledgator/gliclass-edge-v3.0"
+  GLICLASS_EDGE_ONNX_OUTPUT_DIR: "models/gliclass-edge-onnx"
+
+  # GLiNER NER families (original-GLiNER uni/bi-encoder span models — zero-shot NER)
+  GLINER_PII_HF_MODEL: "knowledgator/gliner-pii-base-v1.0" # uni-encoder, deberta-v3-small
+  GLINER_PII_ONNX_OUTPUT_DIR: "models/gliner-pii-base-onnx"
+  GLINER_BI_HF_MODEL: "knowledgator/gliner-bi-small-v1.0" # bi-encoder, deberta + MiniLM
+  GLINER_BI_ONNX_OUTPUT_DIR: "models/gliner-bi-small-onnx"
+
 tasks:
   default:
     desc: Default — runs the base all-in-one chain (download + export, FP16 + INT8)
@@ -209,7 +225,7 @@ tasks:
       - model:download:base
       - check:uv
     cmds:
-      - uv run scripts/export_onnx.py --model-path {{.BASE_HF_LOCAL_DIR}} --output-dir {{.BASE_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default ""}}
+      - uv run scripts/export_onnx.py --model-path {{.BASE_HF_LOCAL_DIR}} --output-dir {{.BASE_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
       - uv run scripts/render_model_card.py base {{.BASE_ONNX_OUTPUT_DIR}}/MODEL_CARD.md
     sources:
       - scripts/export_onnx.py
@@ -295,7 +311,7 @@ tasks:
       - model:download:pii
       - check:uv
     cmds:
-      - uv run scripts/export_onnx.py --model-path {{.PII_HF_LOCAL_DIR}} --output-dir {{.PII_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default ""}}
+      - uv run scripts/export_onnx.py --model-path {{.PII_HF_LOCAL_DIR}} --output-dir {{.PII_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
       - uv run scripts/render_model_card.py pii {{.PII_ONNX_OUTPUT_DIR}}/MODEL_CARD.md
     sources:
       - scripts/export_onnx.py
@@ -363,7 +379,7 @@ tasks:
       - model:download:gliguard
       - check:uv
     cmds:
-      - uv run scripts/export_onnx.py --model-path {{.GLIGUARD_HF_LOCAL_DIR}} --output-dir {{.GLIGUARD_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default ""}}
+      - uv run scripts/export_onnx.py --model-path {{.GLIGUARD_HF_LOCAL_DIR}} --output-dir {{.GLIGUARD_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
       - uv run scripts/render_model_card.py gliguard {{.GLIGUARD_ONNX_OUTPUT_DIR}}/MODEL_CARD.md
     sources:
       - scripts/export_onnx.py
@@ -446,3 +462,115 @@ tasks:
       EP: '{{.EP | default "cpu"}}'
     cmds:
       - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliclass_sentiment {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  # ── GLiClass V3 config-swap variants (no Java changes — same engine, export & load) ─────────
+  # Builds FP32 + FP16 + INT8 (QInt8) like `task gliclass`; override EXPORT_ARGS to change variants.
+
+  gliclass:x:
+    desc: "Export GLiClass-X (multilingual, mdeberta-v3-base) — zero-shot classification across 20+ languages"
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_gliclass_onnx.py --model-path {{.GLICLASS_X_HF_MODEL}} --output-dir {{.GLICLASS_X_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+    sources:
+      - scripts/export_gliclass_onnx.py
+    generates:
+      - "{{.GLICLASS_X_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
+
+  gliclass:modern-large:
+    desc: "Export GLiClass modern-large v3 (ModernBERT-large) — highest-accuracy zero-shot classifier"
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_gliclass_onnx.py --model-path {{.GLICLASS_MODERN_LARGE_HF_MODEL}} --output-dir {{.GLICLASS_MODERN_LARGE_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+    sources:
+      - scripts/export_gliclass_onnx.py
+    generates:
+      - "{{.GLICLASS_MODERN_LARGE_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
+
+  gliclass:large:
+    desc: "Export GLiClass large v3 (deberta-v3-large, mlp scorer)"
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_gliclass_onnx.py --model-path {{.GLICLASS_LARGE_HF_MODEL}} --output-dir {{.GLICLASS_LARGE_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+    sources:
+      - scripts/export_gliclass_onnx.py
+    generates:
+      - "{{.GLICLASS_LARGE_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
+
+  gliclass:edge:
+    desc: "Export GLiClass edge v3 (ettin-32m, tiny/fast)"
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_gliclass_onnx.py --model-path {{.GLICLASS_EDGE_HF_MODEL}} --output-dir {{.GLICLASS_EDGE_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+    sources:
+      - scripts/export_gliclass_onnx.py
+    generates:
+      - "{{.GLICLASS_EDGE_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
+
+  demo:gliclass-multilang:
+    desc: "Run the demo: GLiClass-X multilingual zero-shot topic classification (needs: task gliclass:x)"
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliclass_multilang {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  demo:gliclass-edge:
+    desc: "Run the demo: GLiClass edge zero-shot intent classification (tiny/fast; needs: task gliclass:edge)"
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliclass_edge {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  # ── GLiNER NER families (uni/bi-encoder span — export & load) ────────────────
+  # Builds FP32 + FP16 + INT8 (QInt8); all DeBERTa-patched (0 If nodes) + name-sanitized (OpenVINO-ready).
+
+  gliner-pii:
+    desc: "Export GLiNER-PII (uni-encoder, deberta-v3-small) — zero-shot PII NER (FP32 + FP16 + INT8)"
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_gliner_uni_onnx.py --model-path {{.GLINER_PII_HF_MODEL}} --output-dir {{.GLINER_PII_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+    sources:
+      - scripts/export_gliner_uni_onnx.py
+    generates:
+      - "{{.GLINER_PII_ONNX_OUTPUT_DIR}}/onnx/model.onnx"
+
+  gliner-bi:
+    desc: "Export GLiNER bi-encoder (deberta text + MiniLM label) — zero-shot NER (FP32 + FP16 + INT8)"
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_gliner_uni_onnx.py --model-path {{.GLINER_BI_HF_MODEL}} --output-dir {{.GLINER_BI_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+    sources:
+      - scripts/export_gliner_uni_onnx.py
+    generates:
+      - "{{.GLINER_BI_ONNX_OUTPUT_DIR}}/onnx/model.onnx"
+
+  demo:gliner-pii:
+    desc: "Run the demo: GLiNER-PII zero-shot PII NER (uni-encoder; needs: task gliner-pii)"
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliner_pii {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  demo:gliner-bi:
+    desc: "Run the demo: GLiNER bi-encoder zero-shot NER (dual encoder; needs: task gliner-bi)"
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliner_bi {{.VARIANT}} {{.EP}}" 2>/dev/null
