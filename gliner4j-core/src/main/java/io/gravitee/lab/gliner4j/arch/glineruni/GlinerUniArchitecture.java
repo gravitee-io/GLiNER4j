@@ -22,6 +22,7 @@ import io.gravitee.lab.gliner4j.arch.TaskType;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.strategy.NerStrategy;
 import io.gravitee.lab.gliner4j.strategy.glineruni.GlinerUniNerStrategy;
+import io.gravitee.lab.gliner4j.strategy.glineruni.GlinerUniTokenNerStrategy;
 import java.util.List;
 
 /**
@@ -45,6 +46,12 @@ public final class GlinerUniArchitecture implements ModelArchitecture {
     LoadContext ctx,
     List<EntityDefinition> entities
   ) {
+    // span_mode selects the decode: markerV0 enumerates spans (SpanDecoder); token_level emits
+    // BIO start/end/inside per word·class (TokenSpanDecoder, no span_idx inputs).
+    var spanMode = ctx.config().archString("span_mode", "markerV0");
+    if ("token_level".equals(spanMode)) {
+      return GlinerUniTokenNerStrategy.create(ctx, entities);
+    }
     return GlinerUniNerStrategy.create(ctx, entities);
   }
 }
