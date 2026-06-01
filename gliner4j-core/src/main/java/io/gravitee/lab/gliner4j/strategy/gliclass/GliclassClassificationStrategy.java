@@ -182,6 +182,16 @@ public final class GliclassClassificationStrategy
       return List.of();
     }
 
+    if (classPositions.size() != activeLabels.size()) {
+      log.warn(
+        "GLiClass class-token count ({}) does not match label count ({}); scoring the first {} " +
+          "label(s) only — check that no label name contains the {} marker or tokenizes unexpectedly",
+        classPositions.size(),
+        activeLabels.size(),
+        Math.min(classPositions.size(), activeLabels.size()),
+        labelToken
+      );
+    }
     int n = Math.min(classPositions.size(), activeLabels.size());
     var classEmbs = new float[n][];
     for (int k = 0; k < n; k++) {

@@ -29,7 +29,7 @@ import java.util.List;
  * in between also passes; the span score is the minimum of (start, end, all insides). Greedy
  * non-overlap removal then yields flat (non-nested) spans.
  */
-public class TokenSpanDecoder {
+public class TokenSpanDecoder extends AbstractDecoder {
 
   private static final int START = 0;
   private static final int END = 1;
@@ -113,24 +113,7 @@ public class TokenSpanDecoder {
     }
 
     // Greedy non-overlapping removal: sort by confidence desc, skip overlaps (flat NER).
-    candidates.sort(
-      Comparator.comparingDouble(EntitySpan::confidence).reversed()
-    );
-    var result = new ArrayList<EntitySpan>();
-    for (var candidate : candidates) {
-      boolean overlaps = result
-        .stream()
-        .anyMatch(
-          existing ->
-            candidate.start() < existing.end() &&
-            candidate.end() > existing.start()
-        );
-      if (!overlaps) {
-        result.add(candidate);
-      }
-    }
-    result.sort(Comparator.comparingInt(EntitySpan::start));
-    return result;
+    return getEntitySpans(candidates);
   }
 
   private static float sigmoid(float x) {

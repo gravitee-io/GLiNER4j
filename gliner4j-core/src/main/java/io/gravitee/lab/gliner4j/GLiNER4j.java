@@ -15,6 +15,8 @@
  */
 package io.gravitee.lab.gliner4j;
 
+import static io.gravitee.lab.gliner4j.utils.LinAlg.argmax;
+
 import io.gravitee.lab.gliner4j.arch.ModelArchitectures;
 import io.gravitee.lab.gliner4j.arch.TaskType;
 import io.gravitee.lab.gliner4j.postprocess.RelationDecoder;
@@ -570,18 +572,6 @@ public class GLiNER4j implements AutoCloseable {
       }
     }
     return flat;
-  }
-
-  private static int argmax(float[] values) {
-    int maxIdx = 0;
-    float maxVal = values[0];
-    for (int i = 1; i < values.length; i++) {
-      if (values[i] > maxVal) {
-        maxVal = values[i];
-        maxIdx = i;
-      }
-    }
-    return maxIdx;
   }
 
   @Override

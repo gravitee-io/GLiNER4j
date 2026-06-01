@@ -19,6 +19,8 @@ import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Map;
@@ -70,7 +72,16 @@ public final class GlinerUniTokenNerRuntime implements ArchitectureRuntime {
         cacheDir = modelDir.resolve(
           variant + "_optimized_" + provider.cacheTag()
         );
-        cacheDir.toFile().mkdirs();
+        try {
+          Files.createDirectories(cacheDir);
+        } catch (IOException e) {
+          log.warn(
+            "Could not create optimized-model cache dir {} — caching disabled for this load",
+            cacheDir,
+            e
+          );
+          cacheDir = null;
+        }
       }
 
       log.info("Loading token-level model.onnx from {}...", variantDir);

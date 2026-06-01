@@ -24,6 +24,7 @@ import io.gravitee.lab.gliner4j.schema.EntitySpan;
 import io.gravitee.lab.gliner4j.strategy.NerStrategy;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
+import io.gravitee.lab.gliner4j.utils.WhitespaceWordSplitter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -145,7 +146,7 @@ public final class GlinerUniNerStrategy implements NerStrategy {
       return Map.of();
     }
 
-    var words = splitWords(text);
+    var words = WhitespaceWordSplitter.split(text);
     int textLen = words.size();
     if (textLen == 0) {
       telemetry.record(0.0, 1, 0);
@@ -268,26 +269,9 @@ public final class GlinerUniNerStrategy implements NerStrategy {
     }
   }
 
-  /** Whitespace word split with original-text char offsets (words_splitter_type=whitespace). */
-  private static List<Word> splitWords(String text) {
-    var out = new ArrayList<Word>();
-    int i = 0;
-    int n = text.length();
-    while (i < n) {
-      while (i < n && Character.isWhitespace(text.charAt(i))) i++;
-      if (i >= n) break;
-      int start = i;
-      while (i < n && !Character.isWhitespace(text.charAt(i))) i++;
-      out.add(new Word(text.substring(start, i), start, i));
-    }
-    return out;
-  }
-
   private static float sigmoid(float x) {
     return 1.0f / (1.0f + (float) Math.exp(-x));
   }
-
-  private record Word(String text, int start, int end) {}
 
   @Override
   public void close() {
