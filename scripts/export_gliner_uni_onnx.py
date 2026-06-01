@@ -283,6 +283,23 @@ def export(
     """
     from gliner import GLiNER
 
+    # TODO(gliner-x): GLiNER-X (mT5) trains with words_splitter_type=stanza (language-aware; needs
+    # stanza+langdetect + per-language models). We don't ship Stanza and can't replicate it in the
+    # JVM, so force whitespace splitting by monkeypatching WordsSplitter before load — the exported
+    # graph is splitter-independent (only the Java-side word boundaries change) and the Java consumer
+    # (GlinerUniNerStrategy) also splits on whitespace. APPROXIMATION valid only for space-separated
+    # languages: CJK (Chinese/Japanese/Thai) is NOT supported and punctuation boundaries may drift.
+    # Revisit with a real word splitter (stanza port / ICU) on both export and Java sides. No-op for
+    # models already on whitespace (gliner-pii / gliner-bi / gliner-multitask).
+    import gliner.data_processing.tokenizer as _gtok
+
+    _orig_ws_init = _gtok.WordsSplitter.__init__
+
+    def _force_whitespace_init(self, splitter_type="whitespace", *a, **k):
+        _orig_ws_init(self, "whitespace", *a, **k)
+
+    _gtok.WordsSplitter.__init__ = _force_whitespace_init
+
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 

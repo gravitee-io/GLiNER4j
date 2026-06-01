@@ -1,0 +1,17 @@
+{
+  "displayName": "GLiNER-X — Multilingual Zero-Shot NER (mT5-base; whitespace-split, EU langs)",
+  "modelDir": "models/gliner-x-base-onnx",
+  "entities": [
+    { "name": "person", "description": "Names of real individuals" },
+    { "name": "organization", "description": "Companies, institutions, teams" },
+    { "name": "location", "description": "Cities, countries, geographical places" },
+    { "name": "date", "description": "Dates and time periods" }
+  ],
+  "nerSamples": [
+    "Barack Obama visited Berlin with Angela Merkel in July 2015.",
+    "Emmanuel Macron a rencontré Angela Merkel à Paris au mois de mars.",
+    "Angela Merkel besuchte Barack Obama in Washington im Juli 2016.",
+    "Lionel Messi jugó para el Barcelona en España durante muchos años.",
+    "Leonardo da Vinci dipinse la Gioconda a Firenze nel Rinascimento."
+  ]
+}

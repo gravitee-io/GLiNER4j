@@ -52,6 +52,12 @@ vars:
   GLINER_PII_ONNX_OUTPUT_DIR: "models/gliner-pii-base-onnx"
   GLINER_BI_HF_MODEL: "knowledgator/gliner-bi-small-v1.0" # bi-encoder, deberta + MiniLM
   GLINER_BI_ONNX_OUTPUT_DIR: "models/gliner-bi-small-onnx"
+  # GLiNER-X (mT5 multilingual NER). Trained with stanza word-splitting; we force whitespace
+  # (see TODO in export script + GlinerUniNerStrategy) — EU/space-separated languages only, no CJK.
+  GLINER_X_HF_MODEL: "knowledgator/gliner-x-base"
+  GLINER_X_ONNX_OUTPUT_DIR: "models/gliner-x-base-onnx"
+  GLINER_MULTITASK_HF_MODEL: "knowledgator/gliner-multitask-large-v0.5" # token_level, deberta-v3-large
+  GLINER_MULTITASK_ONNX_OUTPUT_DIR: "models/gliner-multitask-large-onnx"
 
 tasks:
   default:
@@ -530,6 +536,26 @@ tasks:
     cmds:
       - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliclass_edge {{.VARIANT}} {{.EP}}" 2>/dev/null
 
+  demo:gliclass-modern-large:
+    desc: "Run the demo: GLiClass zero-shot topic classification (ModernBERT-large; needs: task gliclass:modern-large)"
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliclass_modern_large {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  demo:gliclass-large:
+    desc: "Run the demo: GLiClass zero-shot topic classification (DeBERTa-v3-large; needs: task gliclass:large)"
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliclass_large {{.VARIANT}} {{.EP}}" 2>/dev/null
+
   # ── GLiNER NER families (uni/bi-encoder span — export & load) ────────────────
   # Builds FP32 + FP16 + INT8 (QInt8); all DeBERTa-patched (0 If nodes) + name-sanitized (OpenVINO-ready).
 
@@ -574,3 +600,45 @@ tasks:
       EP: '{{.EP | default "cpu"}}'
     cmds:
       - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliner_bi {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  gliner-x:
+    desc: "Export GLiNER-X (mT5 multilingual NER). Whitespace-split approximation — EU langs only, no CJK (see TODO)."
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_gliner_uni_onnx.py --model-path {{.GLINER_X_HF_MODEL}} --output-dir {{.GLINER_X_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+    sources:
+      - scripts/export_gliner_uni_onnx.py
+    generates:
+      - "{{.GLINER_X_ONNX_OUTPUT_DIR}}/onnx/model.onnx"
+
+  demo:gliner-x:
+    desc: "Run the demo: GLiNER-X multilingual zero-shot NER (EU languages; needs: task gliner-x)"
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliner_x {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  gliner-multitask:
+    desc: "Export GLiNER Multitask (token_level, deberta-v3-large) — zero-shot NER (FP32 + FP16 + INT8)"
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_gliner_uni_onnx.py --model-path {{.GLINER_MULTITASK_HF_MODEL}} --output-dir {{.GLINER_MULTITASK_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+    sources:
+      - scripts/export_gliner_uni_onnx.py
+    generates:
+      - "{{.GLINER_MULTITASK_ONNX_OUTPUT_DIR}}/onnx/model.onnx"
+
+  demo:gliner-multitask:
+    desc: "Run the demo: GLiNER Multitask token_level zero-shot NER (needs: task gliner-multitask)"
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliner_multitask {{.VARIANT}} {{.EP}}" 2>/dev/null

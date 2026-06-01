@@ -1,0 +1,14 @@
+{
+  "displayName": "GLiClass topic (DeBERTa-v3-large)",
+  "modelDir": "models/gliclass-large-onnx",
+  "labels": [
+    { "name": "technology" },
+    { "name": "sports" },
+    { "name": "politics" },
+    { "name": "business" },
+    { "name": "entertainment" },
+    { "name": "science" },
+    { "name": "health" },
+    { "name": "travel" }
+  ]
+}

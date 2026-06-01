@@ -1,0 +1,23 @@
+{
+  "displayName": "GLiClass Zero-Shot Topic Classification (DeBERTa-v3-large)",
+  "modelDir": "models/gliclass-large-onnx",
+  "labels": [
+    { "name": "technology", "description": "Computing, software, gadgets, AI, and the internet" },
+    { "name": "sports", "description": "Athletics, teams, matches, and competitions" },
+    { "name": "politics", "description": "Government, elections, legislation, and policy" },
+    { "name": "business", "description": "Companies, markets, finance, and the economy" },
+    { "name": "entertainment", "description": "Film, music, television, and celebrity culture" },
+    { "name": "science", "description": "Research, discoveries, space, and the natural world" },
+    { "name": "health", "description": "Medicine, wellness, fitness, and healthcare" },
+    { "name": "travel", "description": "Tourism, destinations, and journeys" }
+  ],
+  "classifySamples": [
+    "The merger cleared its final antitrust hurdle, creating the world's largest chipmaker.",
+    "Physicists detected gravitational waves from a pair of merging neutron stars.",
+    "The veteran quarterback announced his retirement after two decades and four titles.",
+    "The biopic earned critical acclaim for its lead performance and haunting score.",
+    "Lawmakers debated a sweeping reform of the country's immigration and asylum system.",
+    "A wearable patch now tracks blood glucose continuously without a finger prick.",
+    "The overnight sleeper train from Vienna to Venice has reopened after a decade."
+  ]
+}

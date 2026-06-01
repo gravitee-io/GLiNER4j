@@ -72,6 +72,13 @@ public final class GlinerUniNerStrategy implements NerStrategy {
     this.entToken = config.archString("ent_token", "<<ENT>>");
     this.sepToken = config.archString("sep_token", "<<SEP>>");
     // [CLS] … [SEP] ids straight from the tokenizer's post-processor (deberta: 1 / 2).
+    // TODO(gliner-x): this strategy also serves the mT5 multilingual model (gliner-x), where two
+    // approximations apply: (1) we split on whitespace, but gliner-x was trained with stanza
+    // (language-aware) splitting — fine for space-separated languages, but CJK is unsupported and
+    // punctuation boundaries may drift; (2) mT5 has no [CLS] token, so encodeWithSpecialTokens("")
+    // yields its eos/pad and we prepend it at position 0 — a markerV0 model tolerates this (it
+    // pools per-word + per-<<ENT>> reps, not position 0), but it's not the exact training prompt.
+    // Revisit with a real word splitter (stanza port / ICU) and mT5-correct special-token handling.
     long[] specials = tokenizer.encodeWithSpecialTokens("");
     this.clsId = specials.length > 0 ? specials[0] : 1L;
     this.sepId = specials.length > 1 ? specials[specials.length - 1] : 2L;
