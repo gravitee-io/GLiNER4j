@@ -16,6 +16,7 @@
 package io.gravitee.lab.gliner4j.postprocess;
 
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
+import io.gravitee.lab.gliner4j.utils.LinAlg;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -66,9 +67,9 @@ public class TokenSpanDecoder extends AbstractDecoder {
     var insideSig = new float[words][numClasses];
     for (int w = 0; w < words; w++) {
       for (int c = 0; c < numClasses && c < logits[w].length; c++) {
-        startSig[w][c] = sigmoid(logits[w][c][START]);
-        endSig[w][c] = sigmoid(logits[w][c][END]);
-        insideSig[w][c] = sigmoid(logits[w][c][INSIDE]);
+        startSig[w][c] = LinAlg.sigmoid(logits[w][c][START]);
+        endSig[w][c] = LinAlg.sigmoid(logits[w][c][END]);
+        insideSig[w][c] = LinAlg.sigmoid(logits[w][c][INSIDE]);
       }
     }
 
@@ -114,9 +115,5 @@ public class TokenSpanDecoder extends AbstractDecoder {
 
     // Greedy non-overlapping removal: sort by confidence desc, skip overlaps (flat NER).
     return getEntitySpans(candidates);
-  }
-
-  private static float sigmoid(float x) {
-    return 1.0f / (1.0f + (float) Math.exp(-x));
   }
 }

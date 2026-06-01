@@ -24,12 +24,12 @@ import io.gravitee.lab.gliner4j.schema.EntitySpan;
 import io.gravitee.lab.gliner4j.strategy.NerStrategy;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
+import io.gravitee.lab.gliner4j.utils.GlinerNerSupport;
+import io.gravitee.lab.gliner4j.utils.GlinerPrompt;
 import io.gravitee.lab.gliner4j.utils.WhitespaceWordSplitter;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -142,12 +142,24 @@ public final class GlinerUniTokenNerStrategy implements NerStrategy {
     idsList.add(clsId);
     wordsMaskList.add(0L);
     for (var label : labels) {
-      appendTokens(entToken, idsList, wordsMaskList, 0L);
-      appendTokens(label.name(), idsList, wordsMaskList, 0L);
+      GlinerPrompt.appendToken(tokenizer, entToken, idsList, wordsMaskList, 0L);
+      GlinerPrompt.appendToken(
+        tokenizer,
+        label.name(),
+        idsList,
+        wordsMaskList,
+        0L
+      );
     }
-    appendTokens(sepToken, idsList, wordsMaskList, 0L);
+    GlinerPrompt.appendToken(tokenizer, sepToken, idsList, wordsMaskList, 0L);
     for (int w = 0; w < textLen; w++) {
-      appendWord(words.get(w).text(), idsList, wordsMaskList, w + 1L);
+      GlinerPrompt.appendWord(
+        tokenizer,
+        words.get(w).text(),
+        idsList,
+        wordsMaskList,
+        w + 1L
+      );
     }
     idsList.add(sepId);
     wordsMaskList.add(0L);
@@ -161,61 +173,21 @@ public final class GlinerUniTokenNerStrategy implements NerStrategy {
     var logits = runtime.run(inputIds, wordsMask, textLen); // [words][class][3]
 
     var labelNames = labels.stream().map(EntityDefinition::name).toList();
-    int[] wordStart = new int[textLen];
-    int[] wordEnd = new int[textLen];
-    for (int i = 0; i < textLen; i++) {
-      wordStart[i] = words.get(i).start();
-      wordEnd[i] = words.get(i).end();
-    }
-
+    var offsets = GlinerNerSupport.charOffsets(words);
     var spans = decoder.decode(
       logits,
       labelNames,
-      wordStart,
-      wordEnd,
+      offsets.starts(),
+      offsets.ends(),
       text,
       textLen,
       threshold
     );
-
-    var grouped = spans
-      .stream()
-      .collect(
-        Collectors.groupingBy(
-          EntitySpan::type,
-          LinkedHashMap::new,
-          Collectors.toList()
-        )
-      );
+    var grouped = GlinerNerSupport.groupByType(spans);
 
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
     telemetry.record(durationMs, 1, spans.size());
     return grouped;
-  }
-
-  private void appendTokens(
-    String token,
-    List<Long> ids,
-    List<Long> wordsMask,
-    long maskValue
-  ) {
-    for (long id : tokenizer.tokenizeWithIds(token).ids()) {
-      ids.add(id);
-      wordsMask.add(maskValue);
-    }
-  }
-
-  private void appendWord(
-    String word,
-    List<Long> ids,
-    List<Long> wordsMask,
-    long wordIndex1Based
-  ) {
-    long[] sub = tokenizer.tokenizeWithIds(word).ids();
-    for (int i = 0; i < sub.length; i++) {
-      ids.add(sub[i]);
-      wordsMask.add(i == 0 ? wordIndex1Based : 0L);
-    }
   }
 
   @Override

@@ -24,12 +24,12 @@ import io.gravitee.lab.gliner4j.schema.EntitySpan;
 import io.gravitee.lab.gliner4j.strategy.NerStrategy;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
+import io.gravitee.lab.gliner4j.utils.GlinerNerSupport;
+import io.gravitee.lab.gliner4j.utils.GlinerPrompt;
 import io.gravitee.lab.gliner4j.utils.WhitespaceWordSplitter;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -160,11 +160,17 @@ public final class GlinerBiNerStrategy implements NerStrategy {
     idsList.add(clsId);
     wordsMaskList.add(0L);
     for (int n = 0; n < labels.size(); n++) {
-      appendPromptToken(entToken, idsList, wordsMaskList);
+      GlinerPrompt.appendToken(tokenizer, entToken, idsList, wordsMaskList, 0L);
     }
-    appendPromptToken(sepToken, idsList, wordsMaskList);
+    GlinerPrompt.appendToken(tokenizer, sepToken, idsList, wordsMaskList, 0L);
     for (int w = 0; w < textLen; w++) {
-      appendWordSubtokens(words.get(w).text(), idsList, wordsMaskList, w + 1L);
+      GlinerPrompt.appendWord(
+        tokenizer,
+        words.get(w).text(),
+        idsList,
+        wordsMaskList,
+        w + 1L
+      );
     }
     idsList.add(sepId);
     wordsMaskList.add(0L);
@@ -175,19 +181,8 @@ public final class GlinerBiNerStrategy implements NerStrategy {
       .mapToLong(Long::longValue)
       .toArray();
 
-    // 2. span_idx / span_mask up to maxWidth
-    int numSpans = textLen * maxWidth;
-    var spanIdx = new long[numSpans][2];
-    var spanMask = new boolean[numSpans];
-    for (int s = 0; s < textLen; s++) {
-      for (int wd = 0; wd < maxWidth; wd++) {
-        int idx = s * maxWidth + wd;
-        int end = s + wd;
-        spanIdx[idx][0] = s;
-        spanIdx[idx][1] = end;
-        spanMask[idx] = end < textLen;
-      }
-    }
+    // 2. span_idx / span_mask grid up to maxWidth.
+    var grid = GlinerNerSupport.buildSpanGrid(textLen, maxWidth);
 
     // 3. Label tokens via the label encoder's tokenizer: [CLS] label [SEP], padded to longest.
     var labelEnc = new long[labels.size()][];
@@ -213,85 +208,26 @@ public final class GlinerBiNerStrategy implements NerStrategy {
       inputIds,
       wordsMask,
       textLen,
-      spanIdx,
-      spanMask,
+      grid.spanIdx(),
+      grid.spanMask(),
       labelsInputIds,
       labelsAttentionMask
     );
 
-    // 5. sigmoid + transpose to SpanDecoder's [1][class][word][width]
-    int numClasses = labels.size();
-    int kDim = logits.length > 0 && logits[0].length > 0
-      ? logits[0].length
-      : maxWidth;
-    var scores = new float[1][numClasses][textLen][kDim];
-    for (int s = 0; s < textLen && s < logits.length; s++) {
-      for (int wd = 0; wd < kDim && wd < logits[s].length; wd++) {
-        for (int c = 0; c < numClasses && c < logits[s][wd].length; c++) {
-          scores[0][c][s][wd] = sigmoid(logits[s][wd][c]);
-        }
-      }
-    }
-
-    var labelNames = labels.stream().map(EntityDefinition::name).toList();
-    int[] wordStart = new int[textLen];
-    int[] wordEnd = new int[textLen];
-    for (int i = 0; i < textLen; i++) {
-      wordStart[i] = words.get(i).start();
-      wordEnd[i] = words.get(i).end();
-    }
-
-    var spans = spanDecoder.decode(
-      scores,
-      labelNames,
-      wordStart,
-      wordEnd,
+    // 5. Decode [words][width][class] logits → flat spans, then group by type.
+    var spans = GlinerNerSupport.decodeMarkerV0(
+      spanDecoder,
+      logits,
+      words,
+      labels,
       text,
-      textLen,
+      maxWidth,
       threshold
     );
 
-    var grouped = spans
-      .stream()
-      .collect(
-        Collectors.groupingBy(
-          EntitySpan::type,
-          LinkedHashMap::new,
-          Collectors.toList()
-        )
-      );
-
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
     telemetry.record(durationMs, 1, spans.size());
-    return grouped;
-  }
-
-  private void appendPromptToken(
-    String token,
-    List<Long> ids,
-    List<Long> wordsMask
-  ) {
-    for (long id : tokenizer.tokenizeWithIds(token).ids()) {
-      ids.add(id);
-      wordsMask.add(0L);
-    }
-  }
-
-  private void appendWordSubtokens(
-    String word,
-    List<Long> ids,
-    List<Long> wordsMask,
-    long wordIndex1Based
-  ) {
-    long[] sub = tokenizer.tokenizeWithIds(word).ids();
-    for (int i = 0; i < sub.length; i++) {
-      ids.add(sub[i]);
-      wordsMask.add(i == 0 ? wordIndex1Based : 0L);
-    }
-  }
-
-  private static float sigmoid(float x) {
-    return 1.0f / (1.0f + (float) Math.exp(-x));
+    return GlinerNerSupport.groupByType(spans);
   }
 
   @Override

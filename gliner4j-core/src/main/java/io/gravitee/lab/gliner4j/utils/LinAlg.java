@@ -28,4 +28,9 @@ public class LinAlg {
     }
     return maxIdx;
   }
+
+  /** Logistic sigmoid {@code 1 / (1 + e^-x)} — the per-logit activation for multi-label scoring. */
+  public static float sigmoid(float x) {
+    return 1.0f / (1.0f + (float) Math.exp(-x));
+  }
 }

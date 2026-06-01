@@ -28,6 +28,7 @@ import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.strategy.ClassificationStrategy;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
+import io.gravitee.lab.gliner4j.utils.LinAlg;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -259,7 +260,7 @@ public final class Gliner2ClassificationStrategy
     var results = new ArrayList<ClassificationResult>();
     var labelNames = input.fieldNames();
     for (int i = 0; i < logits.length && i < labelNames.size(); i++) {
-      float score = sigmoid(logits[i][0]);
+      float score = LinAlg.sigmoid(logits[i][0]);
       if (score >= threshold) {
         results.add(new ClassificationResult(labelNames.get(i), score));
       }
@@ -279,9 +280,5 @@ public final class Gliner2ClassificationStrategy
       labels.stream().map(ClassificationLabel::name).toList(),
       labels.stream().map(ClassificationLabel::description).toList()
     );
-  }
-
-  private static float sigmoid(float x) {
-    return 1.0f / (1.0f + (float) Math.exp(-x));
   }
 }

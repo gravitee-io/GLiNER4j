@@ -36,6 +36,7 @@ import io.gravitee.lab.gliner4j.schema.ExtractionResult;
 import io.gravitee.lab.gliner4j.schema.RelationInstance;
 import io.gravitee.lab.gliner4j.schema.Schema;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
+import io.gravitee.lab.gliner4j.utils.GlinerNerSupport;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -45,7 +46,6 @@ import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -433,9 +433,6 @@ public class GLiNER4j implements AutoCloseable {
             threshold
           )
         );
-        case CLASSIFICATIONS -> {
-          // Filtered out earlier — should never reach here
-        }
       }
     }
 
@@ -477,15 +474,7 @@ public class GLiNER4j implements AutoCloseable {
       threshold
     );
 
-    var grouped = spans
-      .stream()
-      .collect(
-        Collectors.groupingBy(
-          EntitySpan::type,
-          LinkedHashMap::new,
-          Collectors.toList()
-        )
-      );
+    var grouped = GlinerNerSupport.groupByType(spans);
 
     // Ensure every requested entity type is present in the output map
     var result = emptyEntityMap(layout.unit().childNames());

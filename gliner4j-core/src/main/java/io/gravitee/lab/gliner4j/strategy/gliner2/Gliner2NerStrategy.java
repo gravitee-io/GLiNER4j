@@ -32,15 +32,14 @@ import io.gravitee.lab.gliner4j.strategy.NerStrategy;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
 import io.gravitee.lab.gliner4j.tokenizer.TokenMapping;
+import io.gravitee.lab.gliner4j.utils.GlinerNerSupport;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -260,15 +259,7 @@ public final class Gliner2NerStrategy
             threshold
           );
 
-          return spans
-            .stream()
-            .collect(
-              Collectors.groupingBy(
-                EntitySpan::type,
-                LinkedHashMap::new,
-                Collectors.toList()
-              )
-            );
+          return GlinerNerSupport.groupByType(spans);
         });
       }
 
@@ -357,15 +348,7 @@ public final class Gliner2NerStrategy
       threshold
     );
 
-    return spans
-      .stream()
-      .collect(
-        Collectors.groupingBy(
-          EntitySpan::type,
-          LinkedHashMap::new,
-          Collectors.toList()
-        )
-      );
+    return GlinerNerSupport.groupByType(spans);
   }
 
   // ---- NER-specific helpers ------------------------------------------------

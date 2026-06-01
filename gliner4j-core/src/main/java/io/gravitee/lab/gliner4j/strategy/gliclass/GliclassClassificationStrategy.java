@@ -23,6 +23,7 @@ import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.strategy.ClassificationStrategy;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
+import io.gravitee.lab.gliner4j.utils.LinAlg;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -203,7 +204,7 @@ public final class GliclassClassificationStrategy
 
     var results = new ArrayList<ClassificationResult>(n);
     for (int k = 0; k < n; k++) {
-      float score = sigmoid(logits[k]);
+      float score = LinAlg.sigmoid(logits[k]);
       if (score >= threshold) {
         results.add(
           new ClassificationResult(activeLabels.get(k).name(), score)
@@ -227,10 +228,6 @@ public final class GliclassClassificationStrategy
     }
     sb.append(sepToken);
     return promptFirst ? sb + text : text + sb;
-  }
-
-  private static float sigmoid(float x) {
-    return 1.0f / (1.0f + (float) Math.exp(-x));
   }
 
   @Override
