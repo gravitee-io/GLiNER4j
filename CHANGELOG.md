@@ -1,3 +1,10 @@
+# [1.0.0-alpha.8](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0-alpha.7...1.0.0-alpha.8) (2026-06-02)
+
+
+### Features
+
+* auto-detect execution platform ([#31](https://github.com/gravitee-io/GLiNER4j/issues/31)) ([4a1f9cb](https://github.com/gravitee-io/GLiNER4j/commit/4a1f9cb5081da502ab0478aa9504b72db41483e1))
+
 # [1.0.0-alpha.7](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0-alpha.6...1.0.0-alpha.7) (2026-06-02)
 
 
