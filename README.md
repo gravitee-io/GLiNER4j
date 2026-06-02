@@ -17,8 +17,7 @@ automatically from the model bundle, so the same Java façades drive every model
 
 The family is read from the `architecture` key in `gliner4j_config.json` (absent ⇒ `gliner2`, so
 older bundles keep working) and dispatched to the right implementation at load time — no code or
-facade change per family. See [`docs/model-architecture-spi.md`](docs/model-architecture-spi.md)
-for the design and the full GLiNER taxonomy / roadmap.
+facade change per family.
 
 ## Features
 

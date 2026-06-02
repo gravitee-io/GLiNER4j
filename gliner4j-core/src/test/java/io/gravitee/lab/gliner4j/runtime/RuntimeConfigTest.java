@@ -46,6 +46,12 @@ class RuntimeConfigTest {
   }
 
   @Test
+  void defaultConfig_autoDetectsExecutionProvider() {
+    var config = RuntimeConfig.builder().build();
+    assertThat(config.getExecutionProvider()).isEqualTo(ExecutionProvider.AUTO);
+  }
+
+  @Test
   void builder_overridesIndividualFields() {
     var config = RuntimeConfig.builder()
       .encoderIntraOpThreads(4)

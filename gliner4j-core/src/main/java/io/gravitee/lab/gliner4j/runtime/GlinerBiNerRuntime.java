@@ -65,9 +65,9 @@ public final class GlinerBiNerRuntime implements ArchitectureRuntime {
       );
 
       var variantDir = modelDir.resolve(variant);
-      var provider = runtimeConfig.getExecutionProvider() == null
-        ? ExecutionProvider.CPU
-        : runtimeConfig.getExecutionProvider();
+      var provider = ExecutionProvider.resolve(
+        runtimeConfig.getExecutionProvider()
+      );
       Path cacheDir = null;
       if (
         runtimeConfig.isOptimizedModelCacheEnabled() &&

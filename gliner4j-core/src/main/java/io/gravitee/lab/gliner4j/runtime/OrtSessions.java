@@ -73,8 +73,8 @@ public final class OrtSessions {
     RuntimeConfig config,
     String modelFileName
   ) {
-    var ep = config.getExecutionProvider();
-    if (ep == null || ep == ExecutionProvider.CPU) {
+    var ep = ExecutionProvider.resolve(config.getExecutionProvider());
+    if (ep == ExecutionProvider.CPU) {
       return;
     }
     try {

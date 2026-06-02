@@ -46,7 +46,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>Args: {@code [profile] [variant] [executionProvider]}.
  *   - profile (default "base"): which model + vocabulary to load.
  *   - variant (default "onnx"): ONNX model folder (onnx | onnx_fp16 | onnx_quantized).
- *   - executionProvider (default "cpu"): ORT backend — cpu | cuda | openvino | coreml.
+ *   - executionProvider (default "auto"): ORT backend — auto | cpu | cuda | openvino | coreml.
+ *     "auto" detects the best provider compiled into the native runtime.
  *
  * <p>The profile JSON lives at
  * /profiles/{name}.json on the classpath and defines:
@@ -93,7 +94,7 @@ public class GLiNER4jDemo {
     var profileName = args.length > 0 ? ProfileType.valueOf(args[0].toUpperCase()) : BASE;
     var variant = args.length > 1 ? args[1] : "onnx";
     // 3rd arg selects the ONNX execution provider: cpu (default) | cuda | openvino | coreml.
-    var executionProvider = args.length > 2 ? ExecutionProvider.fromString(args[2]) : ExecutionProvider.CPU;
+    var executionProvider = args.length > 2 ? ExecutionProvider.fromString(args[2]) : ExecutionProvider.AUTO;
     Profile profile = new Profile(profileName);
 
     if (!profile.hasEntities() && !profile.hasLabels()) {
@@ -155,6 +156,8 @@ public class GLiNER4jDemo {
         variant +
         ", ep=" +
         executionProvider.name().toLowerCase() +
+        " -> " +
+        ExecutionProvider.resolve(executionProvider).name().toLowerCase() +
         ") ..." +
         RESET
     );

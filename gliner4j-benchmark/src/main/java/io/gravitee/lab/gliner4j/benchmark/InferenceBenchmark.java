@@ -17,7 +17,6 @@ package io.gravitee.lab.gliner4j.benchmark;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.gravitee.lab.gliner4j.GLiNER4jNER;
-import io.gravitee.lab.gliner4j.runtime.ExecutionProvider;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import java.io.IOException;
@@ -75,11 +74,6 @@ public class InferenceBenchmark {
 
   @Param({ "onnx_quantized" })
   private String variant;
-
-  // ONNX execution provider. Defaults to cpu so the suite runs anywhere; override on a capable
-  // host with e.g. -p executionProvider=cuda (needs -Pcuda build), openvino, or coreml.
-  @Param({ "cpu" })
-  private String executionProvider;
 
   @Param({ "tiny", "short", "medium", "long" })
   private String textLength;
@@ -140,9 +134,9 @@ public class InferenceBenchmark {
       );
     }
 
-    var runtimeConfig = RuntimeConfig.builder()
-      .executionProvider(ExecutionProvider.fromString(executionProvider))
-      .build();
+    // Execution provider is auto-detected from the native runtime on the classpath:
+    // a default build runs on CPU, a -Pcuda build picks CUDA, a -Popenvino build picks OpenVINO.
+    var runtimeConfig = RuntimeConfig.builder().build();
     gliner = GLiNER4jNER.load(
       Path.of(modelDir),
       entities,

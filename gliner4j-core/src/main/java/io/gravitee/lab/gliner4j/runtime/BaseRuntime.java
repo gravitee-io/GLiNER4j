@@ -71,9 +71,9 @@ public abstract sealed class BaseRuntime
         : Math.max(2, numCpus / 2);
 
       var variantDir = modelDir.resolve(variant);
-      var provider = runtimeConfig.getExecutionProvider() == null
-        ? ExecutionProvider.CPU
-        : runtimeConfig.getExecutionProvider();
+      var provider = ExecutionProvider.resolve(
+        runtimeConfig.getExecutionProvider()
+      );
       // Each backend gets its own optimized-model cache dir (the optimized graph is provider-specific).
       // Providers that emit compiled nodes (CUDA/CoreML/OpenVINO) cannot serialize their graph, so the
       // cache is skipped for them rather than failing the load with an ORT serialization error.
