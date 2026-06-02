@@ -1,3 +1,10 @@
+# [1.0.0-alpha.7](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0-alpha.6...1.0.0-alpha.7) (2026-06-02)
+
+
+### Features
+
+* knowledgator gliner models ([#28](https://github.com/gravitee-io/GLiNER4j/issues/28)) ([fc5dccc](https://github.com/gravitee-io/GLiNER4j/commit/fc5dccc6d1183da37a9dfe3d41a7f0c51a7bc5a3))
+
 # [1.0.0-alpha.6](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0-alpha.5...1.0.0-alpha.6) (2026-05-27)
 
 
