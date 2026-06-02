@@ -26,6 +26,7 @@ workflows:
         value: << pipeline.git.tag >>
     jobs:
       - gravitee/setup_lib-release-config:
+          gh_cli_version: "2.54.0"
           filters:
             branches:
               ignore:
