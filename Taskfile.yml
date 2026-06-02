@@ -120,10 +120,12 @@ tasks:
       - java -jar gliner4j-benchmark/target/gliner4j-benchmark.jar -p executionProvider={{.EP}} {{.JMH_ARGS | default ""}}
 
   benchmark:cuda:
-    desc: Run JMH benchmarks on the CUDA execution provider (requires an NVIDIA GPU + CUDA/cuDNN runtime)
+    desc: Run JMH benchmarks on the CUDA execution provider (sources scripts/cuda_env.sh on first run; requires an NVIDIA GPU)
+    deps:
+      - check:maven
     cmds:
-      - task: benchmark
-        vars: { EP: cuda, MVN_FLAGS: '-Pcuda' }
+      - mvn -pl gliner4j-benchmark -am package -DskipTests -Pcuda
+      - source scripts/cuda_env.sh && java -jar gliner4j-benchmark/target/gliner4j-benchmark.jar -p executionProvider=cuda {{.JMH_ARGS | default ""}}
 
   benchmark:openvino:
     desc: Run JMH benchmarks on the OpenVINO execution provider (run build:openvino first)
@@ -261,10 +263,13 @@ tasks:
       - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="base {{.VARIANT}} {{.EP}}" 2>/dev/null
 
   demo:base:cuda:
-    desc: 'Run the base demo on the CUDA execution provider (requires an NVIDIA GPU + CUDA/cuDNN runtime)'
+    desc: 'Run the base demo on the CUDA execution provider (sources scripts/cuda_env.sh on first run; requires an NVIDIA GPU)'
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
     cmds:
-      - task: demo:base
-        vars: { EP: cuda, MVN_FLAGS: '-Pcuda', VARIANT: '{{.VARIANT | default "onnx"}}' }
+      - source scripts/cuda_env.sh && mvn exec:java -pl gliner4j-demo -Pcuda -Dexec.args="base {{.VARIANT}} cuda"
 
   demo:base:openvino:
     desc: 'Run the base demo on the OpenVINO execution provider (run build:openvino first)'
@@ -345,6 +350,27 @@ tasks:
       EP: '{{.EP | default "cpu"}}'
     cmds:
       - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="pii {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  demo:pii:cuda:
+    desc: 'Run the PII demo on the CUDA execution provider (sources scripts/cuda_env.sh on first run; requires an NVIDIA GPU)'
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+    cmds:
+      - source scripts/cuda_env.sh && mvn exec:java -pl gliner4j-demo -Pcuda -Dexec.args="pii {{.VARIANT}} cuda"
+
+  demo:pii:openvino:
+    desc: 'Run the PII demo on the OpenVINO execution provider (run build:openvino first)'
+    cmds:
+      - task: demo:pii
+        vars: { EP: openvino, MVN_FLAGS: '-Popenvino', VARIANT: '{{.VARIANT | default "onnx"}}' }
+
+  demo:pii:coreml:
+    desc: 'Run the PII demo on the CoreML execution provider (Apple Silicon)'
+    cmds:
+      - task: demo:pii
+        vars: { EP: coreml, VARIANT: '{{.VARIANT | default "onnx"}}' }
 
   hf-upload:pii:
     desc: Upload the PII ONNX model directory to HuggingFace Hub

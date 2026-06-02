@@ -150,11 +150,20 @@ public enum ExecutionProvider {
         .findFirst()
         .orElse(CPU);
       autoResolved = resolved;
-      log.info(
-        "AUTO execution provider resolved to {} (available: {})",
-        resolved,
-        available
-      );
+      if (resolved == CPU) {
+        log.info(
+          "AUTO execution provider resolved to CPU — no accelerator EP compiled into the loaded ONNX Runtime (available: {}). " +
+            "To enable an accelerator, rebuild with the matching Maven profile: CUDA -> -Pcuda (also source scripts/cuda_env.sh on Linux), " +
+            "OpenVINO -> -Popenvino (run task build:openvino first); CoreML ships in the default jar on macOS.",
+          available
+        );
+      } else {
+        log.info(
+          "AUTO execution provider resolved to {} (available: {})",
+          resolved,
+          available
+        );
+      }
     }
     return resolved;
   }
