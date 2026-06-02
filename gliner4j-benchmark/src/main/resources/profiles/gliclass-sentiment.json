@@ -1,0 +1,12 @@
+{
+  "displayName": "GLiClass sentiment & emotion (ModernBERT-base v3)",
+  "modelDir": "models/gliclass-modern-base-onnx",
+  "labels": [
+    { "name": "positive" },
+    { "name": "negative" },
+    { "name": "neutral" },
+    { "name": "joy" },
+    { "name": "anger" },
+    { "name": "sadness" }
+  ]
+}

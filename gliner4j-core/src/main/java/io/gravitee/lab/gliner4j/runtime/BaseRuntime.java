@@ -19,9 +19,9 @@ import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
+import java.io.IOException;
 import java.nio.LongBuffer;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Map;
@@ -33,8 +33,8 @@ import lombok.extern.slf4j.Slf4j;
  */
 @Slf4j
 public abstract sealed class BaseRuntime
-  implements AutoCloseable
-  permits GLiNER4jClassifierRuntime, GLiNER4jNERRuntime {
+  implements ArchitectureRuntime
+  permits GLiNER4jClassifierRuntime, GLiNER4jNERRuntime, GliclassRuntime {
 
   /** Default ONNX variant folder name (base FP32). */
   public static final String DEFAULT_VARIANT = "onnx";
@@ -83,7 +83,16 @@ public abstract sealed class BaseRuntime
           cacheDir = modelDir.resolve(
             variant + "_optimized_" + provider.cacheTag()
           );
-          cacheDir.toFile().mkdirs();
+          try {
+            Files.createDirectories(cacheDir);
+          } catch (IOException e) {
+            log.warn(
+              "Could not create optimized-model cache dir {} — caching disabled for this load",
+              cacheDir,
+              e
+            );
+            cacheDir = null;
+          }
         } else {
           log.info(
             "Optimized-model cache disabled for execution provider {} (it emits non-serializable compiled nodes)",
@@ -308,6 +317,8 @@ public abstract sealed class BaseRuntime
     }
   }
 
+  // Session/EP/buffer helpers live in OrtSessions so non-BaseRuntime runtimes can reuse them;
+  // these thin delegators keep BaseRuntime subclasses' call sites unchanged.
   protected static OrtSession.SessionOptions createSessionOptions(
     int intraOpThreads,
     int interOpThreads,
@@ -316,66 +327,25 @@ public abstract sealed class BaseRuntime
     Path cacheDir,
     String modelFileName
   ) throws OrtException {
-    var opts = new OrtSession.SessionOptions();
-    opts.setIntraOpNumThreads(intraOpThreads);
-    opts.setInterOpNumThreads(interOpThreads);
-    opts.setExecutionMode(executionMode);
-    opts.setOptimizationLevel(config.getOptimizationLevel());
-    if (cacheDir != null) {
-      opts.setOptimizedModelFilePath(
-        cacheDir.resolve(modelFileName).toString()
-      );
-    }
-    applyExecutionProvider(opts, config, modelFileName);
-    return opts;
-  }
-
-  /**
-   * Registers the configured execution provider on the session options. Falls back to CPU
-   * (the ORT default) with a warning if the provider is unavailable in the loaded native runtime,
-   * so a misconfigured GPU/OpenVINO build degrades gracefully instead of failing the model load.
-   */
-  private static void applyExecutionProvider(
-    OrtSession.SessionOptions opts,
-    RuntimeConfig config,
-    String modelFileName
-  ) {
-    var ep = config.getExecutionProvider();
-    if (ep == null || ep == ExecutionProvider.CPU) {
-      return;
-    }
-    try {
-      ep.configure(
-        opts,
-        config.getGpuDeviceId(),
-        config.getOpenVinoDeviceType()
-      );
-      log.info("Registered {} execution provider for {}", ep, modelFileName);
-    } catch (OrtException | RuntimeException | UnsatisfiedLinkError e) {
-      log.warn(
-        "Could not register {} execution provider for {} — falling back to CPU. Cause: {}",
-        ep,
-        modelFileName,
-        e.getMessage()
-      );
-    }
+    return OrtSessions.createSessionOptions(
+      intraOpThreads,
+      interOpThreads,
+      executionMode,
+      config,
+      cacheDir,
+      modelFileName
+    );
   }
 
   protected static LongBuffer allocateDirectLongBuffer(long[] data) {
-    return ByteBuffer.allocateDirect(data.length * Long.BYTES)
-      .order(ByteOrder.nativeOrder())
-      .asLongBuffer()
-      .put(data)
-      .rewind();
+    return OrtSessions.allocateDirectLongBuffer(data);
   }
 
   protected static LongBuffer allocateDirectLongBuffer(int capacity) {
-    return ByteBuffer.allocateDirect(capacity * Long.BYTES)
-      .order(ByteOrder.nativeOrder())
-      .asLongBuffer();
+    return OrtSessions.allocateDirectLongBuffer(capacity);
   }
 
   protected static int getOrDefault(Integer value, int defaultValue) {
-    return value != null ? value : defaultValue;
+    return OrtSessions.getOrDefault(value, defaultValue);
   }
 }

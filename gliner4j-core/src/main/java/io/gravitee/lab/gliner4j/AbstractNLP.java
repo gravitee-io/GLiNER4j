@@ -41,9 +41,8 @@ import lombok.extern.slf4j.Slf4j;
  * @param <RT> the concrete runtime; exposed to subclasses for task-head calls
  */
 @Slf4j
-public abstract sealed class AbstractNLP<D, R, RT extends BaseRuntime>
-  implements AutoCloseable
-  permits GLiNER4jClassifier, GLiNER4jNER {
+public abstract class AbstractNLP<D, R, RT extends BaseRuntime>
+  implements AutoCloseable {
 
   protected final GLiNER4jConfig config;
   protected final DjlTokenizerWrapper tokenizer;

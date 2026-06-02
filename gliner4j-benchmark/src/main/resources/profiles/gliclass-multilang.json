@@ -1,0 +1,14 @@
+{
+  "displayName": "GLiClass-X multilingual (mDeBERTa-v3-base)",
+  "modelDir": "models/gliclass-x-onnx",
+  "labels": [
+    { "name": "technology" },
+    { "name": "sports" },
+    { "name": "politics" },
+    { "name": "business" },
+    { "name": "health" },
+    { "name": "travel" },
+    { "name": "science" },
+    { "name": "entertainment" }
+  ]
+}

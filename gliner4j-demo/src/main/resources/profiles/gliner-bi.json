@@ -1,0 +1,17 @@
+{
+  "displayName": "GLiNER Bi-Encoder — Zero-Shot NER (deberta text + MiniLM label encoder)",
+  "modelDir": "models/gliner-bi-small-onnx",
+  "entities": [
+    { "name": "person", "description": "Names of real individuals" },
+    { "name": "organization", "description": "Companies, institutions, agencies" },
+    { "name": "location", "description": "Cities, countries, geographical places" },
+    { "name": "date", "description": "Dates and time periods" },
+    { "name": "product", "description": "Commercial products and brands" }
+  ],
+  "nerSamples": [
+    "Elon Musk unveiled the Tesla Cybertruck at the Los Angeles event in November 2019.",
+    "The United Nations Climate Change Conference was held in Paris last December.",
+    "Apple released the iPhone 15 at their Cupertino headquarters on September 12, 2023.",
+    "Angela Merkel met Barack Obama in Berlin to discuss the new trade agreement."
+  ]
+}

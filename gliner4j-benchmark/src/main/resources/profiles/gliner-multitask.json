@@ -1,0 +1,11 @@
+{
+  "displayName": "GLiNER Multitask (uni-encoder, token_level, deberta-v3-large)",
+  "modelDir": "models/gliner-multitask-large-onnx",
+  "entities": [
+    { "name": "person" },
+    { "name": "organization" },
+    { "name": "location" },
+    { "name": "date" },
+    { "name": "award" }
+  ]
+}

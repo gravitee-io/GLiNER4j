@@ -1,0 +1,14 @@
+{
+  "displayName": "GLiClass topic (ModernBERT-large v3)",
+  "modelDir": "models/gliclass-modern-large-onnx",
+  "labels": [
+    { "name": "technology" },
+    { "name": "sports" },
+    { "name": "politics" },
+    { "name": "business" },
+    { "name": "entertainment" },
+    { "name": "science" },
+    { "name": "health" },
+    { "name": "travel" }
+  ]
+}

@@ -18,7 +18,17 @@ package io.gravitee.lab.gliner4j.demo.profile;
 public enum ProfileType {
   BASE("base.json"),
   PII("pii.json"),
-  GLIGUARD("gliguard.json");
+  GLIGUARD("gliguard.json"),
+  GLICLASS("gliclass.json"),
+  GLICLASS_SENTIMENT("gliclass-sentiment.json"),
+  GLICLASS_MULTILANG("gliclass-multilang.json"),
+  GLICLASS_EDGE("gliclass-edge.json"),
+  GLICLASS_LARGE("gliclass-large.json"),
+  GLICLASS_MODERN_LARGE("gliclass-modern-large.json"),
+  GLINER_PII("gliner-pii.json"),
+  GLINER_BI("gliner-bi.json"),
+  GLINER_X("gliner-x.json"),
+  GLINER_MULTITASK("gliner-multitask.json");
 
   public final String filename;
 

@@ -1,0 +1,23 @@
+{
+  "displayName": "GLiClass Zero-Shot Topic Classification (ModernBERT-large v3)",
+  "modelDir": "models/gliclass-modern-large-onnx",
+  "labels": [
+    { "name": "technology", "description": "Computing, software, gadgets, AI, and the internet" },
+    { "name": "sports", "description": "Athletics, teams, matches, and competitions" },
+    { "name": "politics", "description": "Government, elections, legislation, and policy" },
+    { "name": "business", "description": "Companies, markets, finance, and the economy" },
+    { "name": "entertainment", "description": "Film, music, television, and celebrity culture" },
+    { "name": "science", "description": "Research, discoveries, space, and the natural world" },
+    { "name": "health", "description": "Medicine, wellness, fitness, and healthcare" },
+    { "name": "travel", "description": "Tourism, destinations, and journeys" }
+  ],
+  "classifySamples": [
+    "The central bank held interest rates steady but signalled two cuts before year end.",
+    "Researchers used a CRISPR-based therapy to restore vision in a small clinical trial.",
+    "The transfer window slammed shut with a record-breaking midnight deadline-day deal.",
+    "The streaming giant's prestige drama swept the awards, taking home eleven trophies.",
+    "Negotiators reached a fragile ceasefire after a marathon overnight diplomatic session.",
+    "A new quantum processor demonstrated error correction below the critical threshold.",
+    "Travellers are flocking to the Azores for volcanic hot springs and whale watching."
+  ]
+}

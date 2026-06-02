@@ -15,29 +15,26 @@
  */
 package io.gravitee.lab.gliner4j;
 
-import io.gravitee.lab.gliner4j.postprocess.SpanDecoder;
-import io.gravitee.lab.gliner4j.processor.BatchPreprocessor;
-import io.gravitee.lab.gliner4j.processor.InputAssembler;
-import io.gravitee.lab.gliner4j.processor.PreprocessedInput;
-import io.gravitee.lab.gliner4j.processor.SchemaEncoder;
+import io.gravitee.lab.gliner4j.arch.LoadContext;
+import io.gravitee.lab.gliner4j.arch.ModelArchitectures;
 import io.gravitee.lab.gliner4j.runtime.BaseRuntime;
-import io.gravitee.lab.gliner4j.runtime.GLiNER4jNERRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
-import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
+import io.gravitee.lab.gliner4j.strategy.NerStrategy;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
-import io.gravitee.lab.gliner4j.tokenizer.TokenMapping;
 import java.nio.file.Path;
-import java.util.*;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.stream.Collectors;
+import java.util.List;
+import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Main facade for GLiNER4jNER — Java-native GLiNER2 NER via ONNX Runtime.
+ * Main facade for GLiNER4j NER via ONNX Runtime.
+ *
+ * <p>The bundle's model family is detected automatically from the {@code architecture} key in
+ * {@code gliner4j_config.json} (absent ⇒ GLiNER2). This facade is family-agnostic: it resolves the
+ * family to a {@link NerStrategy} at load time and delegates extraction to it, applying the default
+ * threshold and null-guards.
  *
  * <p>Usage:
  * <pre>{@code
@@ -48,29 +45,14 @@ import lombok.extern.slf4j.Slf4j;
  * }</pre>
  */
 @Slf4j
-public final class GLiNER4jNER
-  extends AbstractNLP<
-    EntityDefinition,
-    Map<String, List<EntitySpan>>,
-    GLiNER4jNERRuntime
-  > {
+public final class GLiNER4jNER implements AutoCloseable {
 
-  private final SpanDecoder spanDecoder;
+  private final GLiNER4jConfig config;
+  private final NerStrategy strategy;
 
-  private GLiNER4jNER(
-    GLiNER4jConfig config,
-    DjlTokenizerWrapper tokenizer,
-    GLiNER4jNERRuntime runtime,
-    InputAssembler inputAssembler
-  ) {
-    super(
-      config,
-      tokenizer,
-      runtime,
-      inputAssembler,
-      new GLiNER4jTelemetry("extract")
-    );
-    this.spanDecoder = new SpanDecoder();
+  private GLiNER4jNER(GLiNER4jConfig config, NerStrategy strategy) {
+    this.config = config;
+    this.strategy = strategy;
   }
 
   /**
@@ -142,24 +124,29 @@ public final class GLiNER4jNER
     String variant,
     RuntimeConfig runtimeConfig
   ) {
+    var config = GLiNER4jConfig.load(modelDir);
     log.info(
-      "Loading GLiNER4jNER model from {} (variant={}) with {} entities",
+      "Loading GLiNER4jNER model from {} (variant={}, architecture={}) with {} entities",
       modelDir,
       variant,
+      config.getArchitecture().configValue(),
       entities.size()
     );
 
-    var config = GLiNER4jConfig.load(modelDir);
     var tokenizer = new DjlTokenizerWrapper(modelDir);
-    var runtime = new GLiNER4jNERRuntime(modelDir, variant, runtimeConfig);
-    var schemaEncoder = entitySchemaEncoder(entities);
-    var inputAssembler = new InputAssembler(tokenizer, schemaEncoder);
-
-    // Pre-allocate encoder buffers with the constant schema prefix
-    runtime.initEncoderBuffers(inputAssembler.getSchemaPrefixIds());
+    var ctx = new LoadContext(
+      modelDir,
+      variant,
+      runtimeConfig,
+      config,
+      tokenizer
+    );
+    var strategy = ModelArchitectures.forId(
+      config.getArchitecture()
+    ).newNerStrategy(ctx, entities);
 
     log.info("GLiNER4jNER model loaded successfully");
-    return new GLiNER4jNER(config, tokenizer, runtime, inputAssembler);
+    return new GLiNER4jNER(config, strategy);
   }
 
   /**
@@ -169,7 +156,7 @@ public final class GLiNER4jNER
    * @return map of entity type to list of detected spans
    */
   public Map<String, List<EntitySpan>> extract(String text) {
-    return doExtractOnce(text, config.getDefaultThreshold());
+    return strategy.extract(text, config.getDefaultThreshold());
   }
 
   /**
@@ -180,7 +167,7 @@ public final class GLiNER4jNER
    * @return map of entity type to list of detected spans
    */
   public Map<String, List<EntitySpan>> extract(String text, float threshold) {
-    return doExtractOnce(text, threshold);
+    return strategy.extract(text, threshold);
   }
 
   /**
@@ -194,7 +181,7 @@ public final class GLiNER4jNER
     String text,
     List<EntityDefinition> entities
   ) {
-    return doExtractOverride(text, entities, config.getDefaultThreshold());
+    return strategy.extract(text, entities, config.getDefaultThreshold());
   }
 
   /**
@@ -210,14 +197,11 @@ public final class GLiNER4jNER
     List<EntityDefinition> entities,
     float threshold
   ) {
-    return doExtractOverride(text, entities, threshold);
+    return strategy.extract(text, entities, threshold);
   }
 
   /**
    * Extracts entities from multiple texts in batch, using a single batched encoder call.
-   *
-   * <p>The encoder (the most expensive stage) processes all texts in one ONNX call with
-   * shape [batchSize, maxSeqLen]. The span_rep and scoring_head stages remain per-text.
    *
    * @param texts the input texts to analyze
    * @return list of results, one per input text (same order)
@@ -226,7 +210,7 @@ public final class GLiNER4jNER
     if (texts == null) {
       return List.of();
     }
-    return extractBatch(texts, config.getDefaultThreshold());
+    return strategy.extractBatch(texts, config.getDefaultThreshold());
   }
 
   /**
@@ -243,344 +227,12 @@ public final class GLiNER4jNER
     if (texts == null) {
       return List.of();
     }
-    long startNanos = System.nanoTime();
-    int batchSize = texts.size();
-
-    // 1. Preprocess and pack the contiguous batch (shared with other facades)
-    var preproc = BatchPreprocessor.preprocess(texts, inputAssembler);
-    int nonEmptyCount = preproc.nonEmptyCount();
-
-    // Short-circuit: all texts are empty
-    if (nonEmptyCount == 0) {
-      var emptyResults = new ArrayList<Map<String, List<EntitySpan>>>(
-        batchSize
-      );
-      for (int i = 0; i < batchSize; i++) {
-        emptyResults.add(Map.of());
-      }
-      double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-      telemetry.record(durationMs, batchSize, 0);
-      return emptyResults;
-    }
-
-    var inputs = preproc.inputs();
-    var batchIndices = preproc.batchIndices();
-
-    // 2. Single batched encoder call
-    var batchedHiddenStates = runtime.runEncoderBatch(
-      preproc.batchInputIds(),
-      preproc.batchAttentionMask(),
-      preproc.maxSeqLen()
-    );
-
-    // 3. Extract schema embeddings once (identical for all texts in the batch)
-    var schemaEmbs = extractSchemaEmbeddings(
-      batchedHiddenStates[0],
-      inputs[batchIndices[0]]
-    );
-
-    // 4. Extract text embeddings and find maxTextLen
-    int hiddenSize = config.getHiddenSize();
-    int maxWidth = config.getMaxWidth();
-    int maxTextLen = 0;
-    var textLens = new int[nonEmptyCount];
-    var perTextEmbs = new float[nonEmptyCount][][];
-
-    for (int s = 0; s < nonEmptyCount; s++) {
-      var input = inputs[batchIndices[s]];
-      int textLen = input.textLen();
-      textLens[s] = textLen;
-      if (textLen > maxTextLen) maxTextLen = textLen;
-      perTextEmbs[s] = new float[textLen][hiddenSize];
-      extractTextEmbeddings(batchedHiddenStates[s], input, perTextEmbs[s]);
-    }
-
-    // 5. Build padded batch for span_rep (single ONNX call)
-    int maxNumSpans = maxTextLen * maxWidth;
-    var batchTextEmbs = new float[nonEmptyCount][maxTextLen][hiddenSize];
-    var batchSpanIdxFlat = new long[nonEmptyCount * maxNumSpans * 2];
-
-    for (int s = 0; s < nonEmptyCount; s++) {
-      int textLen = textLens[s];
-      System.arraycopy(perTextEmbs[s], 0, batchTextEmbs[s], 0, textLen);
-      // Zero-padded rows beyond textLen are already 0.0f (default)
-
-      int batchOffset = s * maxNumSpans * 2;
-      for (int i = 0; i < textLen; i++) {
-        for (int w = 0; w < maxWidth; w++) {
-          int endPos = i + w;
-          if (endPos < textLen) {
-            int flatIdx = batchOffset + (i * maxWidth + w) * 2;
-            batchSpanIdxFlat[flatIdx] = i;
-            batchSpanIdxFlat[flatIdx + 1] = endPos;
-          }
-        }
-      }
-    }
-
-    var batchSpanRep4d = runtime.runSpanRepBatch(
-      batchTextEmbs,
-      batchSpanIdxFlat,
-      nonEmptyCount,
-      maxNumSpans
-    );
-
-    // 6. Per-text fanout: scoring_head + decode on virtual threads.
-    //    OrtSession.run() is thread-safe; on CUDA, independent runs can dispatch onto
-    //    separate streams and the GPU overlaps their kernels on its SMs.
-    var results = new ArrayList<Map<String, List<EntitySpan>>>(batchSize);
-    for (int i = 0; i < batchSize; i++) {
-      results.add(Map.of());
-    }
-
-    @SuppressWarnings("unchecked")
-    var futures = (Future<
-      Map<String, List<EntitySpan>>
-    >[]) new Future[nonEmptyCount];
-
-    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-      for (int s = 0; s < nonEmptyCount; s++) {
-        final int si = s;
-        futures[si] = executor.submit(() -> {
-          int origIdx = batchIndices[si];
-          var input = inputs[origIdx];
-          int textLen = textLens[si];
-
-          // Slice the per-text span_rep view [textLen][maxWidth][hiddenSize]
-          // from the padded batch tensor. Reference-only copy; inner rows are shared.
-          var spanRep = Arrays.copyOfRange(batchSpanRep4d[si], 0, textLen);
-
-          var scoringResult = runtime.runScoringHead(
-            spanRep,
-            schemaEmbs.schemaEmbP(),
-            schemaEmbs.schemaEmbFields(),
-            config.getMaxCount()
-          );
-
-          int predCount = argmax(scoringResult.countLogits()[0]);
-          if (predCount == 0) {
-            return Map.<String, List<EntitySpan>>of();
-          }
-
-          var spans = spanDecoder.decode(
-            scoringResult.spanScores(),
-            input.fieldNames(),
-            input.wordStartChars(),
-            input.wordEndChars(),
-            texts.get(origIdx),
-            textLen,
-            threshold
-          );
-
-          return spans
-            .stream()
-            .collect(
-              Collectors.groupingBy(
-                EntitySpan::type,
-                LinkedHashMap::new,
-                Collectors.toList()
-              )
-            );
-        });
-      }
-
-      for (int s = 0; s < nonEmptyCount; s++) {
-        try {
-          results.set(batchIndices[s], futures[s].get());
-        } catch (ExecutionException e) {
-          throw new RuntimeException(
-            "NER scoring head failed for batch slot " + s,
-            e.getCause()
-          );
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-          throw new RuntimeException("NER batch fanout interrupted", e);
-        }
-      }
-    }
-
-    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-    long totalEntities = results
-      .stream()
-      .mapToLong(m -> m.values().stream().mapToLong(List::size).sum())
-      .sum();
-    telemetry.record(durationMs, batchSize, totalEntities);
-    return results;
-  }
-
-  // ---- AbstractTaskFacade hooks -------------------------------------------
-
-  @Override
-  protected SchemaEncoder buildSchemaEncoder(
-    List<EntityDefinition> definitions
-  ) {
-    return entitySchemaEncoder(definitions);
+    return strategy.extractBatch(texts, threshold);
   }
 
   @Override
-  protected Map<String, List<EntitySpan>> emptyResult() {
-    return Map.of();
-  }
-
-  @Override
-  protected long resultSize(Map<String, List<EntitySpan>> result) {
-    return result.values().stream().mapToLong(List::size).sum();
-  }
-
-  @Override
-  protected Map<String, List<EntitySpan>> decodeFromHiddenStates(
-    float[][][] hiddenStates,
-    PreprocessedInput input,
-    String text,
-    float threshold
-  ) {
-    var embeddings = extractEmbeddings(hiddenStates[0], input);
-
-    int maxWidth = config.getMaxWidth();
-    int textLen = input.textLen();
-    int numSpans = textLen * maxWidth;
-    var spanIdxFlat = buildSpanIdxFlat(textLen, maxWidth, numSpans);
-
-    var textEmbs3d = new float[1][textLen][config.getHiddenSize()];
-    System.arraycopy(embeddings.textEmbs, 0, textEmbs3d[0], 0, textLen);
-    var spanRep4d = runtime.runSpanRepFlat(textEmbs3d, spanIdxFlat, numSpans);
-    var spanRep = spanRep4d[0];
-
-    var scoringResult = runtime.runScoringHead(
-      spanRep,
-      embeddings.schemaEmbP,
-      embeddings.schemaEmbFields,
-      (long) config.getMaxCount()
-    );
-
-    int predCount = argmax(scoringResult.countLogits()[0]);
-    log.debug("Predicted count: {}", predCount);
-    if (predCount == 0) {
-      return Map.of();
-    }
-
-    var spans = spanDecoder.decode(
-      scoringResult.spanScores(),
-      input.fieldNames(),
-      input.wordStartChars(),
-      input.wordEndChars(),
-      text,
-      textLen,
-      threshold
-    );
-
-    return spans
-      .stream()
-      .collect(
-        Collectors.groupingBy(
-          EntitySpan::type,
-          LinkedHashMap::new,
-          Collectors.toList()
-        )
-      );
-  }
-
-  // ---- NER-specific helpers -----------------------------------------------
-
-  private ExtractedEmbeddings extractEmbeddings(
-    float[][] hiddenState,
-    PreprocessedInput input
-  ) {
-    var schema = extractSchemaEmbeddings(hiddenState, input);
-    var textEmbs = new float[input.textLen()][config.getHiddenSize()];
-    extractTextEmbeddings(hiddenState, input, textEmbs);
-    return new ExtractedEmbeddings(
-      schema.schemaEmbP(),
-      schema.schemaEmbFields(),
-      textEmbs
-    );
-  }
-
-  private static long[] buildSpanIdxFlat(
-    int textLen,
-    int maxWidth,
-    int numSpans
-  ) {
-    var flat = new long[numSpans * 2];
-    for (int i = 0; i < textLen; i++) {
-      for (int w = 0; w < maxWidth; w++) {
-        int endPos = i + w;
-        if (endPos < textLen) {
-          int flatIdx = (i * maxWidth + w) * 2;
-          flat[flatIdx] = i;
-          flat[flatIdx + 1] = endPos;
-        }
-      }
-    }
-    return flat;
-  }
-
-  private static int argmax(float[] values) {
-    int maxIdx = 0;
-    float maxVal = values[0];
-    for (int i = 1; i < values.length; i++) {
-      if (values[i] > maxVal) {
-        maxVal = values[i];
-        maxIdx = i;
-      }
-    }
-    return maxIdx;
-  }
-
-  private static SchemaEncoder entitySchemaEncoder(
-    List<EntityDefinition> entities
-  ) {
-    return new SchemaEncoder(
-      "entities",
-      "[E]",
-      entities.stream().map(EntityDefinition::name).toList(),
-      entities.stream().map(EntityDefinition::description).toList()
-    );
-  }
-
-  private record ExtractedEmbeddings(
-    float[] schemaEmbP,
-    float[][] schemaEmbFields,
-    float[][] textEmbs
-  ) {}
-
-  private record SchemaEmbeddings(
-    float[] schemaEmbP,
-    float[][] schemaEmbFields
-  ) {}
-
-  private SchemaEmbeddings extractSchemaEmbeddings(
-    float[][] hiddenState,
-    PreprocessedInput input
-  ) {
-    // Positions of [P] and each [E] marker are baked into the assembler at construction time —
-    // O(numFields) array lookups instead of an O(seqLen) input-id scan.
-    var positions = input.schemaTokenPositions();
-    float[] schemaEmbP = positions[0] >= 0
-      ? hiddenState[positions[0]]
-      : new float[config.getHiddenSize()];
-    var schemaEmbFields = new float[positions.length - 1][];
-    for (int i = 0; i < schemaEmbFields.length; i++) {
-      schemaEmbFields[i] = hiddenState[positions[i + 1]];
-    }
-    return new SchemaEmbeddings(schemaEmbP, schemaEmbFields);
-  }
-
-  private void extractTextEmbeddings(
-    float[][] hiddenState,
-    PreprocessedInput input,
-    float[][] target
-  ) {
-    var seenWord = new boolean[input.textLen()];
-    for (int i = 0; i < input.mappings().length; i++) {
-      var mapping = input.mappings()[i];
-      if (
-        mapping.type() == TokenMapping.SegmentType.TEXT &&
-        !seenWord[mapping.origIdx()]
-      ) {
-        target[mapping.origIdx()] = hiddenState[i];
-        seenWord[mapping.origIdx()] = true;
-      }
-    }
+  public void close() {
+    strategy.close();
+    log.info("GLiNER4jNER closed");
   }
 }

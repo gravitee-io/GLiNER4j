@@ -1,0 +1,17 @@
+{
+  "displayName": "GLiNER Multitask — Zero-Shot NER (token_level, deberta-v3-large)",
+  "modelDir": "models/gliner-multitask-large-onnx",
+  "entities": [
+    { "name": "person", "description": "Names of real individuals" },
+    { "name": "organization", "description": "Companies, institutions, agencies" },
+    { "name": "location", "description": "Cities, countries, geographical places" },
+    { "name": "date", "description": "Dates and time periods" },
+    { "name": "award", "description": "Prizes, honours, and awards" }
+  ],
+  "nerSamples": [
+    "Marie Curie won the Nobel Prize at the University of Paris in 1903.",
+    "Elon Musk unveiled the Tesla Cybertruck in Los Angeles in November 2019.",
+    "The United Nations Climate Change Conference was held in Paris last December.",
+    "Barack Obama received the Nobel Peace Prize while serving as President in 2009."
+  ]
+}

@@ -18,6 +18,7 @@ package io.gravitee.lab.gliner4j;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.gravitee.lab.gliner4j.arch.Architecture;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Map;
@@ -37,6 +38,10 @@ public class GLiNER4jConfig {
   public static final int DEFAULT_MAX_WIDTH = 12;
 
   private final Path modelPath;
+
+  /** The GLiNER family this bundle belongs to. Absent in the config ⇒ {@link Architecture#GLINER2}. */
+  @Builder.Default
+  private final Architecture architecture = Architecture.GLINER2;
 
   @Builder.Default
   private final float defaultThreshold = DEFAULT_THRESHOLD;
@@ -60,6 +65,38 @@ public class GLiNER4jConfig {
   private final Map<String, Long> specialTokenIds = Map.of();
 
   /**
+   * Family-specific config keys, kept under the {@code "architecture_config"} block so each model
+   * family can carry its own knobs without forking the shared schema. Empty for bundles that
+   * declare none. Read it through {@link #archInt}/{@link #archLong}/{@link #archBoolean}/{@link #archString}.
+   */
+  @Builder.Default
+  private final Map<String, Object> architectureConfig = Map.of();
+
+  /** Returns the {@code architecture_config} value for {@code key} as an int, or {@code def} if absent. */
+  public int archInt(String key, int def) {
+    var v = architectureConfig.get(key);
+    return v instanceof Number n ? n.intValue() : def;
+  }
+
+  /** Returns the {@code architecture_config} value for {@code key} as a long, or {@code def} if absent. */
+  public long archLong(String key, long def) {
+    var v = architectureConfig.get(key);
+    return v instanceof Number n ? n.longValue() : def;
+  }
+
+  /** Returns the {@code architecture_config} value for {@code key} as a boolean, or {@code def} if absent. */
+  public boolean archBoolean(String key, boolean def) {
+    var v = architectureConfig.get(key);
+    return v instanceof Boolean b ? b : def;
+  }
+
+  /** Returns the {@code architecture_config} value for {@code key} as a String, or {@code def} if absent. */
+  public String archString(String key, String def) {
+    var v = architectureConfig.get(key);
+    return v != null ? v.toString() : def;
+  }
+
+  /**
    * Loads configuration from gliner4j_config.json in the model directory.
    *
    * @param modelDir path to the model directory
@@ -70,8 +107,10 @@ public class GLiNER4jConfig {
     var mapper = new ObjectMapper();
     try {
       var json = mapper.readValue(configFile.toFile(), JsonConfig.class);
+      var architecture = Architecture.fromConfigValue(json.architecture);
       log.info(
-        "Loaded config: hiddenSize={}, maxWidth={}, maxCount={}, usesSpanIdx={}, tokenPooling={}",
+        "Loaded config: architecture={}, hiddenSize={}, maxWidth={}, maxCount={}, usesSpanIdx={}, tokenPooling={}",
+        architecture.configValue(),
         json.hiddenSize,
         json.maxWidth,
         json.maxCount,
@@ -80,12 +119,16 @@ public class GLiNER4jConfig {
       );
       return GLiNER4jConfig.builder()
         .modelPath(modelDir)
+        .architecture(architecture)
         .hiddenSize(json.hiddenSize)
         .maxWidth(json.maxWidth)
         .maxCount(json.maxCount)
         .usesSpanIdx(json.usesSpanIdx)
         .tokenPooling(json.tokenPooling)
         .specialTokenIds(json.specialTokenIds)
+        .architectureConfig(
+          json.architectureConfig != null ? json.architectureConfig : Map.of()
+        )
         .build();
     } catch (IOException e) {
       throw new RuntimeException("Failed to load config from " + configFile, e);
@@ -94,6 +137,9 @@ public class GLiNER4jConfig {
 
   @JsonIgnoreProperties(ignoreUnknown = true)
   private static class JsonConfig {
+
+    @JsonProperty("architecture")
+    String architecture = null;
 
     @JsonProperty("hidden_size")
     int hiddenSize = 768;
@@ -112,5 +158,8 @@ public class GLiNER4jConfig {
 
     @JsonProperty("special_token_ids")
     Map<String, Long> specialTokenIds = Map.of();
+
+    @JsonProperty("architecture_config")
+    Map<String, Object> architectureConfig = Map.of();
   }
 }

@@ -67,6 +67,23 @@ public class DjlTokenizerWrapper implements AutoCloseable {
   }
 
   /**
+   * Encodes a full text into token IDs <em>with</em> the model's special tokens (e.g. the leading
+   * {@code [CLS]} / trailing {@code [SEP]} from the tokenizer's post-processor), and recognizing
+   * any in-string special markers ({@code <<LABEL>>}, {@code <<SEP>>}, …) as single tokens.
+   *
+   * <p>Used by whole-prompt families like GLiClass, where the class/text markers and the
+   * position-0 {@code [CLS]} representation must match training. Distinct from
+   * {@link #tokenizeWithIds(String)}, which is per-word and adds no special tokens (GLiNER2 builds
+   * its sequence word-by-word).
+   *
+   * @param text the full prompt to encode
+   * @return token IDs including special tokens
+   */
+  public long[] encodeWithSpecialTokens(String text) {
+    return tokenizer.encode(text, true, false).getIds();
+  }
+
+  /**
    * Tokenizes a word into subwords and returns both tokens and IDs in a single call.
    * Avoids the double-encoding overhead of calling tokenize() + convertTokensToIds() separately.
    *

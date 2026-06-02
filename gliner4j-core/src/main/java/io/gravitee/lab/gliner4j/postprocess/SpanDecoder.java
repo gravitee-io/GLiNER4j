@@ -17,14 +17,13 @@ package io.gravitee.lab.gliner4j.postprocess;
 
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 
 /**
  * Decodes raw span scores into entity spans.
  * Applies thresholding, character mapping, and greedy non-overlapping removal.
  */
-public class SpanDecoder {
+public class SpanDecoder extends AbstractDecoder {
 
   /**
    * Decodes span scores into a list of entity spans.
@@ -80,25 +79,6 @@ public class SpanDecoder {
     }
 
     // Greedy non-overlapping removal: sort by confidence desc, skip overlaps
-    candidates.sort(
-      Comparator.comparingDouble(EntitySpan::confidence).reversed()
-    );
-    var result = new ArrayList<EntitySpan>();
-    for (var candidate : candidates) {
-      boolean overlaps = result
-        .stream()
-        .anyMatch(
-          existing ->
-            candidate.start() < existing.end() &&
-            candidate.end() > existing.start()
-        );
-      if (!overlaps) {
-        result.add(candidate);
-      }
-    }
-
-    // Sort by position for consistent output
-    result.sort(Comparator.comparingInt(EntitySpan::start));
-    return result;
+    return getEntitySpans(candidates);
   }
 }

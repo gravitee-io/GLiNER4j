@@ -1,0 +1,10 @@
+{
+  "displayName": "GLiNER-X multilingual (uni-encoder, mT5-base, whitespace-split)",
+  "modelDir": "models/gliner-x-base-onnx",
+  "entities": [
+    { "name": "person" },
+    { "name": "organization" },
+    { "name": "location" },
+    { "name": "date" }
+  ]
+}

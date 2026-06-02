@@ -15,6 +15,10 @@
  */
 package io.gravitee.lab.gliner4j;
 
+import static io.gravitee.lab.gliner4j.utils.LinAlg.argmax;
+
+import io.gravitee.lab.gliner4j.arch.ModelArchitectures;
+import io.gravitee.lab.gliner4j.arch.TaskType;
 import io.gravitee.lab.gliner4j.postprocess.RelationDecoder;
 import io.gravitee.lab.gliner4j.postprocess.SpanDecoder;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaEmbeddings;
@@ -32,6 +36,7 @@ import io.gravitee.lab.gliner4j.schema.ExtractionResult;
 import io.gravitee.lab.gliner4j.schema.RelationInstance;
 import io.gravitee.lab.gliner4j.schema.Schema;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
+import io.gravitee.lab.gliner4j.utils.GlinerNerSupport;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -41,7 +46,6 @@ import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -113,6 +117,9 @@ public class GLiNER4j implements AutoCloseable {
       variant
     );
     var config = GLiNER4jConfig.load(modelDir);
+    ModelArchitectures.forId(config.getArchitecture()).requireSupported(
+      TaskType.RELATION
+    );
     var tokenizer = new DjlTokenizerWrapper(modelDir);
     var runtime = new GLiNER4jNERRuntime(modelDir, variant, runtimeConfig);
     log.info("GLiNER4j unified model loaded successfully");
@@ -426,9 +433,6 @@ public class GLiNER4j implements AutoCloseable {
             threshold
           )
         );
-        case CLASSIFICATIONS -> {
-          // Filtered out earlier — should never reach here
-        }
       }
     }
 
@@ -470,15 +474,7 @@ public class GLiNER4j implements AutoCloseable {
       threshold
     );
 
-    var grouped = spans
-      .stream()
-      .collect(
-        Collectors.groupingBy(
-          EntitySpan::type,
-          LinkedHashMap::new,
-          Collectors.toList()
-        )
-      );
+    var grouped = GlinerNerSupport.groupByType(spans);
 
     // Ensure every requested entity type is present in the output map
     var result = emptyEntityMap(layout.unit().childNames());
@@ -565,18 +561,6 @@ public class GLiNER4j implements AutoCloseable {
       }
     }
     return flat;
-  }
-
-  private static int argmax(float[] values) {
-    int maxIdx = 0;
-    float maxVal = values[0];
-    for (int i = 1; i < values.length; i++) {
-      if (values[i] > maxVal) {
-        maxVal = values[i];
-        maxIdx = i;
-      }
-    }
-    return maxIdx;
   }
 
   @Override

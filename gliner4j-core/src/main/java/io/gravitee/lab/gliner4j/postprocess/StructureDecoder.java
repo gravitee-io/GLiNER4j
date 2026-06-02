@@ -140,9 +140,16 @@ public class StructureDecoder {
       return raw;
     }
 
-    // Snap each candidate to the longest matching choice (case-insensitive).
-    // Match if the choice equals, contains, or is contained in the extracted text — this handles the
-    // common case of the model extracting "outdoor seating" instead of just "outdoor".
+    return getSnapped(field, raw);
+  }
+
+  // Snap each candidate to the longest matching choice (case-insensitive).
+  // Match if the choice equals, contains, or is contained in the extracted text — this handles the
+  // common case of the model extracting "outdoor seating" instead of just "outdoor".
+  private static ArrayList<StringValue> getSnapped(
+    StructureField field,
+    ArrayList<StringValue> raw
+  ) {
     var lowerChoices = new ArrayList<String>(field.choices().size());
     for (var choice : field.choices()) {
       lowerChoices.add(choice.toLowerCase(Locale.ROOT));

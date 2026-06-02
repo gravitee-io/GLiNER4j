@@ -15,27 +15,25 @@
  */
 package io.gravitee.lab.gliner4j;
 
-import io.gravitee.lab.gliner4j.processor.BatchPreprocessor;
-import io.gravitee.lab.gliner4j.processor.InputAssembler;
-import io.gravitee.lab.gliner4j.processor.PreprocessedInput;
-import io.gravitee.lab.gliner4j.processor.SchemaEncoder;
+import io.gravitee.lab.gliner4j.arch.LoadContext;
+import io.gravitee.lab.gliner4j.arch.ModelArchitectures;
 import io.gravitee.lab.gliner4j.runtime.BaseRuntime;
-import io.gravitee.lab.gliner4j.runtime.GLiNER4jClassifierRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
-import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
+import io.gravitee.lab.gliner4j.strategy.ClassificationStrategy;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import lombok.extern.slf4j.Slf4j;
 
 /**
  * Text classification facade for GLiNER4j — classifies text into label categories via ONNX Runtime.
+ *
+ * <p>The bundle's model family is detected automatically from the {@code architecture} key in
+ * {@code gliner4j_config.json} (absent ⇒ GLiNER2). This facade resolves the family to a
+ * {@link ClassificationStrategy} at load time and delegates to it, applying the default threshold
+ * and null-guards.
  *
  * <p>Supports single-label (highest confidence) and multi-label (threshold-based) classification,
  * with optional per-call label override.
@@ -49,26 +47,17 @@ import lombok.extern.slf4j.Slf4j;
  * }</pre>
  */
 @Slf4j
-public final class GLiNER4jClassifier
-  extends AbstractNLP<
-    ClassificationLabel,
-    List<ClassificationResult>,
-    GLiNER4jClassifierRuntime
-  > {
+public final class GLiNER4jClassifier implements AutoCloseable {
+
+  private final GLiNER4jConfig config;
+  private final ClassificationStrategy strategy;
 
   private GLiNER4jClassifier(
     GLiNER4jConfig config,
-    DjlTokenizerWrapper tokenizer,
-    GLiNER4jClassifierRuntime runtime,
-    InputAssembler inputAssembler
+    ClassificationStrategy strategy
   ) {
-    super(
-      config,
-      tokenizer,
-      runtime,
-      inputAssembler,
-      new GLiNER4jTelemetry("classify")
-    );
+    this.config = config;
+    this.strategy = strategy;
   }
 
   /**
@@ -137,27 +126,29 @@ public final class GLiNER4jClassifier
     String variant,
     RuntimeConfig runtimeConfig
   ) {
+    var config = GLiNER4jConfig.load(modelDir);
     log.info(
-      "Loading GLiNER4jClassifier from {} (variant={}) with {} labels",
+      "Loading GLiNER4jClassifier from {} (variant={}, architecture={}) with {} labels",
       modelDir,
       variant,
+      config.getArchitecture().configValue(),
       labels.size()
     );
 
-    var config = GLiNER4jConfig.load(modelDir);
     var tokenizer = new DjlTokenizerWrapper(modelDir);
-    var runtime = new GLiNER4jClassifierRuntime(
+    var ctx = new LoadContext(
       modelDir,
       variant,
-      runtimeConfig
+      runtimeConfig,
+      config,
+      tokenizer
     );
-    var schemaEncoder = labelSchemaEncoder(labels);
-    var inputAssembler = new InputAssembler(tokenizer, schemaEncoder);
-
-    runtime.initEncoderBuffers(inputAssembler.getSchemaPrefixIds());
+    var strategy = ModelArchitectures.forId(
+      config.getArchitecture()
+    ).newClassificationStrategy(ctx, labels);
 
     log.info("GLiNER4jClassifier loaded successfully");
-    return new GLiNER4jClassifier(config, tokenizer, runtime, inputAssembler);
+    return new GLiNER4jClassifier(config, strategy);
   }
 
   /**
@@ -167,7 +158,7 @@ public final class GLiNER4jClassifier
    * @return list of classification results above threshold
    */
   public List<ClassificationResult> classify(String text) {
-    return doExtractOnce(text, config.getDefaultThreshold());
+    return strategy.classify(text, config.getDefaultThreshold());
   }
 
   /**
@@ -178,7 +169,7 @@ public final class GLiNER4jClassifier
    * @return list of classification results above threshold, sorted by confidence descending
    */
   public List<ClassificationResult> classify(String text, float threshold) {
-    return doExtractOnce(text, threshold);
+    return strategy.classify(text, threshold);
   }
 
   /**
@@ -192,7 +183,7 @@ public final class GLiNER4jClassifier
     String text,
     List<ClassificationLabel> labels
   ) {
-    return doExtractOverride(text, labels, config.getDefaultThreshold());
+    return strategy.classify(text, labels, config.getDefaultThreshold());
   }
 
   /**
@@ -208,7 +199,7 @@ public final class GLiNER4jClassifier
     List<ClassificationLabel> labels,
     float threshold
   ) {
-    return doExtractOverride(text, labels, threshold);
+    return strategy.classify(text, labels, threshold);
   }
 
   /**
@@ -218,14 +209,14 @@ public final class GLiNER4jClassifier
    * @return list of results, one per input text (same order)
    */
   public List<List<ClassificationResult>> classifyBatch(List<String> texts) {
-    return classifyBatch(texts, config.getDefaultThreshold());
+    if (texts == null) {
+      return List.of();
+    }
+    return strategy.classifyBatch(texts, config.getDefaultThreshold());
   }
 
   /**
    * Classifies multiple texts in batch with a custom threshold.
-   *
-   * <p>The encoder processes all texts in one batched ONNX call.
-   * The classifier head runs per-text via virtual threads.
    *
    * @param texts the input texts to classify
    * @param threshold minimum confidence score (0..1) for label inclusion
@@ -235,170 +226,15 @@ public final class GLiNER4jClassifier
     List<String> texts,
     float threshold
   ) {
-    long startNanos = System.nanoTime();
-    int batchSize = texts.size();
-
-    // 1. Preprocess and pack the contiguous batch (shared with other facades)
-    var preproc = BatchPreprocessor.preprocess(texts, inputAssembler);
-    int nonEmptyCount = preproc.nonEmptyCount();
-
-    // Short-circuit: all texts are empty
-    if (nonEmptyCount == 0) {
-      var emptyResults = new ArrayList<List<ClassificationResult>>(batchSize);
-      for (int i = 0; i < batchSize; i++) {
-        emptyResults.add(List.of());
-      }
-      double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-      telemetry.record(durationMs, batchSize, 0);
-      return emptyResults;
-    }
-
-    var inputs = preproc.inputs();
-    var batchIndices = preproc.batchIndices();
-
-    // 2. Single batched encoder call
-    var batchedHiddenStates = runtime.runEncoderBatch(
-      preproc.batchInputIds(),
-      preproc.batchAttentionMask(),
-      preproc.maxSeqLen()
-    );
-
-    // 3. Per-text fanout: extract label embeddings + classifier head MLP on virtual threads.
-    var results = new ArrayList<List<ClassificationResult>>(batchSize);
-    for (int i = 0; i < batchSize; i++) {
-      results.add(List.of());
-    }
-
-    @SuppressWarnings("unchecked")
-    var futures = (Future<
-      List<ClassificationResult>
-    >[]) new Future[nonEmptyCount];
-
-    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-      for (int s = 0; s < nonEmptyCount; s++) {
-        final int si = s;
-        futures[si] = executor.submit(() -> {
-          int origIdx = batchIndices[si];
-          var input = inputs[origIdx];
-          var labelEmbs = extractLabelEmbeddings(
-            batchedHiddenStates[si],
-            input
-          );
-          return applyClassifierHead(labelEmbs, input, threshold);
-        });
-      }
-
-      for (int s = 0; s < nonEmptyCount; s++) {
-        try {
-          results.set(batchIndices[s], futures[s].get());
-        } catch (ExecutionException e) {
-          throw new RuntimeException(
-            "Classifier head failed for batch slot " + s,
-            e.getCause()
-          );
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-          throw new RuntimeException("Classifier batch fanout interrupted", e);
-        }
-      }
-    }
-
-    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-    long totalLabels = results.stream().mapToLong(List::size).sum();
-    telemetry.record(durationMs, batchSize, totalLabels);
-    return results;
-  }
-
-  // ---- AbstractTaskFacade hooks -------------------------------------------
-
-  @Override
-  protected SchemaEncoder buildSchemaEncoder(
-    List<ClassificationLabel> definitions
-  ) {
-    return labelSchemaEncoder(definitions);
-  }
-
-  @Override
-  protected List<ClassificationResult> emptyResult() {
-    return List.of();
-  }
-
-  @Override
-  protected long resultSize(List<ClassificationResult> result) {
-    return result.size();
-  }
-
-  @Override
-  protected List<ClassificationResult> decodeFromHiddenStates(
-    float[][][] hiddenStates,
-    PreprocessedInput input,
-    String text,
-    float threshold
-  ) {
-    var labelEmbs = extractLabelEmbeddings(hiddenStates[0], input);
-    return applyClassifierHead(labelEmbs, input, threshold);
-  }
-
-  // ---- classifier-specific helpers ----------------------------------------
-
-  /**
-   * Extracts label embeddings from hidden states at the precomputed [L] marker positions.
-   * Positions are baked into the assembler at construction time (skips index 0 which holds [P]).
-   */
-  private float[][] extractLabelEmbeddings(
-    float[][] hiddenState,
-    PreprocessedInput input
-  ) {
-    var positions = input.schemaTokenPositions();
-    var labelEmbs = new float[positions.length - 1][];
-    for (int i = 0; i < labelEmbs.length; i++) {
-      labelEmbs[i] = hiddenState[positions[i + 1]];
-    }
-    return labelEmbs;
-  }
-
-  /**
-   * Runs classifier head and applies threshold/sorting.
-   */
-  private List<ClassificationResult> applyClassifierHead(
-    float[][] labelEmbs,
-    PreprocessedInput input,
-    float threshold
-  ) {
-    if (labelEmbs.length == 0) {
+    if (texts == null) {
       return List.of();
     }
-
-    // Run classifier MLP: [numLabels][hiddenSize] → [numLabels][1]
-    var logits = runtime.runClassifierHead(labelEmbs);
-
-    // Apply sigmoid activation and threshold
-    var results = new ArrayList<ClassificationResult>();
-    var labelNames = input.fieldNames();
-    for (int i = 0; i < logits.length && i < labelNames.size(); i++) {
-      float score = sigmoid(logits[i][0]);
-      if (score >= threshold) {
-        results.add(new ClassificationResult(labelNames.get(i), score));
-      }
-    }
-
-    // Sort by confidence descending
-    results.sort((a, b) -> Float.compare(b.confidence(), a.confidence()));
-    return results;
+    return strategy.classifyBatch(texts, threshold);
   }
 
-  private static SchemaEncoder labelSchemaEncoder(
-    List<ClassificationLabel> labels
-  ) {
-    return new SchemaEncoder(
-      "classify",
-      "[L]",
-      labels.stream().map(ClassificationLabel::name).toList(),
-      labels.stream().map(ClassificationLabel::description).toList()
-    );
-  }
-
-  private static float sigmoid(float x) {
-    return 1.0f / (1.0f + (float) Math.exp(-x));
+  @Override
+  public void close() {
+    strategy.close();
+    log.info("GLiNER4jClassifier closed");
   }
 }
