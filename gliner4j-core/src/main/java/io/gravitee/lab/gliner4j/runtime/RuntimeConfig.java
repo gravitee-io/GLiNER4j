@@ -65,11 +65,12 @@ public class RuntimeConfig {
   private final boolean optimizedModelCacheEnabled = true;
 
   /**
-   * Execution provider (hardware backend) for all ONNX sessions. Defaults to {@link ExecutionProvider#CPU}.
+   * Execution provider (hardware backend) for all ONNX sessions. Defaults to {@link ExecutionProvider#AUTO},
+   * which detects the best provider compiled into the loaded native runtime (CUDA &gt; OpenVINO &gt; CoreML &gt; CPU).
    * Non-CPU providers require a matching native runtime; when unavailable the runtime warns and falls back to CPU.
    */
   @Builder.Default
-  private final ExecutionProvider executionProvider = ExecutionProvider.CPU;
+  private final ExecutionProvider executionProvider = ExecutionProvider.AUTO;
 
   /** GPU device ordinal used by the {@link ExecutionProvider#CUDA} provider. */
   @Builder.Default

@@ -17,7 +17,6 @@ package io.gravitee.lab.gliner4j.benchmark;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.gravitee.lab.gliner4j.GLiNER4jClassifier;
-import io.gravitee.lab.gliner4j.runtime.ExecutionProvider;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import java.io.IOException;
@@ -37,7 +36,7 @@ import org.openjdk.jmh.infra.Blackhole;
  *     Defaults to {@code gliclass} (GLiClass / ModernBERT). Add {@code -p profile=gliguard} to
  *     compare against the GLiNER2 / DeBERTa classifier head.
  *   - labelCount: number of labels kept (a small "common app" set vs the full set)
- *   - textLength / batchSize / executionProvider: as in {@link InferenceBenchmark}
+ *   - textLength / batchSize: as in {@link InferenceBenchmark}
  *
  * <p>The corpus uses the {@code base} (news-flavoured) generator — generic, topic-bearing text is
  * representative for classification latency; the labels, not the text content, drive the work.
@@ -69,11 +68,6 @@ public class ClassificationBenchmark {
 
   @Param({ "onnx_quantized" })
   private String variant;
-
-  // ONNX execution provider. Defaults to cpu so the suite runs anywhere; override on a capable
-  // host with e.g. -p executionProvider=cuda (needs -Pcuda build), openvino, or coreml.
-  @Param({ "cpu" })
-  private String executionProvider;
 
   @Param({ "tiny", "short", "medium", "long" })
   private String textLength;
@@ -135,9 +129,9 @@ public class ClassificationBenchmark {
       );
     }
 
-    var runtimeConfig = RuntimeConfig.builder()
-      .executionProvider(ExecutionProvider.fromString(executionProvider))
-      .build();
+    // Execution provider is auto-detected from the native runtime on the classpath:
+    // a default build runs on CPU, a -Pcuda build picks CUDA, a -Popenvino build picks OpenVINO.
+    var runtimeConfig = RuntimeConfig.builder().build();
     classifier = GLiNER4jClassifier.load(
       Path.of(modelDir),
       labels,

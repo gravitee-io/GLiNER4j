@@ -15,11 +15,16 @@
  */
 package io.gravitee.lab.gliner4j.runtime;
 
+import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtException;
+import ai.onnxruntime.OrtProvider;
 import ai.onnxruntime.OrtSession;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -39,9 +44,18 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p>If the requested provider cannot be registered (e.g. CUDA requested without the GPU runtime),
  * {@link BaseRuntime} logs a warning and falls back to CPU rather than failing the load.
+ *
+ * <p>The default is {@link #AUTO}, which inspects the providers compiled into the loaded native
+ * runtime ({@link OrtEnvironment#getAvailableProviders()}) and picks the best accelerator in the
+ * order CUDA &gt; OpenVINO &gt; CoreML, falling back to CPU when none is present.
  */
 @Slf4j
 public enum ExecutionProvider {
+  /**
+   * Auto-detect the best provider compiled into the loaded native runtime. Resolves to the first
+   * available of CUDA, OpenVINO, CoreML, then CPU. This is the default; see {@link #resolve}.
+   */
+  AUTO,
   /** Default CPU provider. Always available. */
   CPU,
   /** NVIDIA CUDA provider. Requires the {@code onnxruntime_gpu} native library. */
@@ -52,23 +66,97 @@ public enum ExecutionProvider {
   COREML;
 
   /**
+   * Preference order used by {@link #AUTO} resolution — best accelerator first. CPU is the implicit
+   * final fallback and is therefore not listed.
+   */
+  private static final List<ExecutionProvider> AUTO_PREFERENCE = List.of(
+    CUDA,
+    OPENVINO,
+    COREML
+  );
+
+  /**
+   * Memoized result of {@link #AUTO} resolution. The set of providers compiled into the native
+   * runtime is fixed for the JVM's lifetime, so we detect (and log) once and reuse the answer.
+   */
+  private static volatile ExecutionProvider autoResolved;
+
+  /**
    * Resolves a provider from a case-insensitive string (CLI arg, JMH param, env var).
-   * Unknown, blank, or {@code null} values resolve to {@link #CPU}.
+   * Blank, {@code null}, or unrecognised values resolve to {@link #AUTO} (auto-detect the backend).
    *
-   * @param value the provider name (e.g. "cuda", "openvino", "coreml", "cpu")
-   * @return the matching provider, or {@link #CPU} when unrecognised
+   * @param value the provider name (e.g. "auto", "cuda", "openvino", "coreml", "cpu")
+   * @return the matching provider, or {@link #AUTO} when unrecognised
    */
   public static ExecutionProvider fromString(String value) {
     if (value == null || value.isBlank()) {
-      return CPU;
+      return AUTO;
     }
     return switch (value.trim().toLowerCase()) {
+      case "cpu" -> CPU;
       case "cuda", "gpu", "nvidia" -> CUDA;
       case "openvino", "vino", "intel" -> OPENVINO;
       // MLX is not an ORT execution provider — CoreML is the Apple-accelerated backend.
       case "coreml", "mlx", "apple", "ane" -> COREML;
-      default -> CPU;
+      default -> AUTO;
     };
+  }
+
+  /**
+   * The execution providers that are actually compiled into the loaded native ONNX Runtime, mapped
+   * onto this enum. {@code CPU} is always present. Note this reflects what the native library
+   * <em>supports</em>, not whether the matching hardware is physically present — e.g. the GPU jar
+   * reports CUDA even on a machine without an NVIDIA GPU (registration then fails and the runtime
+   * falls back to CPU).
+   *
+   * @return the set of available providers (always contains {@link #CPU})
+   */
+  public static Set<ExecutionProvider> available() {
+    var providers = EnumSet.of(CPU);
+    for (OrtProvider ortProvider : OrtEnvironment.getAvailableProviders()) {
+      switch (ortProvider) {
+        // TensorRT ships in the same GPU build as CUDA; treat it as CUDA availability.
+        case CUDA, TENSOR_RT -> providers.add(CUDA);
+        case OPEN_VINO -> providers.add(OPENVINO);
+        case CORE_ML -> providers.add(COREML);
+        default -> {
+          /* provider not exposed by this enum */
+        }
+      }
+    }
+    return providers;
+  }
+
+  /**
+   * Resolves a requested provider to a concrete one. Non-{@link #AUTO} values (and {@code null},
+   * treated as {@code AUTO}) are returned unchanged; {@code AUTO} is resolved to the best available
+   * accelerator (CUDA &gt; OpenVINO &gt; CoreML), or {@link #CPU} when none is compiled in.
+   *
+   * <p>The {@code AUTO} decision is detected once and memoized for the JVM lifetime, so it is logged
+   * only the first time.
+   *
+   * @param requested the requested provider (may be {@code null})
+   * @return a concrete provider, never {@code AUTO} or {@code null}
+   */
+  public static ExecutionProvider resolve(ExecutionProvider requested) {
+    if (requested != null && requested != AUTO) {
+      return requested;
+    }
+    var resolved = autoResolved;
+    if (resolved == null) {
+      var available = available();
+      resolved = AUTO_PREFERENCE.stream()
+        .filter(available::contains)
+        .findFirst()
+        .orElse(CPU);
+      autoResolved = resolved;
+      log.info(
+        "AUTO execution provider resolved to {} (available: {})",
+        resolved,
+        available
+      );
+    }
+    return resolved;
   }
 
   /**
