@@ -54,9 +54,37 @@ public final class OrtSessions {
     opts.setInterOpNumThreads(interOpThreads);
     opts.setExecutionMode(executionMode);
     opts.setOptimizationLevel(config.getOptimizationLevel());
+    // Disable ORT's memory-pattern planner. It pre-plans and reuses activation buffers from the
+    // first inference, which is unsafe for our fully dynamic-shape graphs (the micro-batcher feeds
+    // varying (batch, num_spans) buckets, and two lanes share one session): a buffer planned for a
+    // small bucket cannot be reused for a larger one, surfacing as
+    // "Shape mismatch attempting to re-use buffer. {1,42,768} != {2,2376,768}". Turning it off makes
+    // each Run allocate from the arena independently — required for correctness under bucketing +
+    // concurrent lanes; negligible cost on the GPU/dynamic path.
+    opts.setMemoryPatternOptimization(false);
+    log.info(
+      "ORT mem_pattern DISABLED for {} (dynamic-shape + concurrent-lane safety)",
+      modelFileName
+    );
+    if (!config.isIntraOpSpinning()) {
+      // Stop the intra-op pool from busy-waiting between ops — yields the cores instead of
+      // pinning them at 100%. Worth it when the heavy math is on the GPU (CUDA EP).
+      opts.addConfigEntry("session.intra_op.allow_spinning", "0");
+      opts.addConfigEntry("session.inter_op.allow_spinning", "0");
+    }
     if (cacheDir != null) {
       opts.setOptimizedModelFilePath(
         cacheDir.resolve(modelFileName).toString()
+      );
+    }
+    if (config.getProfilingDir() != null) {
+      opts.enableProfiling(
+        Path.of(config.getProfilingDir(), modelFileName).toString()
+      );
+      log.info(
+        "ORT profiling enabled for {} — trace JSON written to {} on session close",
+        modelFileName,
+        config.getProfilingDir()
       );
     }
     applyExecutionProvider(opts, config, modelFileName);
@@ -78,11 +106,7 @@ public final class OrtSessions {
       return;
     }
     try {
-      ep.configure(
-        opts,
-        config.getGpuDeviceId(),
-        config.getOpenVinoDeviceType()
-      );
+      ep.configure(opts, config);
       log.info("Registered {} execution provider for {}", ep, modelFileName);
     } catch (OrtException | RuntimeException | UnsatisfiedLinkError e) {
       log.warn(

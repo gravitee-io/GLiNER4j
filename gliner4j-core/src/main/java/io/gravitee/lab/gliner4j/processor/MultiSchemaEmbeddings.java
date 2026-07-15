@@ -58,15 +58,40 @@ public final class MultiSchemaEmbeddings {
    *
    * @param hiddenState encoder output for a single batch slot, shape {@code [seqLen][hiddenSize]}
    * @param wordFirstSubwordPos absolute position of each word's first subword in the input
-   * @param target output matrix, shape {@code [textLen][hiddenSize]} (rows are overwritten)
+   * @param target output matrix, at least {@code [textLen][hiddenSize]} (rows are overwritten;
+   *               rows beyond {@code textLen} are left untouched, e.g. zero padding)
    */
   public static void extractText(
     float[][] hiddenState,
     int[] wordFirstSubwordPos,
     float[][] target
   ) {
-    for (int w = 0; w < target.length; w++) {
+    for (int w = 0; w < wordFirstSubwordPos.length; w++) {
       target[w] = hiddenState[wordFirstSubwordPos[w]];
+    }
+  }
+
+  /**
+   * Flat variant of {@link #extractText}: copies each word's first-subword embedding row from
+   * the bucket's flat hidden states (row {@code row}) into the flat text-embedding buffer at
+   * {@code targetBase}.
+   */
+  public static void extractTextFlat(
+    io.gravitee.lab.gliner4j.runtime.FloatTensorView hidden,
+    int row,
+    int[] wordFirstSubwordPos,
+    java.nio.FloatBuffer target,
+    int targetBase
+  ) {
+    int hiddenSize = hidden.dim(2);
+    long rowBase = (long) row * hidden.dim(1) * hiddenSize;
+    for (int w = 0; w < wordFirstSubwordPos.length; w++) {
+      hidden.copyRowAsFloats(
+        rowBase + (long) wordFirstSubwordPos[w] * hiddenSize,
+        target,
+        targetBase + w * hiddenSize,
+        hiddenSize
+      );
     }
   }
 }

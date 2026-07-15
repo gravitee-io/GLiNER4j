@@ -40,19 +40,24 @@ public abstract sealed class BaseRuntime
   public static final String DEFAULT_VARIANT = "onnx";
 
   protected final OrtEnvironment env;
+  // The standalone encoder is optional: artifacts that ship a self-contained merged graph
+  // (ner_full.onnx / classifier_full.onnx, which embed their own encoder) can omit encoder.onnx,
+  // in which case this stays null and the split encoder paths (runEncoder*) are unavailable.
   protected final OrtSession encoderSession;
 
-  // Pre-allocated encoder buffers (single-thread assumption — not thread-safe)
-  private long[] schemaPrefixIds;
-  private int schemaPrefixLen;
-  private LongBuffer encoderIdsBuf;
-  private LongBuffer encoderMaskBuf;
-  private int encoderBufCapacity;
+  // Pooled encoder buffers — concurrent callers each acquire their own holder, sequential
+  // callers keep reusing the same one. Encoder holders carry the schema prefix + all-ones
+  // mask; batch holders are refilled per call.
+  private volatile long[] schemaPrefixIds;
+  private final DirectBufferPool encoderBuffers = new DirectBufferPool(2);
+  private final DirectBufferPool batchEncoderBuffers = new DirectBufferPool(2);
 
-  // Pre-allocated batch encoder buffers (single-thread assumption)
-  private LongBuffer batchEncoderIdsBuf;
-  private LongBuffer batchEncoderMaskBuf;
-  private int batchEncoderBufCapacity;
+  // Encoder output binding: name + element type, resolved at load time so batch outputs can
+  // be pinned to pooled direct buffers (no native→heap materialization).
+  private String encoderOutputName;
+  private ai.onnxruntime.OnnxJavaType encoderOutputType;
+  private final DirectByteBufferPool encoderOutBuffers =
+    new DirectByteBufferPool();
 
   protected BaseRuntime(
     Path modelDir,
@@ -75,7 +80,7 @@ public abstract sealed class BaseRuntime
         runtimeConfig.getExecutionProvider()
       );
       // Each backend gets its own optimized-model cache dir (the optimized graph is provider-specific).
-      // Providers that emit compiled nodes (CUDA/CoreML/OpenVINO) cannot serialize their graph, so the
+      // Providers that emit compiled nodes (CUDA/OpenVINO) cannot serialize their graph, so the
       // cache is skipped for them rather than failing the load with an ORT serialization error.
       Path cacheDir = null;
       if (runtimeConfig.isOptimizedModelCacheEnabled()) {
@@ -107,24 +112,46 @@ public abstract sealed class BaseRuntime
         cacheDir != null ? cacheDir : "disabled"
       );
 
-      log.info("Loading encoder.onnx...");
-      try (
-        var opts = createSessionOptions(
-          encoderIntra,
-          encoderInter,
-          OrtSession.SessionOptions.ExecutionMode.PARALLEL,
-          runtimeConfig,
-          cacheDir,
-          "encoder.onnx"
-        )
-      ) {
-        this.encoderSession = env.createSession(
-          variantDir.resolve("encoder.onnx").toString(),
-          opts
+      if (Files.exists(variantDir.resolve("encoder.onnx"))) {
+        log.info("Loading encoder.onnx...");
+        try (
+          var opts = createSessionOptions(
+            encoderIntra,
+            encoderInter,
+            OrtSession.SessionOptions.ExecutionMode.PARALLEL,
+            runtimeConfig,
+            cacheDir,
+            "encoder.onnx"
+          )
+        ) {
+          this.encoderSession = env.createSession(
+            variantDir.resolve("encoder.onnx").toString(),
+            opts
+          );
+        }
+        this.encoderOutputName = encoderSession
+          .getOutputNames()
+          .iterator()
+          .next();
+        this.encoderOutputType = encoderSession
+              .getOutputInfo()
+              .get(encoderOutputName)
+              .getInfo() instanceof
+            ai.onnxruntime.TensorInfo encoderOutInfo
+          ? encoderOutInfo.type
+          : ai.onnxruntime.OnnxJavaType.FLOAT;
+      } else {
+        log.info(
+          "encoder.onnx absent — relying on a self-contained merged graph (ner_full/classifier_full)"
         );
+        this.encoderSession = null;
+        this.encoderOutputName = null;
+        this.encoderOutputType = ai.onnxruntime.OnnxJavaType.FLOAT;
       }
 
       loadTaskHeads(variantDir, runtimeConfig, cacheDir);
+
+      scheduleProfilingFlush(runtimeConfig);
 
       log.info("All ONNX sessions loaded successfully");
     } catch (OrtException e) {
@@ -154,14 +181,66 @@ public abstract sealed class BaseRuntime
   protected abstract void closeTaskHeads() throws OrtException;
 
   /**
+   * The sessions whose profiling traces the timed flush should write. Subclasses with task-head
+   * sessions add them on top of the encoder.
+   */
+  protected java.util.List<OrtSession> profilableSessions() {
+    return encoderSession == null
+      ? java.util.List.of()
+      : java.util.List.of(encoderSession);
+  }
+
+  /**
+   * When profiling is enabled with {@link RuntimeConfig#getProfilingSeconds()}, starts a daemon
+   * timer that flushes each session's profiling trace to disk via
+   * {@link OrtSession#endProfiling()} after the configured delay — so traces can be collected
+   * from a running server instead of relying on a graceful shutdown (which ephemeral hosts may
+   * not survive). Each session's trace covers load → flush; ORT records nothing afterwards.
+   */
+  private void scheduleProfilingFlush(RuntimeConfig runtimeConfig) {
+    if (
+      runtimeConfig.getProfilingDir() == null ||
+      runtimeConfig.getProfilingSeconds() == null
+    ) {
+      return;
+    }
+    int delaySeconds = runtimeConfig.getProfilingSeconds();
+    var flusher = new Thread(
+      () -> {
+        try {
+          Thread.sleep(delaySeconds * 1000L);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          return;
+        }
+        for (OrtSession session : profilableSessions()) {
+          try {
+            log.info("ORT profiling trace flushed: {}", session.endProfiling());
+          } catch (OrtException e) {
+            log.warn("Failed to flush ORT profiling trace: {}", e.getMessage());
+          }
+        }
+      },
+      "gliner4j-ort-profiling-flush"
+    );
+    flusher.setDaemon(true);
+    flusher.start();
+    log.info(
+      "ORT profiling traces will be flushed to {} in {}s",
+      runtimeConfig.getProfilingDir(),
+      delaySeconds
+    );
+  }
+
+  /**
    * Initializes reusable encoder buffers with the schema prefix that is constant across requests.
    *
    * @param schemaPrefix the concatenated schema + separator token IDs
    */
   public void initEncoderBuffers(long[] schemaPrefix) {
     this.schemaPrefixIds = schemaPrefix;
-    this.schemaPrefixLen = schemaPrefix.length;
-    this.encoderBufCapacity = 0;
+    // Pooled holders carry the previous prefix — drop them so they are rebuilt on demand.
+    encoderBuffers.clear();
   }
 
   /**
@@ -172,32 +251,29 @@ public abstract sealed class BaseRuntime
    * @return last hidden state [1][seqLen][hiddenSize]
    */
   public float[][][] runEncoder(long[] inputIds, long[] attentionMask) {
+    var prefix = schemaPrefixIds;
+    if (prefix == null) {
+      return runEncoderFull(inputIds, attentionMask);
+    }
+    var holder = encoderBuffers.acquire();
     try {
       int seqLen = inputIds.length;
-      LongBuffer idsBuf;
-      LongBuffer maskBuf;
+      int prefixLen = prefix.length;
 
-      if (schemaPrefixIds != null) {
-        if (seqLen > encoderBufCapacity) {
-          encoderBufCapacity = seqLen + 64;
-          encoderIdsBuf = allocateDirectLongBuffer(encoderBufCapacity);
-          encoderMaskBuf = allocateDirectLongBuffer(encoderBufCapacity);
-          encoderIdsBuf.put(schemaPrefixIds).rewind();
-          var ones = new long[encoderBufCapacity];
-          Arrays.fill(ones, 1L);
-          encoderMaskBuf.put(ones).rewind();
-        }
-        encoderIdsBuf.limit(encoderBufCapacity).position(schemaPrefixLen);
-        encoderIdsBuf.put(inputIds, schemaPrefixLen, seqLen - schemaPrefixLen);
-        encoderIdsBuf.rewind().limit(seqLen);
-        encoderMaskBuf.rewind().limit(seqLen);
-
-        idsBuf = encoderIdsBuf;
-        maskBuf = encoderMaskBuf;
-      } else {
-        idsBuf = allocateDirectLongBuffer(inputIds);
-        maskBuf = allocateDirectLongBuffer(attentionMask);
+      if (seqLen > holder.capacity()) {
+        holder.reallocate(seqLen + 64);
+        var idsInit = holder.buf(0);
+        idsInit.put(prefix).rewind();
+        var ones = new long[holder.capacity()];
+        Arrays.fill(ones, 1L);
+        holder.buf(1).put(ones).rewind();
       }
+      var idsBuf = holder.buf(0);
+      var maskBuf = holder.buf(1);
+      idsBuf.limit(holder.capacity()).position(prefixLen);
+      idsBuf.put(inputIds, prefixLen, seqLen - prefixLen);
+      idsBuf.rewind().limit(seqLen);
+      maskBuf.rewind().limit(seqLen);
 
       var shape = new long[] { 1, seqLen };
       var idsTensor = OnnxTensor.createTensor(env, idsBuf, shape);
@@ -208,13 +284,15 @@ public abstract sealed class BaseRuntime
           Map.of("input_ids", idsTensor, "attention_mask", maskTensor)
         )
       ) {
-        return (float[][][]) result.get(0).getValue();
+        return toNested3d(FloatTensor.of((OnnxTensor) result.get(0)));
       } finally {
         idsTensor.close();
         maskTensor.close();
       }
     } catch (OrtException e) {
       throw new RuntimeException("Encoder inference failed", e);
+    } finally {
+      encoderBuffers.release(holder);
     }
   }
 
@@ -240,7 +318,7 @@ public abstract sealed class BaseRuntime
           Map.of("input_ids", idsTensor, "attention_mask", maskTensor)
         )
       ) {
-        return (float[][][]) result.get(0).getValue();
+        return toNested3d(FloatTensor.of((OnnxTensor) result.get(0)));
       } finally {
         idsTensor.close();
         maskTensor.close();
@@ -263,53 +341,220 @@ public abstract sealed class BaseRuntime
     long[][] attentionMask,
     int maxSeqLen
   ) {
+    return toNested3d(runEncoderBatchFlat(inputIds, attentionMask, maxSeqLen));
+  }
+
+  /**
+   * Runs the encoder model in batch mode, returning the hidden states as a flat tensor
+   * (one bulk copy out of the ONNX result instead of nested-array materialization).
+   *
+   * @param inputIds token IDs per text [batchSize][varying seqLen]
+   * @param attentionMask attention masks per text [batchSize][varying seqLen]
+   * @param maxSeqLen the padded sequence length
+   * @return last hidden states, shape [batchSize][maxSeqLen][hiddenSize]
+   */
+  public FloatTensor runEncoderBatchFlat(
+    long[][] inputIds,
+    long[][] attentionMask,
+    int maxSeqLen
+  ) {
+    var holder = batchEncoderBuffers.acquire();
     try {
       int batchSize = inputIds.length;
       int totalElements = batchSize * maxSeqLen;
 
-      if (totalElements > batchEncoderBufCapacity) {
-        batchEncoderBufCapacity = totalElements + 256;
-        batchEncoderIdsBuf = allocateDirectLongBuffer(batchEncoderBufCapacity);
-        batchEncoderMaskBuf = allocateDirectLongBuffer(batchEncoderBufCapacity);
+      if (totalElements > holder.capacity()) {
+        holder.reallocate(totalElements + 256);
       }
-      batchEncoderIdsBuf.clear().limit(totalElements);
-      batchEncoderMaskBuf.clear().limit(totalElements);
+      var idsBuf = holder.buf(0);
+      var maskBuf = holder.buf(1);
+      idsBuf.clear().limit(totalElements);
+      maskBuf.clear().limit(totalElements);
 
       var zeroPad = new long[maxSeqLen];
       for (int b = 0; b < batchSize; b++) {
         int seqLen = inputIds[b].length;
         int padLen = maxSeqLen - seqLen;
-        batchEncoderIdsBuf.put(inputIds[b]);
-        if (padLen > 0) batchEncoderIdsBuf.put(zeroPad, 0, padLen);
-        batchEncoderMaskBuf.put(attentionMask[b]);
-        if (padLen > 0) batchEncoderMaskBuf.put(zeroPad, 0, padLen);
+        idsBuf.put(inputIds[b]);
+        if (padLen > 0) idsBuf.put(zeroPad, 0, padLen);
+        maskBuf.put(attentionMask[b]);
+        if (padLen > 0) maskBuf.put(zeroPad, 0, padLen);
       }
-      batchEncoderIdsBuf.rewind();
-      batchEncoderMaskBuf.rewind();
+      idsBuf.rewind();
+      maskBuf.rewind();
 
       var shape = new long[] { batchSize, maxSeqLen };
-      var idsTensor = OnnxTensor.createTensor(env, batchEncoderIdsBuf, shape);
-      var maskTensor = OnnxTensor.createTensor(env, batchEncoderMaskBuf, shape);
+      var idsTensor = OnnxTensor.createTensor(env, idsBuf, shape);
+      var maskTensor = OnnxTensor.createTensor(env, maskBuf, shape);
 
       try (
         var result = encoderSession.run(
           Map.of("input_ids", idsTensor, "attention_mask", maskTensor)
         )
       ) {
-        return (float[][][]) result.get(0).getValue();
+        return FloatTensor.of((OnnxTensor) result.get(0));
       } finally {
         idsTensor.close();
         maskTensor.close();
       }
     } catch (OrtException e) {
       throw new RuntimeException("Batched encoder inference failed", e);
+    } finally {
+      batchEncoderBuffers.release(holder);
     }
+  }
+
+  /**
+   * Runs {@code session} with the named output pinned to a pooled direct buffer: ORT writes
+   * the result straight into the lease's buffer. Input tensors are managed by the caller.
+   * Pinned outputs are fully overwritten, so the pooled buffer needs no zeroing; the caller
+   * must {@link PinnedTensorLease#close()} the lease once the tensor is no longer needed.
+   */
+  protected PinnedTensorLease runPinned(
+    OrtSession session,
+    Map<String, ? extends ai.onnxruntime.OnnxTensorLike> inputs,
+    String outputName,
+    ai.onnxruntime.OnnxJavaType outputType,
+    long[] outputShape,
+    DirectByteBufferPool pool
+  ) throws OrtException {
+    long numel = 1;
+    for (long d : outputShape) {
+      numel *= d;
+    }
+    int elemBytes = outputType == ai.onnxruntime.OnnxJavaType.FLOAT16 ? 2 : 4;
+    var holder = pool.acquire();
+    boolean handedOff = false;
+    try {
+      holder.ensureCapacity(
+        (int) (numel * elemBytes),
+        (int) ((numel * elemBytes) / 4)
+      );
+      var outBytes = holder.buf();
+      outBytes.clear().limit((int) (numel * elemBytes));
+
+      OnnxTensor outTensor = null;
+      try {
+        outTensor = outputType == ai.onnxruntime.OnnxJavaType.FLOAT16
+          ? OnnxTensor.createTensor(
+            env,
+            outBytes.asShortBuffer(),
+            outputShape,
+            ai.onnxruntime.OnnxJavaType.FLOAT16
+          )
+          : OnnxTensor.createTensor(env, outBytes.asFloatBuffer(), outputShape);
+
+        // Result.close() does not close pinned outputs — the lease owns the tensor.
+        try (var result = session.run(inputs, Map.of(outputName, outTensor))) {
+          var lease = new PinnedTensorLease(
+            outTensor,
+            outputShape,
+            outputType,
+            outBytes,
+            pool,
+            holder
+          );
+          handedOff = true;
+          return lease;
+        }
+      } catch (OrtException | RuntimeException e) {
+        if (outTensor != null) {
+          outTensor.close();
+        }
+        throw e;
+      }
+    } finally {
+      if (!handedOff) {
+        pool.release(holder);
+      }
+    }
+  }
+
+  /**
+   * Runs the encoder model in batch mode with the hidden states pinned to a pooled direct
+   * buffer (no native→heap materialization). The caller must close the returned lease once
+   * the hidden states have been consumed.
+   *
+   * @param inputIds token IDs per text [batchSize][varying seqLen]
+   * @param attentionMask attention masks per text [batchSize][varying seqLen]
+   * @param maxSeqLen the padded sequence length
+   * @param hiddenSize encoder hidden size
+   * @return a lease over the hidden states, shape [batchSize][maxSeqLen][hiddenSize]
+   */
+  public PinnedTensorLease runEncoderBatchPinned(
+    long[][] inputIds,
+    long[][] attentionMask,
+    int maxSeqLen,
+    int hiddenSize
+  ) {
+    var holder = batchEncoderBuffers.acquire();
+    try {
+      int batchSize = inputIds.length;
+      int totalElements = batchSize * maxSeqLen;
+
+      if (totalElements > holder.capacity()) {
+        holder.reallocate(totalElements + 256);
+      }
+      var idsBuf = holder.buf(0);
+      var maskBuf = holder.buf(1);
+      idsBuf.clear().limit(totalElements);
+      maskBuf.clear().limit(totalElements);
+
+      var zeroPad = new long[maxSeqLen];
+      for (int b = 0; b < batchSize; b++) {
+        int seqLen = inputIds[b].length;
+        int padLen = maxSeqLen - seqLen;
+        idsBuf.put(inputIds[b]);
+        if (padLen > 0) idsBuf.put(zeroPad, 0, padLen);
+        maskBuf.put(attentionMask[b]);
+        if (padLen > 0) maskBuf.put(zeroPad, 0, padLen);
+      }
+      idsBuf.rewind();
+      maskBuf.rewind();
+
+      var shape = new long[] { batchSize, maxSeqLen };
+      try (
+        var idsTensor = OnnxTensor.createTensor(env, idsBuf, shape);
+        var maskTensor = OnnxTensor.createTensor(env, maskBuf, shape)
+      ) {
+        return runPinned(
+          encoderSession,
+          Map.of("input_ids", idsTensor, "attention_mask", maskTensor),
+          encoderOutputName,
+          encoderOutputType,
+          new long[] { batchSize, maxSeqLen, hiddenSize },
+          encoderOutBuffers
+        );
+      }
+    } catch (OrtException e) {
+      throw new RuntimeException("Pinned batched encoder inference failed", e);
+    } finally {
+      batchEncoderBuffers.release(holder);
+    }
+  }
+
+  /** Materializes a rank-3 flat tensor as nested arrays via bulk row copies (no reflection). */
+  protected static float[][][] toNested3d(FloatTensor tensor) {
+    int d0 = tensor.dim(0);
+    int d1 = tensor.dim(1);
+    int d2 = tensor.dim(2);
+    var out = new float[d0][d1][d2];
+    long offset = 0;
+    for (int i = 0; i < d0; i++) {
+      for (int j = 0; j < d1; j++) {
+        tensor.copyTo(offset, out[i][j], 0, d2);
+        offset += d2;
+      }
+    }
+    return out;
   }
 
   @Override
   public void close() {
     try {
-      encoderSession.close();
+      if (encoderSession != null) {
+        encoderSession.close();
+      }
       closeTaskHeads();
       log.info("All ONNX sessions closed");
     } catch (OrtException e) {

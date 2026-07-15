@@ -17,6 +17,7 @@ package io.gravitee.lab.gliner4j.postprocess;
 
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.Comparator;
 import java.util.List;
 
@@ -27,16 +28,16 @@ abstract class AbstractDecoder {
       Comparator.comparingDouble(EntitySpan::confidence).reversed()
     );
     var result = new ArrayList<EntitySpan>();
-    for (var candidate : candidates) {
-      boolean overlaps = result
-        .stream()
-        .anyMatch(
-          existing ->
-            candidate.start() < existing.end() &&
-            candidate.end() > existing.start()
-        );
-      if (!overlaps) {
+    // Greedy non-overlapping selection in confidence order. Accepted spans are marked in a
+    // bitset over character offsets, so the overlap test ([start,end) intersection) is a
+    // word-masked scan instead of an O(accepted) pass per candidate.
+    var occupied = new BitSet();
+    for (int i = 0; i < candidates.size(); i++) {
+      var candidate = candidates.get(i);
+      int firstSet = occupied.nextSetBit(candidate.start());
+      if (firstSet == -1 || firstSet >= candidate.end()) {
         result.add(candidate);
+        occupied.set(candidate.start(), candidate.end());
       }
     }
     result.sort(Comparator.comparingInt(EntitySpan::start));

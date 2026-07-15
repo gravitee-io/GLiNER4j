@@ -68,6 +68,7 @@ public final class SchemaExtractor
 
   private SchemaExtractor(
     GLiNER4jConfig config,
+    RuntimeConfig runtimeConfig,
     List<StructureDefinition> structures,
     DjlTokenizerWrapper tokenizer,
     GLiNER4jNERRuntime runtime,
@@ -75,6 +76,7 @@ public final class SchemaExtractor
   ) {
     super(
       config,
+      runtimeConfig,
       structures,
       tokenizer,
       runtime,
@@ -121,6 +123,7 @@ public final class SchemaExtractor
     log.info("GLiNER4jSchemaExtractor loaded successfully");
     return new SchemaExtractor(
       config,
+      runtimeConfig,
       structures,
       tokenizer,
       runtime,

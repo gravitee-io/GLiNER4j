@@ -19,3 +19,5 @@ dependency-reduced-pom.xml
 uv.lock
 results/
 .ort-openvino-build/
+**/models/**
+**/models

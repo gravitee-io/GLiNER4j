@@ -75,7 +75,7 @@ public class InferenceBenchmark {
   @Param({ "onnx_quantized" })
   private String variant;
 
-  @Param({ "tiny", "short", "medium", "long" })
+  @Param({ "tiny", "short", "medium", "long", "mixed" })
   private String textLength;
 
   @Param({ "1", "4", "8" })
@@ -115,15 +115,39 @@ public class InferenceBenchmark {
       ? allEntities.subList(0, entityCount)
       : allEntities;
 
-    var targetTokens = TARGET_TOKENS.get(textLength);
-    if (targetTokens == null) {
-      throw new IllegalStateException("Unknown textLength: " + textLength);
+    if ("mixed".equals(textLength)) {
+      // Skewed lengths inside every batch — exercises length-bucketed batching:
+      // without buckets each short text is padded to the longest one.
+      var generator = new CorpusGenerator(CORPUS_SEED);
+      var shortTexts = generator.generate(
+        profile,
+        TARGET_TOKENS.get("short"),
+        CORPUS_SAMPLES / 2
+      );
+      var longTexts = generator.generate(
+        profile,
+        TARGET_TOKENS.get("long"),
+        CORPUS_SAMPLES - CORPUS_SAMPLES / 2
+      );
+      corpus = new ArrayList<>(CORPUS_SAMPLES);
+      for (int i = 0; i < CORPUS_SAMPLES; i++) {
+        corpus.add(
+          i % 2 == 0
+            ? shortTexts.get((i / 2) % shortTexts.size())
+            : longTexts.get((i / 2) % longTexts.size())
+        );
+      }
+    } else {
+      var targetTokens = TARGET_TOKENS.get(textLength);
+      if (targetTokens == null) {
+        throw new IllegalStateException("Unknown textLength: " + textLength);
+      }
+      corpus = new CorpusGenerator(CORPUS_SEED).generate(
+        profile,
+        targetTokens,
+        CORPUS_SAMPLES
+      );
     }
-    corpus = new CorpusGenerator(CORPUS_SEED).generate(
-      profile,
-      targetTokens,
-      CORPUS_SAMPLES
-    );
 
     if (batchSize > corpus.size()) {
       throw new IllegalStateException(

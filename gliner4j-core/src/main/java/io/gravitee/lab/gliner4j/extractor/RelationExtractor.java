@@ -62,6 +62,7 @@ public final class RelationExtractor
 
   private RelationExtractor(
     GLiNER4jConfig config,
+    RuntimeConfig runtimeConfig,
     List<RelationDefinition> relations,
     DjlTokenizerWrapper tokenizer,
     GLiNER4jNERRuntime runtime,
@@ -69,6 +70,7 @@ public final class RelationExtractor
   ) {
     super(
       config,
+      runtimeConfig,
       relations,
       tokenizer,
       runtime,
@@ -140,6 +142,7 @@ public final class RelationExtractor
     log.info("GLiNER4jRelationExtractor loaded successfully");
     return new RelationExtractor(
       config,
+      runtimeConfig,
       relations,
       tokenizer,
       runtime,

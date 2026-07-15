@@ -210,12 +210,34 @@ tasks:
   # ── Base model chain (fastino/gliner2-base-v1) ──────────────────────────────
 
   base:
-    desc: Download and export the base model (FP32 + FP16 + INT8) and render its MODEL_CARD.md
+    desc: Download, export, optimize the encoder and build the merged graphs for the base model
     cmds:
       - task: model:download:base
       - task: model:export:base
         vars:
-          EXPORT_ARGS: "--variant fp16 --variant quantized"
+          # --keep-split: model:merged:base still needs the split heads for encoder fusion;
+          # it removes them itself once ner_full/classifier_full are rebuilt and verified.
+          EXPORT_ARGS: "--variant fp16 --variant quantized --keep-split"
+      - task: model:merged:base
+
+  model:merged:base:
+    desc: Optimize the encoder (fused) and rebuild ner_full + classifier_full from the heads (fp32 + fp16)
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/build_merged_graphs.py optimize-encoder {{.BASE_ONNX_OUTPUT_DIR}} onnx --fp16-from-fp32
+      - uv run scripts/build_merged_graphs.py rebuild {{.BASE_ONNX_OUTPUT_DIR}}
+      - uv run scripts/build_merged_graphs.py verify {{.BASE_ONNX_OUTPUT_DIR}} onnx
+      # The split heads are intermediates: fused into ner_full/classifier_full above, verified,
+      # then dropped so the bundle only ships the final graphs.
+      - rm -f {{.BASE_ONNX_OUTPUT_DIR}}/{onnx,onnx_fp16,onnx_quantized}/{encoder,span_rep,scoring_head,classifier_head}.onnx
+    sources:
+      - scripts/build_merged_graphs.py
+    generates:
+      - "{{.BASE_ONNX_OUTPUT_DIR}}/onnx/ner_full.onnx"
+      - "{{.BASE_ONNX_OUTPUT_DIR}}/onnx_fp16/ner_full.onnx"
+      - "{{.BASE_ONNX_OUTPUT_DIR}}/onnx/classifier_full.onnx"
+      - "{{.BASE_ONNX_OUTPUT_DIR}}/onnx_fp16/classifier_full.onnx"
 
   model:download:base:
     desc: Download the base GLiNER2 model from HuggingFace
@@ -233,15 +255,14 @@ tasks:
       - model:download:base
       - check:uv
     cmds:
-      - uv run scripts/export_onnx.py --model-path {{.BASE_HF_LOCAL_DIR}} --output-dir {{.BASE_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/export_onnx.py gliner2 --model-path {{.BASE_HF_LOCAL_DIR}} --output-dir {{.BASE_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
       - uv run scripts/render_model_card.py base {{.BASE_ONNX_OUTPUT_DIR}}/MODEL_CARD.md
     sources:
       - scripts/export_onnx.py
       - "{{.BASE_HF_LOCAL_DIR}}/**/*"
     generates:
-      - "{{.BASE_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
-      - "{{.BASE_ONNX_OUTPUT_DIR}}/onnx/span_rep.onnx"
-      - "{{.BASE_ONNX_OUTPUT_DIR}}/onnx/scoring_head.onnx"
+      - "{{.BASE_ONNX_OUTPUT_DIR}}/onnx/ner_full.onnx"
+      - "{{.BASE_ONNX_OUTPUT_DIR}}/onnx/classifier_full.onnx"
       - "{{.BASE_ONNX_OUTPUT_DIR}}/gliner4j_config.json"
       - "{{.BASE_ONNX_OUTPUT_DIR}}/tokenizer.json"
 
@@ -299,12 +320,34 @@ tasks:
   # ── PII model chain (fastino/gliner2-privacy-filter-PII-multi) ──────────────
 
   pii:
-    desc: Download and export the PII model (FP32 + FP16 + INT8) and render its MODEL_CARD.md
+    desc: Download, export, optimize the encoder and build the merged graphs for the PII model
     cmds:
       - task: model:download:pii
       - task: model:export:pii
         vars:
-          EXPORT_ARGS: "--variant fp16 --variant quantized"
+          # --keep-split: model:merged:pii still needs the split heads for encoder fusion;
+          # it removes them itself once ner_full/classifier_full are rebuilt and verified.
+          EXPORT_ARGS: "--variant fp16 --variant quantized --keep-split"
+      - task: model:merged:pii
+
+  model:merged:pii:
+    desc: Optimize the encoder (fused) and rebuild ner_full + classifier_full from the heads (fp32 + fp16)
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/build_merged_graphs.py optimize-encoder {{.PII_ONNX_OUTPUT_DIR}} onnx --fp16-from-fp32
+      - uv run scripts/build_merged_graphs.py rebuild {{.PII_ONNX_OUTPUT_DIR}}
+      - uv run scripts/build_merged_graphs.py verify {{.PII_ONNX_OUTPUT_DIR}} onnx
+      # The split heads are intermediates: fused into ner_full/classifier_full above, verified,
+      # then dropped so the bundle only ships the final graphs.
+      - rm -f {{.PII_ONNX_OUTPUT_DIR}}/{onnx,onnx_fp16,onnx_quantized}/{encoder,span_rep,scoring_head,classifier_head}.onnx
+    sources:
+      - scripts/build_merged_graphs.py
+    generates:
+      - "{{.PII_ONNX_OUTPUT_DIR}}/onnx/ner_full.onnx"
+      - "{{.PII_ONNX_OUTPUT_DIR}}/onnx_fp16/ner_full.onnx"
+      - "{{.PII_ONNX_OUTPUT_DIR}}/onnx/classifier_full.onnx"
+      - "{{.PII_ONNX_OUTPUT_DIR}}/onnx_fp16/classifier_full.onnx"
 
   model:download:pii:
     desc: Download the PII GLiNER2 model from HuggingFace
@@ -322,15 +365,14 @@ tasks:
       - model:download:pii
       - check:uv
     cmds:
-      - uv run scripts/export_onnx.py --model-path {{.PII_HF_LOCAL_DIR}} --output-dir {{.PII_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/export_onnx.py gliner2 --model-path {{.PII_HF_LOCAL_DIR}} --output-dir {{.PII_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
       - uv run scripts/render_model_card.py pii {{.PII_ONNX_OUTPUT_DIR}}/MODEL_CARD.md
     sources:
       - scripts/export_onnx.py
       - "{{.PII_HF_LOCAL_DIR}}/**/*"
     generates:
-      - "{{.PII_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
-      - "{{.PII_ONNX_OUTPUT_DIR}}/onnx/span_rep.onnx"
-      - "{{.PII_ONNX_OUTPUT_DIR}}/onnx/scoring_head.onnx"
+      - "{{.PII_ONNX_OUTPUT_DIR}}/onnx/ner_full.onnx"
+      - "{{.PII_ONNX_OUTPUT_DIR}}/onnx/classifier_full.onnx"
       - "{{.PII_ONNX_OUTPUT_DIR}}/gliner4j_config.json"
       - "{{.PII_ONNX_OUTPUT_DIR}}/tokenizer.json"
 
@@ -411,14 +453,14 @@ tasks:
       - model:download:gliguard
       - check:uv
     cmds:
-      - uv run scripts/export_onnx.py --model-path {{.GLIGUARD_HF_LOCAL_DIR}} --output-dir {{.GLIGUARD_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/export_onnx.py gliner2 --model-path {{.GLIGUARD_HF_LOCAL_DIR}} --output-dir {{.GLIGUARD_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
       - uv run scripts/render_model_card.py gliguard {{.GLIGUARD_ONNX_OUTPUT_DIR}}/MODEL_CARD.md
     sources:
       - scripts/export_onnx.py
       - "{{.GLIGUARD_HF_LOCAL_DIR}}/**/*"
     generates:
-      - "{{.GLIGUARD_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
-      - "{{.GLIGUARD_ONNX_OUTPUT_DIR}}/onnx/classifier_head.onnx"
+      - "{{.GLIGUARD_ONNX_OUTPUT_DIR}}/onnx/ner_full.onnx"
+      - "{{.GLIGUARD_ONNX_OUTPUT_DIR}}/onnx/classifier_full.onnx"
       - "{{.GLIGUARD_ONNX_OUTPUT_DIR}}/gliner4j_config.json"
       - "{{.GLIGUARD_ONNX_OUTPUT_DIR}}/tokenizer.json"
 
@@ -459,9 +501,9 @@ tasks:
     deps:
       - check:uv
     cmds:
-      - uv run scripts/export_gliclass_onnx.py --model-path {{.GLICLASS_HF_MODEL}} --output-dir {{.GLICLASS_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/export_onnx.py gliclass --model-path {{.GLICLASS_HF_MODEL}} --output-dir {{.GLICLASS_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
     sources:
-      - scripts/export_gliclass_onnx.py
+      - scripts/export_onnx.py
     generates:
       - "{{.GLICLASS_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
       - "{{.GLICLASS_ONNX_OUTPUT_DIR}}/onnx/score_head.onnx"
@@ -503,9 +545,9 @@ tasks:
     deps:
       - check:uv
     cmds:
-      - uv run scripts/export_gliclass_onnx.py --model-path {{.GLICLASS_X_HF_MODEL}} --output-dir {{.GLICLASS_X_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/export_onnx.py gliclass --model-path {{.GLICLASS_X_HF_MODEL}} --output-dir {{.GLICLASS_X_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
     sources:
-      - scripts/export_gliclass_onnx.py
+      - scripts/export_onnx.py
     generates:
       - "{{.GLICLASS_X_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
 
@@ -514,9 +556,9 @@ tasks:
     deps:
       - check:uv
     cmds:
-      - uv run scripts/export_gliclass_onnx.py --model-path {{.GLICLASS_MODERN_LARGE_HF_MODEL}} --output-dir {{.GLICLASS_MODERN_LARGE_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/export_onnx.py gliclass --model-path {{.GLICLASS_MODERN_LARGE_HF_MODEL}} --output-dir {{.GLICLASS_MODERN_LARGE_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
     sources:
-      - scripts/export_gliclass_onnx.py
+      - scripts/export_onnx.py
     generates:
       - "{{.GLICLASS_MODERN_LARGE_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
 
@@ -525,9 +567,9 @@ tasks:
     deps:
       - check:uv
     cmds:
-      - uv run scripts/export_gliclass_onnx.py --model-path {{.GLICLASS_LARGE_HF_MODEL}} --output-dir {{.GLICLASS_LARGE_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/export_onnx.py gliclass --model-path {{.GLICLASS_LARGE_HF_MODEL}} --output-dir {{.GLICLASS_LARGE_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
     sources:
-      - scripts/export_gliclass_onnx.py
+      - scripts/export_onnx.py
     generates:
       - "{{.GLICLASS_LARGE_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
 
@@ -536,9 +578,9 @@ tasks:
     deps:
       - check:uv
     cmds:
-      - uv run scripts/export_gliclass_onnx.py --model-path {{.GLICLASS_EDGE_HF_MODEL}} --output-dir {{.GLICLASS_EDGE_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/export_onnx.py gliclass --model-path {{.GLICLASS_EDGE_HF_MODEL}} --output-dir {{.GLICLASS_EDGE_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
     sources:
-      - scripts/export_gliclass_onnx.py
+      - scripts/export_onnx.py
     generates:
       - "{{.GLICLASS_EDGE_ONNX_OUTPUT_DIR}}/onnx/encoder.onnx"
 
@@ -590,9 +632,9 @@ tasks:
     deps:
       - check:uv
     cmds:
-      - uv run scripts/export_gliner_uni_onnx.py --model-path {{.GLINER_PII_HF_MODEL}} --output-dir {{.GLINER_PII_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/export_onnx.py gliner-uni --model-path {{.GLINER_PII_HF_MODEL}} --output-dir {{.GLINER_PII_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
     sources:
-      - scripts/export_gliner_uni_onnx.py
+      - scripts/export_onnx.py
     generates:
       - "{{.GLINER_PII_ONNX_OUTPUT_DIR}}/onnx/model.onnx"
 
@@ -601,9 +643,9 @@ tasks:
     deps:
       - check:uv
     cmds:
-      - uv run scripts/export_gliner_uni_onnx.py --model-path {{.GLINER_BI_HF_MODEL}} --output-dir {{.GLINER_BI_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/export_onnx.py gliner-uni --model-path {{.GLINER_BI_HF_MODEL}} --output-dir {{.GLINER_BI_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
     sources:
-      - scripts/export_gliner_uni_onnx.py
+      - scripts/export_onnx.py
     generates:
       - "{{.GLINER_BI_ONNX_OUTPUT_DIR}}/onnx/model.onnx"
 
@@ -632,9 +674,9 @@ tasks:
     deps:
       - check:uv
     cmds:
-      - uv run scripts/export_gliner_uni_onnx.py --model-path {{.GLINER_X_HF_MODEL}} --output-dir {{.GLINER_X_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/export_onnx.py gliner-uni --model-path {{.GLINER_X_HF_MODEL}} --output-dir {{.GLINER_X_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
     sources:
-      - scripts/export_gliner_uni_onnx.py
+      - scripts/export_onnx.py
     generates:
       - "{{.GLINER_X_ONNX_OUTPUT_DIR}}/onnx/model.onnx"
 
@@ -653,9 +695,9 @@ tasks:
     deps:
       - check:uv
     cmds:
-      - uv run scripts/export_gliner_uni_onnx.py --model-path {{.GLINER_MULTITASK_HF_MODEL}} --output-dir {{.GLINER_MULTITASK_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/export_onnx.py gliner-uni --model-path {{.GLINER_MULTITASK_HF_MODEL}} --output-dir {{.GLINER_MULTITASK_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
     sources:
-      - scripts/export_gliner_uni_onnx.py
+      - scripts/export_onnx.py
     generates:
       - "{{.GLINER_MULTITASK_ONNX_OUTPUT_DIR}}/onnx/model.onnx"
 

@@ -16,17 +16,21 @@
 package io.gravitee.lab.gliner4j.extractor;
 
 import io.gravitee.lab.gliner4j.GLiNER4jConfig;
+import io.gravitee.lab.gliner4j.processor.AssemblerCache;
 import io.gravitee.lab.gliner4j.processor.BatchPreprocessor;
+import io.gravitee.lab.gliner4j.processor.BatchSpanPipeline;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaEmbeddings;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaInput;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaInputAssembler;
+import io.gravitee.lab.gliner4j.processor.SpanIndexCache;
 import io.gravitee.lab.gliner4j.processor.TextEncoder;
 import io.gravitee.lab.gliner4j.processor.UnitLayout;
 import io.gravitee.lab.gliner4j.runtime.GLiNER4jNERRuntime;
+import io.gravitee.lab.gliner4j.runtime.MicroBatcher;
+import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -62,14 +66,21 @@ public abstract sealed class Extractor<D, R>
   permits RelationExtractor, SchemaExtractor {
 
   protected final GLiNER4jConfig config;
+  protected final RuntimeConfig runtimeConfig;
   protected final List<D> definitions;
   protected final DjlTokenizerWrapper tokenizer;
   protected final GLiNER4jNERRuntime runtime;
   protected final MultiSchemaInputAssembler inputAssembler;
   protected final GLiNER4jTelemetry telemetry;
+  private final AssemblerCache<
+    List<D>,
+    MultiSchemaInputAssembler
+  > overrideAssemblers;
+  private final MicroBatcher<Map<String, List<R>>> microBatcher;
 
   protected Extractor(
     GLiNER4jConfig config,
+    RuntimeConfig runtimeConfig,
     List<D> definitions,
     DjlTokenizerWrapper tokenizer,
     GLiNER4jNERRuntime runtime,
@@ -77,11 +88,23 @@ public abstract sealed class Extractor<D, R>
     GLiNER4jTelemetry telemetry
   ) {
     this.config = config;
+    this.runtimeConfig = runtimeConfig;
     this.definitions = definitions;
     this.tokenizer = tokenizer;
     this.runtime = runtime;
     this.inputAssembler = inputAssembler;
     this.telemetry = telemetry;
+    this.overrideAssemblers = new AssemblerCache<>(
+      runtimeConfig.effectiveOverrideCacheSize(),
+      this::buildAssembler
+    );
+    this.microBatcher = runtimeConfig.isMicroBatchingEnabled()
+      ? new MicroBatcher<>(
+        runtimeConfig.getMicroBatchMaxSize(),
+        runtimeConfig.getMicroBatchMaxWaitMicros(),
+        this::doExtractBatch
+      )
+      : null;
   }
 
   // ---- subclass hooks ------------------------------------------------------
@@ -127,6 +150,9 @@ public abstract sealed class Extractor<D, R>
     String text,
     float threshold
   ) {
+    if (microBatcher != null) {
+      return microBatcher.extract(text, threshold);
+    }
     return doExtractWith(text, threshold, definitions, inputAssembler, false);
   }
 
@@ -139,7 +165,7 @@ public abstract sealed class Extractor<D, R>
     List<D> overrideDefinitions,
     float threshold
   ) {
-    var overrideAssembler = buildAssembler(overrideDefinitions);
+    var overrideAssembler = overrideAssemblers.get(overrideDefinitions);
     return doExtractWith(
       text,
       threshold,
@@ -205,7 +231,7 @@ public abstract sealed class Extractor<D, R>
 
     // 2. One span_rep call per text
     int numSpans = textLen * maxWidth;
-    var spanIdxFlat = buildSpanIdxFlat(textLen, maxWidth, numSpans);
+    var spanIdxFlat = SpanIndexCache.flatSpanIdx(textLen, maxWidth);
     var textEmbs3d = new float[1][textLen][hiddenSize];
     System.arraycopy(textEmbs, 0, textEmbs3d[0], 0, textLen);
     var spanRep4d = runtime.runSpanRepFlat(textEmbs3d, spanIdxFlat, numSpans);
@@ -267,69 +293,56 @@ public abstract sealed class Extractor<D, R>
     var inputs = preproc.inputs();
     var batchIndices = preproc.batchIndices();
 
-    // 2. Single batched encoder call
-    var batchedHiddenStates = runtime.runEncoderBatch(
+    // 2-4. Bucketed encoder + span_rep (padded per sub-batch, not batch-wide)
+    var textLens = new int[nonEmptyCount];
+    for (int s = 0; s < nonEmptyCount; s++) {
+      textLens[s] = inputs[batchIndices[s]].textLen();
+    }
+
+    var pipeline = BatchSpanPipeline.run(
+      runtime,
       preproc.batchInputIds(),
       preproc.batchAttentionMask(),
-      preproc.maxSeqLen()
+      textLens,
+      config.getHiddenSize(),
+      config.getMaxWidth(),
+      runtimeConfig.getBatchLengthRatio(),
+      runtimeConfig.getMaxSubBatchSize(),
+      // per-unit fanout scores per slot, so it needs the nested per-slot span reps
+      true,
+      // only the [P] + child marker rows of the representative slot are read
+      slot ->
+        inputs[batchIndices[slot]].unitLayouts()
+          .stream()
+          .flatMapToInt(l ->
+            java.util.stream.IntStream.concat(
+              java.util.stream.IntStream.of(l.parentTokenPos()),
+              java.util.stream.IntStream.of(l.childMarkerPositions())
+            )
+          )
+          .toArray(),
+      // multi-unit fanout scores per unit; the merged NER graph does not apply
+      null,
+      (hidden, row, s, target, targetBase) ->
+        MultiSchemaEmbeddings.extractTextFlat(
+          hidden,
+          row,
+          inputs[batchIndices[s]].wordFirstSubwordPos(),
+          target,
+          targetBase
+        )
     );
 
-    // 3. Cache per-unit ([P] + child markers) embeddings from a representative slot
-    var layouts = inputs[batchIndices[0]].unitLayouts();
+    // 5. Cache per-unit ([P] + child markers) embeddings from a representative slot
+    var layouts = inputs[batchIndices[pipeline.repSlot()]].unitLayouts();
     var unitEmbsCache =
       new MultiSchemaEmbeddings.UnitEmbeddings[layouts.size()];
     for (int u = 0; u < layouts.size(); u++) {
       unitEmbsCache[u] = MultiSchemaEmbeddings.extractUnit(
-        batchedHiddenStates[0],
+        pipeline.repHiddenState(),
         layouts.get(u)
       );
     }
-
-    // 4. Extract per-text text embeddings and find the batch max
-    int hiddenSize = config.getHiddenSize();
-    int maxWidth = config.getMaxWidth();
-    int maxTextLen = 0;
-    var textLens = new int[nonEmptyCount];
-    var perTextEmbs = new float[nonEmptyCount][][];
-    for (int s = 0; s < nonEmptyCount; s++) {
-      var input = inputs[batchIndices[s]];
-      int textLen = input.textLen();
-      textLens[s] = textLen;
-      if (textLen > maxTextLen) maxTextLen = textLen;
-      perTextEmbs[s] = new float[textLen][hiddenSize];
-      MultiSchemaEmbeddings.extractText(
-        batchedHiddenStates[s],
-        input.wordFirstSubwordPos(),
-        perTextEmbs[s]
-      );
-    }
-
-    // 5. Pad embeddings and build flat span indices, then run batched span_rep
-    int maxNumSpans = maxTextLen * maxWidth;
-    var batchTextEmbs = new float[nonEmptyCount][maxTextLen][hiddenSize];
-    var batchSpanIdxFlat = new long[nonEmptyCount * maxNumSpans * 2];
-    for (int s = 0; s < nonEmptyCount; s++) {
-      int textLen = textLens[s];
-      System.arraycopy(perTextEmbs[s], 0, batchTextEmbs[s], 0, textLen);
-      int batchOffset = s * maxNumSpans * 2;
-      for (int i = 0; i < textLen; i++) {
-        for (int w = 0; w < maxWidth; w++) {
-          int endPos = i + w;
-          if (endPos < textLen) {
-            int flatIdx = batchOffset + (i * maxWidth + w) * 2;
-            batchSpanIdxFlat[flatIdx] = i;
-            batchSpanIdxFlat[flatIdx + 1] = endPos;
-          }
-        }
-      }
-    }
-
-    var batchSpanRep4d = runtime.runSpanRepBatch(
-      batchTextEmbs,
-      batchSpanIdxFlat,
-      nonEmptyCount,
-      maxNumSpans
-    );
 
     // 6. Per-text fanout: scoring_head + decode for each unit on virtual threads.
     var fanned = new ArrayList<Map<String, List<R>>>(batchSize);
@@ -349,7 +362,7 @@ public abstract sealed class Extractor<D, R>
           int textLen = textLens[si];
           var text = texts.get(origIdx);
 
-          var spanRep = Arrays.copyOfRange(batchSpanRep4d[si], 0, textLen);
+          var spanRep = pipeline.spanRepBySlot()[si];
 
           var perTextResult = new LinkedHashMap<String, List<R>>();
           for (int u = 0; u < layouts.size(); u++) {
@@ -402,6 +415,9 @@ public abstract sealed class Extractor<D, R>
 
   @Override
   public final void close() {
+    if (microBatcher != null) {
+      microBatcher.close();
+    }
     runtime.close();
     tokenizer.close();
     log.info("{} closed", getClass().getSimpleName());
@@ -409,24 +425,5 @@ public abstract sealed class Extractor<D, R>
 
   private static long totalInstances(Map<String, ? extends List<?>> result) {
     return result.values().stream().mapToLong(List::size).sum();
-  }
-
-  private static long[] buildSpanIdxFlat(
-    int textLen,
-    int maxWidth,
-    int numSpans
-  ) {
-    var flat = new long[numSpans * 2];
-    for (int i = 0; i < textLen; i++) {
-      for (int w = 0; w < maxWidth; w++) {
-        int endPos = i + w;
-        if (endPos < textLen) {
-          int flatIdx = (i * maxWidth + w) * 2;
-          flat[flatIdx] = i;
-          flat[flatIdx + 1] = endPos;
-        }
-      }
-    }
-    return flat;
   }
 }

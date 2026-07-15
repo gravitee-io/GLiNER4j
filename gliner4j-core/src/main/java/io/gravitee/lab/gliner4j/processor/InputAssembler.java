@@ -193,8 +193,7 @@ public class InputAssembler {
     var finalMappings = pos == mappings.length
       ? mappings
       : Arrays.copyOf(mappings, pos);
-    var attentionMask = new long[pos];
-    Arrays.fill(attentionMask, 1L);
+    var attentionMask = AttentionMasks.ones(pos);
 
     return new PreprocessedInput(
       inputIds,

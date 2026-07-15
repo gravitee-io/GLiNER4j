@@ -23,6 +23,7 @@ import io.gravitee.lab.gliner4j.processor.InputAssembler;
 import io.gravitee.lab.gliner4j.processor.PreprocessedInput;
 import io.gravitee.lab.gliner4j.processor.SchemaEncoder;
 import io.gravitee.lab.gliner4j.runtime.GLiNER4jClassifierRuntime;
+import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.strategy.ClassificationStrategy;
@@ -55,12 +56,14 @@ public final class Gliner2ClassificationStrategy
 
   private Gliner2ClassificationStrategy(
     GLiNER4jConfig config,
+    RuntimeConfig runtimeConfig,
     DjlTokenizerWrapper tokenizer,
     GLiNER4jClassifierRuntime runtime,
     InputAssembler inputAssembler
   ) {
     super(
       config,
+      runtimeConfig,
       tokenizer,
       runtime,
       inputAssembler,
@@ -89,6 +92,7 @@ public final class Gliner2ClassificationStrategy
     runtime.initEncoderBuffers(inputAssembler.getSchemaPrefixIds());
     return new Gliner2ClassificationStrategy(
       ctx.config(),
+      ctx.runtimeConfig(),
       ctx.tokenizer(),
       runtime,
       inputAssembler
@@ -140,49 +144,76 @@ public final class Gliner2ClassificationStrategy
     var inputs = preproc.inputs();
     var batchIndices = preproc.batchIndices();
 
-    // 2. Single batched encoder call
-    var batchedHiddenStates = runtime.runEncoderBatch(
-      preproc.batchInputIds(),
-      preproc.batchAttentionMask(),
-      preproc.maxSeqLen()
-    );
-
-    // 3. Per-text fanout: extract label embeddings + classifier head MLP on virtual threads.
     var results = new ArrayList<List<ClassificationResult>>(batchSize);
     for (int i = 0; i < batchSize; i++) {
       results.add(List.of());
     }
 
-    @SuppressWarnings("unchecked")
-    var futures = (Future<
-      List<ClassificationResult>
-    >[]) new Future[nonEmptyCount];
-
-    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-      for (int s = 0; s < nonEmptyCount; s++) {
-        final int si = s;
-        futures[si] = executor.submit(() -> {
-          int origIdx = batchIndices[si];
-          var input = inputs[origIdx];
-          var labelEmbs = extractLabelEmbeddings(
-            batchedHiddenStates[si],
-            input
-          );
-          return applyClassifierHead(labelEmbs, input, threshold);
-        });
+    if (runtime.isClassifierFullGraph()) {
+      // Merged path: encoder + in-graph label gather + classifier head in one batched session run.
+      // Label marker positions are shared across the batch (identical schema prefix); index 0 is
+      // [P], the rest are the [L] labels.
+      var schemaPositions = inputs[batchIndices[0]].schemaTokenPositions();
+      var labelPositions = new long[schemaPositions.length - 1];
+      for (int i = 0; i < labelPositions.length; i++) {
+        labelPositions[i] = schemaPositions[i + 1];
       }
-
+      var logits = runtime.runClassifierFullBatch(
+        preproc.batchInputIds(),
+        preproc.batchAttentionMask(),
+        preproc.maxSeqLen(),
+        labelPositions,
+        nonEmptyCount
+      );
       for (int s = 0; s < nonEmptyCount; s++) {
-        try {
-          results.set(batchIndices[s], futures[s].get());
-        } catch (ExecutionException e) {
-          throw new RuntimeException(
-            "Classifier head failed for batch slot " + s,
-            e.getCause()
-          );
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-          throw new RuntimeException("Classifier batch fanout interrupted", e);
+        int origIdx = batchIndices[s];
+        results.set(
+          origIdx,
+          thresholdLabelLogits(logits[s], inputs[origIdx], threshold)
+        );
+      }
+    } else {
+      // Split path: one batched encoder call + per-text label-embedding + classifier head fanout.
+      var batchedHiddenStates = runtime.runEncoderBatch(
+        preproc.batchInputIds(),
+        preproc.batchAttentionMask(),
+        preproc.maxSeqLen()
+      );
+
+      @SuppressWarnings("unchecked")
+      var futures = (Future<
+        List<ClassificationResult>
+      >[]) new Future[nonEmptyCount];
+
+      try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        for (int s = 0; s < nonEmptyCount; s++) {
+          final int si = s;
+          futures[si] = executor.submit(() -> {
+            int origIdx = batchIndices[si];
+            var input = inputs[origIdx];
+            var labelEmbs = extractLabelEmbeddings(
+              batchedHiddenStates[si],
+              input
+            );
+            return applyClassifierHead(labelEmbs, input, threshold);
+          });
+        }
+
+        for (int s = 0; s < nonEmptyCount; s++) {
+          try {
+            results.set(batchIndices[s], futures[s].get());
+          } catch (ExecutionException e) {
+            throw new RuntimeException(
+              "Classifier head failed for batch slot " + s,
+              e.getCause()
+            );
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(
+              "Classifier batch fanout interrupted",
+              e
+            );
+          }
         }
       }
     }
@@ -255,18 +286,30 @@ public final class Gliner2ClassificationStrategy
 
     // Run classifier MLP: [numLabels][hiddenSize] → [numLabels][1]
     var logits = runtime.runClassifierHead(labelEmbs);
+    var flat = new float[logits.length];
+    for (int i = 0; i < logits.length; i++) {
+      flat[i] = logits[i][0];
+    }
+    return thresholdLabelLogits(flat, input, threshold);
+  }
 
-    // Apply sigmoid activation and threshold
+  /**
+   * Applies sigmoid + threshold to raw per-label logits and sorts by confidence descending.
+   * Shared by the split and merged paths.
+   */
+  private List<ClassificationResult> thresholdLabelLogits(
+    float[] logits,
+    PreprocessedInput input,
+    float threshold
+  ) {
     var results = new ArrayList<ClassificationResult>();
     var labelNames = input.fieldNames();
     for (int i = 0; i < logits.length && i < labelNames.size(); i++) {
-      float score = LinAlg.sigmoid(logits[i][0]);
+      float score = LinAlg.sigmoid(logits[i]);
       if (score >= threshold) {
         results.add(new ClassificationResult(labelNames.get(i), score));
       }
     }
-
-    // Sort by confidence descending
     results.sort((a, b) -> Float.compare(b.confidence(), a.confidence()));
     return results;
   }

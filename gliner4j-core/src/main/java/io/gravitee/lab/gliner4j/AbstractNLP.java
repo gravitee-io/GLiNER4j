@@ -15,11 +15,13 @@
  */
 package io.gravitee.lab.gliner4j;
 
+import io.gravitee.lab.gliner4j.processor.AssemblerCache;
 import io.gravitee.lab.gliner4j.processor.InputAssembler;
 import io.gravitee.lab.gliner4j.processor.PreprocessedInput;
 import io.gravitee.lab.gliner4j.processor.SchemaEncoder;
 import io.gravitee.lab.gliner4j.processor.TextEncoder;
 import io.gravitee.lab.gliner4j.runtime.BaseRuntime;
+import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
 import java.util.List;
@@ -45,23 +47,31 @@ public abstract class AbstractNLP<D, R, RT extends BaseRuntime>
   implements AutoCloseable {
 
   protected final GLiNER4jConfig config;
+  protected final RuntimeConfig runtimeConfig;
   protected final DjlTokenizerWrapper tokenizer;
   protected final RT runtime;
   protected final InputAssembler inputAssembler;
   protected final GLiNER4jTelemetry telemetry;
+  private final AssemblerCache<List<D>, InputAssembler> overrideAssemblers;
 
   protected AbstractNLP(
     GLiNER4jConfig config,
+    RuntimeConfig runtimeConfig,
     DjlTokenizerWrapper tokenizer,
     RT runtime,
     InputAssembler inputAssembler,
     GLiNER4jTelemetry telemetry
   ) {
     this.config = config;
+    this.runtimeConfig = runtimeConfig;
     this.tokenizer = tokenizer;
     this.runtime = runtime;
     this.inputAssembler = inputAssembler;
     this.telemetry = telemetry;
+    this.overrideAssemblers = new AssemblerCache<>(
+      runtimeConfig.effectiveOverrideCacheSize(),
+      defs -> new InputAssembler(tokenizer, buildSchemaEncoder(defs))
+    );
   }
 
   // ---- subclass hooks ------------------------------------------------------
@@ -136,10 +146,7 @@ public abstract class AbstractNLP<D, R, RT extends BaseRuntime>
       return emptyResult();
     }
 
-    var overrideAssembler = new InputAssembler(
-      tokenizer,
-      buildSchemaEncoder(overrideDefinitions)
-    );
+    var overrideAssembler = overrideAssemblers.get(overrideDefinitions);
 
     var textEncoder = new TextEncoder(text);
     if (textEncoder.getTextLen() == 0) {
@@ -164,8 +171,12 @@ public abstract class AbstractNLP<D, R, RT extends BaseRuntime>
 
   // ---- lifecycle -----------------------------------------------------------
 
+  /** Subclass hook invoked at the start of {@link #close()}. */
+  protected void onClose() {}
+
   @Override
   public final void close() {
+    onClose();
     runtime.close();
     tokenizer.close();
     log.info("{} closed", getClass().getSimpleName());

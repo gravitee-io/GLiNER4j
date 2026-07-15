@@ -184,8 +184,7 @@ public class MultiSchemaInputAssembler {
     }
 
     var inputIds = pos == ids.length ? ids : Arrays.copyOf(ids, pos);
-    var attentionMask = new long[pos];
-    Arrays.fill(attentionMask, 1L);
+    var attentionMask = AttentionMasks.ones(pos);
 
     return new MultiSchemaInput(
       inputIds,

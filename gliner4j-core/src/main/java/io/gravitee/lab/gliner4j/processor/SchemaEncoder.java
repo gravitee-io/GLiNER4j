@@ -47,6 +47,14 @@ public class SchemaEncoder {
     List<String> fieldNames,
     List<String> descriptions
   ) {
+    if (fieldNames.size() != descriptions.size()) {
+      throw new IllegalArgumentException(
+        "fieldNames and descriptions must have the same size: " +
+          fieldNames.size() +
+          " vs " +
+          descriptions.size()
+      );
+    }
     this.fieldNames = fieldNames;
     this.numFields = fieldNames.size();
     this.specialToken = specialToken;
