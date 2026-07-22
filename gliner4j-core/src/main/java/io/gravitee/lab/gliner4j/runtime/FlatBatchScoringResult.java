@@ -34,4 +34,39 @@ public record FlatBatchScoringResult(
   public void close() {
     release.run();
   }
+
+  /**
+   * Materializes one batch row's span scores as nested arrays, sliced to that text's own
+   * word count: {@code [count][numFields][textLen][maxWidth]}. Bridges the flat batched
+   * output to the multi-instance decoders (relations, structures) that consume nested
+   * arrays.
+   *
+   * @param batchRow the text's row within the batch
+   * @param textLen  the text's word count (may be shorter than the padded tensor textLen)
+   */
+  public float[][][][] materializeSlot(int batchRow, int textLen) {
+    int cnt = spanScores.dim(1);
+    int numFields = spanScores.dim(2);
+    int paddedTextLen = spanScores.dim(3);
+    int maxWidth = spanScores.dim(4);
+    int effTextLen = Math.min(textLen, paddedTextLen);
+
+    var out = new float[cnt][numFields][effTextLen][maxWidth];
+    long rowBase = (long) batchRow * spanScores.stride(0);
+    for (int c = 0; c < cnt; c++) {
+      long cBase = rowBase + (long) c * spanScores.stride(1);
+      for (int f = 0; f < numFields; f++) {
+        long fBase = cBase + (long) f * spanScores.stride(2);
+        for (int t = 0; t < effTextLen; t++) {
+          spanScores.copyRowAsFloats(
+            fBase + (long) t * spanScores.stride(3),
+            out[c][f][t],
+            0,
+            maxWidth
+          );
+        }
+      }
+    }
+    return out;
+  }
 }

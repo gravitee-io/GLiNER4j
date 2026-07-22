@@ -19,7 +19,6 @@ import io.gravitee.lab.gliner4j.GLiNER4jConfig;
 import io.gravitee.lab.gliner4j.arch.ModelArchitectures;
 import io.gravitee.lab.gliner4j.arch.TaskType;
 import io.gravitee.lab.gliner4j.postprocess.RelationDecoder;
-import io.gravitee.lab.gliner4j.processor.MultiSchemaEmbeddings;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaInput;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaInputAssembler;
 import io.gravitee.lab.gliner4j.processor.SchemaUnit;
@@ -137,7 +136,6 @@ public final class RelationExtractor
     var tokenizer = new DjlTokenizerWrapper(modelDir);
     var runtime = new GLiNER4jNERRuntime(modelDir, variant, runtimeConfig);
     var assembler = assemblerFor(tokenizer, relations);
-    runtime.initEncoderBuffers(assembler.getSchemaPrefixIds());
 
     log.info("GLiNER4jRelationExtractor loaded successfully");
     return new RelationExtractor(
@@ -211,24 +209,18 @@ public final class RelationExtractor
   protected List<RelationInstance> decodeUnit(
     RelationDefinition relation,
     UnitLayout layout,
-    MultiSchemaEmbeddings.UnitEmbeddings unitEmbs,
-    float[][][] spanRep,
+    float[][] countLogits,
+    float[][][][] spanScores,
     MultiSchemaInput input,
     String text,
     int textLen,
     float threshold
   ) {
-    var scoringResult = runtime.runScoringHead(
-      spanRep,
-      unitEmbs.schemaEmbP(),
-      unitEmbs.schemaEmbFields(),
-      (long) config.getMaxCount()
-    );
     return relationDecoder.decode(
       layout.unit().parentLabel(),
       layout.unit().childNames(),
-      scoringResult.countLogits(),
-      scoringResult.spanScores(),
+      countLogits,
+      spanScores,
       input.wordStartChars(),
       input.wordEndChars(),
       text,

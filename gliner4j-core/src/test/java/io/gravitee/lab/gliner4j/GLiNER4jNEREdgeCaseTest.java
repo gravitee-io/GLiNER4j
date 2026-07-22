@@ -41,7 +41,7 @@ class GLiNER4jNEREdgeCaseTest {
   );
 
   static boolean modelDirExists() {
-    return Files.exists(MODEL_DIR.resolve("onnx/encoder.onnx"));
+    return Files.exists(MODEL_DIR.resolve("onnx/ner_full.onnx"));
   }
 
   // ── extract(String) ──

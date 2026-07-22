@@ -27,7 +27,7 @@ import org.junit.jupiter.api.condition.EnabledIf;
 
 /**
  * Integration tests for text classification via GLiNER4jClassifier.
- * Requires actual ONNX model files including classifier_head.onnx — skipped when not present.
+ * Requires actual ONNX model files including classifier_full.onnx — skipped when not present.
  */
 @EnabledIf("modelDirExists")
 class GLiNER4jClassifierIntegrationTest {
@@ -35,10 +35,7 @@ class GLiNER4jClassifierIntegrationTest {
   private static final Path MODEL_DIR = Path.of("models/gliner2-base-onnx");
 
   static boolean modelDirExists() {
-    return (
-      Files.exists(MODEL_DIR.resolve("onnx/encoder.onnx")) &&
-      Files.exists(MODEL_DIR.resolve("onnx/classifier_head.onnx"))
-    );
+    return (Files.exists(MODEL_DIR.resolve("onnx/classifier_full.onnx")));
   }
 
   @Test

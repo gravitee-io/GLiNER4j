@@ -21,11 +21,10 @@ import io.gravitee.lab.gliner4j.arch.ModelArchitectures;
 import io.gravitee.lab.gliner4j.arch.TaskType;
 import io.gravitee.lab.gliner4j.postprocess.RelationDecoder;
 import io.gravitee.lab.gliner4j.postprocess.SpanDecoder;
-import io.gravitee.lab.gliner4j.processor.MultiSchemaEmbeddings;
-import io.gravitee.lab.gliner4j.processor.MultiSchemaInput;
+import io.gravitee.lab.gliner4j.processor.BatchPreprocessor;
+import io.gravitee.lab.gliner4j.processor.BatchSpanPipeline;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaInputAssembler;
 import io.gravitee.lab.gliner4j.processor.SchemaUnit;
-import io.gravitee.lab.gliner4j.processor.TextEncoder;
 import io.gravitee.lab.gliner4j.processor.UnitLayout;
 import io.gravitee.lab.gliner4j.runtime.BaseRuntime;
 import io.gravitee.lab.gliner4j.runtime.GLiNER4jNERRuntime;
@@ -39,7 +38,6 @@ import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
 import io.gravitee.lab.gliner4j.utils.GlinerNerSupport;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,13 +47,13 @@ import java.util.concurrent.Future;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Unified facade for GLiNER4j combined extraction — entities and relations in a single forward
- * pass over the encoder, driven by a {@link Schema} description.
+ * Unified facade for GLiNER4j combined extraction — entities and relations driven by a
+ * {@link Schema} description, scored through the merged {@code ner_full.onnx} graph.
  *
  * <p>The schema is rendered as a multi-unit prompt: the entity unit (if any) followed by one
- * relation unit per relation type, joined with {@code [SEP_STRUCT]}. The encoder runs once over
- * the full prompt; the scoring head runs once per unit using that unit's parent and child-marker
- * embeddings.
+ * relation unit per relation type, joined with {@code [SEP_STRUCT]}. The merged graph scores
+ * one schema unit per session run (single {@code p_position} + {@code field_positions} set),
+ * so each unit is one bucketed full-graph pass — units fan out on virtual threads.
  *
  * <p>Classifications are not yet wired through this facade — use {@link GLiNER4jClassifier}
  * directly. Calling {@link #extract(String, Schema)} with a classification block in the schema
@@ -76,7 +74,12 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class GLiNER4j implements AutoCloseable {
 
+  // Entity units decode only count-instance 0 (see Gliner2NerStrategy); relation units slice
+  // to maxCount and decode up to argmax(count_logits) instances.
+  private static final long ENTITY_COUNT_INSTANCES = 1;
+
   private final GLiNER4jConfig config;
+  private final RuntimeConfig runtimeConfig;
   private final DjlTokenizerWrapper tokenizer;
   private final GLiNER4jNERRuntime runtime;
   private final SpanDecoder spanDecoder;
@@ -84,10 +87,12 @@ public class GLiNER4j implements AutoCloseable {
 
   private GLiNER4j(
     GLiNER4jConfig config,
+    RuntimeConfig runtimeConfig,
     DjlTokenizerWrapper tokenizer,
     GLiNER4jNERRuntime runtime
   ) {
     this.config = config;
+    this.runtimeConfig = runtimeConfig;
     this.tokenizer = tokenizer;
     this.runtime = runtime;
     this.spanDecoder = new SpanDecoder();
@@ -123,7 +128,7 @@ public class GLiNER4j implements AutoCloseable {
     var tokenizer = new DjlTokenizerWrapper(modelDir);
     var runtime = new GLiNER4jNERRuntime(modelDir, variant, runtimeConfig);
     log.info("GLiNER4j unified model loaded successfully");
-    return new GLiNER4j(config, tokenizer, runtime);
+    return new GLiNER4j(config, runtimeConfig, tokenizer, runtime);
   }
 
   public ExtractionResult extract(String text, Schema schema) {
@@ -131,29 +136,11 @@ public class GLiNER4j implements AutoCloseable {
   }
 
   public ExtractionResult extract(String text, Schema schema, float threshold) {
-    if (schema.hasClassifications()) {
-      throw new UnsupportedOperationException(
-        "Classifications in combined extraction are not yet supported. " +
-          "Use GLiNER4jClassifier directly for classification-only extraction."
-      );
-    }
-    if (text == null || text.isBlank()) {
-      return emptyResult();
-    }
-
-    var textEncoder = new TextEncoder(text);
-    if (textEncoder.getTextLen() == 0) {
-      return emptyResult();
-    }
-
-    var assembler = buildAssembler(tokenizer, schema);
-    var input = assembler.assemble(textEncoder);
-    var hiddenStates = runtime.runEncoderFull(
-      input.inputIds(),
-      input.attentionMask()
-    );
-
-    return decodeAllUnits(hiddenStates[0], input, text, threshold);
+    return extractBatch(
+      List.of(text == null ? "" : text),
+      schema,
+      threshold
+    ).get(0);
   }
 
   public List<ExtractionResult> extractBatch(
@@ -164,12 +151,11 @@ public class GLiNER4j implements AutoCloseable {
   }
 
   /**
-   * Runs combined entity + relation extraction over multiple texts in a single batched pass.
+   * Runs combined entity + relation extraction over multiple texts through the merged graph.
    *
-   * <p>The schema is rendered once into a {@link MultiSchemaInputAssembler}; the encoder runs
-   * once over the padded {@code [batchSize, maxSeqLen]} batch; span_rep runs once over the
-   * padded batch; then per text we fan out scoring_head + decode across all units on virtual
-   * threads. Schema-marker embeddings are read once from a representative slot and shared.
+   * <p>The schema is rendered once into a {@link MultiSchemaInputAssembler}; then per schema
+   * unit one bucketed {@code ner_full} pass scores the whole batch, fanned out over units on
+   * virtual threads.
    *
    * <p>Classifications in the schema throw {@link UnsupportedOperationException} — same as
    * the single-text path.
@@ -203,171 +189,44 @@ public class GLiNER4j implements AutoCloseable {
 
     // Schema is constant across the batch — build the assembler once
     var assembler = buildAssembler(tokenizer, schema);
-
-    // 1. Preprocess all texts
-    var inputs = new MultiSchemaInput[batchSize];
-    int maxSeqLen = 0;
-    int nonEmptyCount = 0;
-    for (int i = 0; i < batchSize; i++) {
-      var text = texts.get(i);
-      if (text == null || text.isBlank()) continue;
-      var textEncoder = new TextEncoder(text);
-      if (textEncoder.getTextLen() == 0) continue;
-      inputs[i] = assembler.assemble(textEncoder);
-      maxSeqLen = Math.max(maxSeqLen, inputs[i].inputIds().length);
-      nonEmptyCount++;
-    }
-
+    var preproc = BatchPreprocessor.preprocess(texts, assembler);
+    int nonEmptyCount = preproc.nonEmptyCount();
     if (nonEmptyCount == 0) {
       return results;
     }
 
-    // 2. Pack non-empty inputs for the encoder
-    var batchInputIds = new long[nonEmptyCount][];
-    var batchAttentionMask = new long[nonEmptyCount][];
-    var batchIndices = new int[nonEmptyCount];
-    int slot = 0;
-    for (int i = 0; i < batchSize; i++) {
-      if (inputs[i] != null) {
-        batchInputIds[slot] = inputs[i].inputIds();
-        batchAttentionMask[slot] = inputs[i].attentionMask();
-        batchIndices[slot] = i;
-        slot++;
-      }
-    }
+    var inputs = preproc.inputs();
+    var batchIndices = preproc.batchIndices();
 
-    // 3. Single batched encoder call
-    var batchedHiddenStates = runtime.runEncoderBatch(
-      batchInputIds,
-      batchAttentionMask,
-      maxSeqLen
-    );
-
-    // 4. Cache per-unit ([P] + child markers) embeddings from a representative slot
-    var layouts = inputs[batchIndices[0]].unitLayouts();
-    var unitEmbsCache =
-      new MultiSchemaEmbeddings.UnitEmbeddings[layouts.size()];
-    for (int u = 0; u < layouts.size(); u++) {
-      unitEmbsCache[u] = MultiSchemaEmbeddings.extractUnit(
-        batchedHiddenStates[0],
-        layouts.get(u)
-      );
-    }
-
-    // 5. Extract per-text text embeddings and find the batch max
-    int hiddenSize = config.getHiddenSize();
-    int maxWidth = config.getMaxWidth();
-    int maxTextLen = 0;
     var textLens = new int[nonEmptyCount];
-    var perTextEmbs = new float[nonEmptyCount][][];
     for (int s = 0; s < nonEmptyCount; s++) {
-      var input = inputs[batchIndices[s]];
-      int textLen = input.textLen();
-      textLens[s] = textLen;
-      if (textLen > maxTextLen) maxTextLen = textLen;
-      perTextEmbs[s] = new float[textLen][hiddenSize];
-      MultiSchemaEmbeddings.extractText(
-        batchedHiddenStates[s],
-        input.wordFirstSubwordPos(),
-        perTextEmbs[s]
-      );
+      textLens[s] = inputs[batchIndices[s]].textLen();
     }
 
-    // 6. Pad embeddings and build flat span indices, then run batched span_rep
-    int maxNumSpans = maxTextLen * maxWidth;
-    var batchTextEmbs = new float[nonEmptyCount][maxTextLen][hiddenSize];
-    var batchSpanIdxFlat = new long[nonEmptyCount * maxNumSpans * 2];
-    for (int s = 0; s < nonEmptyCount; s++) {
-      int textLen = textLens[s];
-      System.arraycopy(perTextEmbs[s], 0, batchTextEmbs[s], 0, textLen);
-      int batchOffset = s * maxNumSpans * 2;
-      for (int i = 0; i < textLen; i++) {
-        for (int w = 0; w < maxWidth; w++) {
-          int endPos = i + w;
-          if (endPos < textLen) {
-            int flatIdx = batchOffset + (i * maxWidth + w) * 2;
-            batchSpanIdxFlat[flatIdx] = i;
-            batchSpanIdxFlat[flatIdx + 1] = endPos;
-          }
-        }
-      }
-    }
+    // Unit layouts are identical across the batch (shared schema prefix).
+    var layouts = inputs[batchIndices[0]].unitLayouts();
+    int numUnits = layouts.size();
 
-    var batchSpanRep4d = runtime.runSpanRepBatch(
-      batchTextEmbs,
-      batchSpanIdxFlat,
-      nonEmptyCount,
-      maxNumSpans
-    );
-
-    // 7. Per-text fanout: scoring_head + decode for each unit (entities or relation)
+    // One merged-graph pass per unit, fanned out on virtual threads.
     @SuppressWarnings("unchecked")
-    var futures = new Future[nonEmptyCount];
+    var unitFutures = (Future<List<Object>>[]) new Future[numUnits];
 
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-      for (int s = 0; s < nonEmptyCount; s++) {
-        final int si = s;
-        futures[si] = executor.submit(() -> {
-          int origIdx = batchIndices[si];
-          var input = inputs[origIdx];
-          int textLen = textLens[si];
-          var text = texts.get(origIdx);
-
-          // Slice the per-text span_rep view from the padded batch tensor
-          var spanRep = Arrays.copyOfRange(batchSpanRep4d[si], 0, textLen);
-
-          var entities = new LinkedHashMap<String, List<EntitySpan>>();
-          var relations = new LinkedHashMap<String, List<RelationInstance>>();
-
-          for (int u = 0; u < layouts.size(); u++) {
-            var layout = layouts.get(u);
-            var unitEmbs = unitEmbsCache[u];
-            switch (layout.unit().kind()) {
-              case ENTITIES -> entities.putAll(
-                decodeEntitiesUnit(
-                  layout,
-                  unitEmbs,
-                  spanRep,
-                  input,
-                  text,
-                  textLen,
-                  threshold
-                )
-              );
-              case RELATION -> relations.put(
-                layout.unit().parentLabel(),
-                decodeRelationUnit(
-                  layout,
-                  unitEmbs,
-                  spanRep,
-                  input,
-                  text,
-                  textLen,
-                  threshold
-                )
-              );
-              case CLASSIFICATIONS -> {
-                // Filtered out earlier
-              }
-            }
-          }
-
-          return new ExtractionResult(
-            entities,
-            relations,
-            List.<ClassificationResult>of()
-          );
-        });
+      for (int u = 0; u < numUnits; u++) {
+        final var layout = layouts.get(u);
+        unitFutures[u] = executor.submit(() ->
+          scoreUnit(layout, preproc, textLens, texts, threshold, nonEmptyCount)
+        );
       }
 
-      for (int s = 0; s < nonEmptyCount; s++) {
+      var perUnitResults = new ArrayList<List<Object>>(numUnits);
+      for (int u = 0; u < numUnits; u++) {
         try {
-          int origIdx = batchIndices[s];
-          var result = (ExtractionResult) futures[s].get();
-          results.set(origIdx, result);
+          perUnitResults.add(unitFutures[u].get());
         } catch (ExecutionException e) {
           throw new RuntimeException(
-            "Unified scoring failed for batch slot " + s,
+            "Unified scoring failed for unit " +
+              layouts.get(u).unit().parentLabel(),
             e.getCause()
           );
         } catch (InterruptedException e) {
@@ -375,139 +234,156 @@ public class GLiNER4j implements AutoCloseable {
           throw new RuntimeException("Batch unified scoring interrupted", e);
         }
       }
-    }
 
-    return results;
-  }
-
-  private ExtractionResult decodeAllUnits(
-    float[][] hiddenState,
-    MultiSchemaInput input,
-    String text,
-    float threshold
-  ) {
-    int hiddenSize = config.getHiddenSize();
-    int maxWidth = config.getMaxWidth();
-    int textLen = input.textLen();
-
-    var textEmbs = new float[textLen][hiddenSize];
-    MultiSchemaEmbeddings.extractText(
-      hiddenState,
-      input.wordFirstSubwordPos(),
-      textEmbs
-    );
-
-    int numSpans = textLen * maxWidth;
-    var spanIdxFlat = buildSpanIdxFlat(textLen, maxWidth, numSpans);
-    var textEmbs3d = new float[1][textLen][hiddenSize];
-    System.arraycopy(textEmbs, 0, textEmbs3d[0], 0, textLen);
-    var spanRep4d = runtime.runSpanRepFlat(textEmbs3d, spanIdxFlat, numSpans);
-    var spanRep = spanRep4d[0];
-
-    var entities = new LinkedHashMap<String, List<EntitySpan>>();
-    var relations = new LinkedHashMap<String, List<RelationInstance>>();
-
-    for (var layout : input.unitLayouts()) {
-      var unitEmbs = MultiSchemaEmbeddings.extractUnit(hiddenState, layout);
-      switch (layout.unit().kind()) {
-        case ENTITIES -> entities.putAll(
-          decodeEntitiesUnit(
-            layout,
-            unitEmbs,
-            spanRep,
-            input,
-            text,
-            input.textLen(),
-            threshold
-          )
-        );
-        case RELATION -> relations.put(
-          layout.unit().parentLabel(),
-          decodeRelationUnit(
-            layout,
-            unitEmbs,
-            spanRep,
-            input,
-            text,
-            input.textLen(),
-            threshold
+      for (int s = 0; s < nonEmptyCount; s++) {
+        var entities = new LinkedHashMap<String, List<EntitySpan>>();
+        var relations = new LinkedHashMap<String, List<RelationInstance>>();
+        for (int u = 0; u < numUnits; u++) {
+          var layout = layouts.get(u);
+          var unitResult = perUnitResults.get(u).get(s);
+          switch (layout.unit().kind()) {
+            case ENTITIES -> {
+              @SuppressWarnings("unchecked")
+              var perText = (Map<String, List<EntitySpan>>) unitResult;
+              entities.putAll(perText);
+            }
+            case RELATION -> {
+              @SuppressWarnings("unchecked")
+              var perText = (List<RelationInstance>) unitResult;
+              relations.put(layout.unit().parentLabel(), perText);
+            }
+            case CLASSIFICATIONS -> {
+              // Filtered out earlier
+            }
+          }
+        }
+        results.set(
+          batchIndices[s],
+          new ExtractionResult(
+            entities,
+            relations,
+            List.<ClassificationResult>of()
           )
         );
       }
     }
 
-    return new ExtractionResult(
-      entities,
-      relations,
-      List.<ClassificationResult>of()
-    );
+    return results;
   }
 
-  private Map<String, List<EntitySpan>> decodeEntitiesUnit(
+  /**
+   * Scores one schema unit over the whole batch through {@code ner_full}. Returns one decoded
+   * result per slot: a {@code Map<String, List<EntitySpan>>} for ENTITIES units, a
+   * {@code List<RelationInstance>} for RELATION units.
+   */
+  private List<Object> scoreUnit(
     UnitLayout layout,
-    MultiSchemaEmbeddings.UnitEmbeddings unitEmbs,
-    float[][][] spanRep,
-    MultiSchemaInput input,
-    String text,
-    int textLen,
-    float threshold
+    BatchPreprocessor.MultiResult preproc,
+    int[] textLens,
+    List<String> texts,
+    float threshold,
+    int nonEmptyCount
   ) {
-    var scoringResult = runtime.runScoringHead(
-      spanRep,
-      unitEmbs.schemaEmbP(),
-      unitEmbs.schemaEmbFields(),
-      (long) config.getMaxCount()
-    );
-
-    int predCount = argmax(scoringResult.countLogits()[0]);
-    if (predCount == 0) {
-      return emptyEntityMap(layout.unit().childNames());
+    boolean isEntities = layout.unit().kind() == SchemaUnit.Kind.ENTITIES;
+    var slotResults = new ArrayList<Object>(nonEmptyCount);
+    for (int s = 0; s < nonEmptyCount; s++) {
+      slotResults.add(
+        isEntities
+          ? emptyEntityMap(layout.unit().childNames())
+          : List.<RelationInstance>of()
+      );
+    }
+    if (layout.childMarkerPositions().length == 0) {
+      return slotResults;
     }
 
-    var spans = spanDecoder.decode(
-      scoringResult.spanScores(),
-      layout.unit().childNames(),
-      input.wordStartChars(),
-      input.wordEndChars(),
-      text,
-      textLen,
-      threshold
+    var inputs = preproc.inputs();
+    var batchIndices = preproc.batchIndices();
+
+    var fieldPositions = new long[layout.childMarkerPositions().length];
+    for (int i = 0; i < fieldPositions.length; i++) {
+      fieldPositions[i] = layout.childMarkerPositions()[i];
+    }
+    long count = isEntities ? ENTITY_COUNT_INSTANCES : config.getMaxCount();
+
+    var pipeline = BatchSpanPipeline.runFullGraph(
+      preproc.batchInputIds(),
+      preproc.batchAttentionMask(),
+      textLens,
+      slot -> inputs[batchIndices[slot]].wordFirstSubwordPos(),
+      config.getMaxWidth(),
+      runtimeConfig.getBatchLengthRatio(),
+      runtimeConfig.getMaxSubBatchSize(),
+      (ids, mask, maxSeqLen, wpFlat, bSize, maxTextLen, spanIdxFlat) ->
+        runtime.runNerFullBatch(
+          ids,
+          mask,
+          maxSeqLen,
+          wpFlat,
+          bSize,
+          maxTextLen,
+          layout.parentTokenPos(),
+          fieldPositions,
+          spanIdxFlat,
+          config.getMaxWidth(),
+          count
+        )
     );
 
-    var grouped = GlinerNerSupport.groupByType(spans);
-
-    // Ensure every requested entity type is present in the output map
-    var result = emptyEntityMap(layout.unit().childNames());
-    result.putAll(grouped);
-    return result;
-  }
-
-  private List<RelationInstance> decodeRelationUnit(
-    UnitLayout layout,
-    MultiSchemaEmbeddings.UnitEmbeddings unitEmbs,
-    float[][][] spanRep,
-    MultiSchemaInput input,
-    String text,
-    int textLen,
-    float threshold
-  ) {
-    var scoringResult = runtime.runScoringHead(
-      spanRep,
-      unitEmbs.schemaEmbP(),
-      unitEmbs.schemaEmbFields(),
-      (long) config.getMaxCount()
-    );
-    return relationDecoder.decode(
-      layout.unit().parentLabel(),
-      layout.unit().childNames(),
-      scoringResult.countLogits(),
-      scoringResult.spanScores(),
-      input.wordStartChars(),
-      input.wordEndChars(),
-      text,
-      textLen,
-      threshold
-    );
+    try {
+      for (var bucket : pipeline.buckets()) {
+        try (var scoring = bucket.scoring()) {
+          int predCount = argmax(scoring.countLogits()[0]);
+          if (isEntities && predCount == 0) {
+            continue;
+          }
+          for (int j = 0; j < bucket.slots().length; j++) {
+            int si = bucket.slots()[j];
+            int origIdx = batchIndices[si];
+            var input = inputs[origIdx];
+            var text = texts.get(origIdx);
+            int textLen = textLens[si];
+            if (isEntities) {
+              var spans = spanDecoder.decode(
+                scoring.spanScores(),
+                j,
+                layout.unit().childNames(),
+                input.wordStartChars(),
+                input.wordEndChars(),
+                text,
+                textLen,
+                threshold
+              );
+              // Ensure every requested entity type is present in the output map
+              var perText = emptyEntityMap(layout.unit().childNames());
+              perText.putAll(GlinerNerSupport.groupByType(spans));
+              slotResults.set(si, perText);
+            } else {
+              slotResults.set(
+                si,
+                relationDecoder.decode(
+                  layout.unit().parentLabel(),
+                  layout.unit().childNames(),
+                  scoring.countLogits(),
+                  scoring.materializeSlot(j, textLen),
+                  input.wordStartChars(),
+                  input.wordEndChars(),
+                  text,
+                  textLen,
+                  threshold
+                )
+              );
+            }
+          }
+        }
+      }
+    } finally {
+      // Idempotent: releases anything not yet closed (e.g. on a decode failure).
+      for (var bucket : pipeline.buckets()) {
+        bucket.scoring().close();
+      }
+    }
+    return slotResults;
   }
 
   private static MultiSchemaInputAssembler buildAssembler(
@@ -542,25 +418,6 @@ public class GLiNER4j implements AutoCloseable {
       Map.of(),
       List.<ClassificationResult>of()
     );
-  }
-
-  private static long[] buildSpanIdxFlat(
-    int textLen,
-    int maxWidth,
-    int numSpans
-  ) {
-    var flat = new long[numSpans * 2];
-    for (int i = 0; i < textLen; i++) {
-      for (int w = 0; w < maxWidth; w++) {
-        int endPos = i + w;
-        if (endPos < textLen) {
-          int flatIdx = (i * maxWidth + w) * 2;
-          flat[flatIdx] = i;
-          flat[flatIdx + 1] = endPos;
-        }
-      }
-    }
-    return flat;
   }
 
   @Override

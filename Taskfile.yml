@@ -215,9 +215,9 @@ tasks:
       - task: model:download:base
       - task: model:export:base
         vars:
-          # --keep-split: model:merged:base still needs the split heads for encoder fusion;
+          # --no-prune-split: model:merged:base still needs the split heads for encoder fusion;
           # it removes them itself once ner_full/classifier_full are rebuilt and verified.
-          EXPORT_ARGS: "--variant fp16 --variant quantized --keep-split"
+          EXPORT_ARGS: "--variant fp16 --variant quantized --no-prune-split"
       - task: model:merged:base
 
   model:merged:base:
@@ -325,9 +325,9 @@ tasks:
       - task: model:download:pii
       - task: model:export:pii
         vars:
-          # --keep-split: model:merged:pii still needs the split heads for encoder fusion;
+          # --no-prune-split: model:merged:pii still needs the split heads for encoder fusion;
           # it removes them itself once ner_full/classifier_full are rebuilt and verified.
-          EXPORT_ARGS: "--variant fp16 --variant quantized --keep-split"
+          EXPORT_ARGS: "--variant fp16 --variant quantized --no-prune-split"
       - task: model:merged:pii
 
   model:merged:pii:

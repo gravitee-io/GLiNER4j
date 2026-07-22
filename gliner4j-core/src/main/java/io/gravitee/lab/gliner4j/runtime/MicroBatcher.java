@@ -86,6 +86,16 @@ public final class MicroBatcher<R> implements AutoCloseable {
     }
     var request = new Request<R>(text, threshold, new CompletableFuture<>());
     queue.add(request);
+    // close() may have drained the queue and stopped the drainer between the closed check
+    // above and the add — re-check and pull the request back out so its future can never
+    // be stranded in a dead queue.
+    if (closed && queue.remove(request)) {
+      request
+        .future()
+        .completeExceptionally(
+          new IllegalStateException("MicroBatcher closed")
+        );
+    }
     try {
       return request.future().get();
     } catch (InterruptedException e) {

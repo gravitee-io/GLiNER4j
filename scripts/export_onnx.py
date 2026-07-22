@@ -529,9 +529,10 @@ GLINER2_MODEL_FILES = (
     "classifier_full.onnx",
 )
 
-# The deployment artifacts. The split graphs above them are intermediates: they
-# exist to be verified head-by-head and to feed build_merged_graphs.py's
-# encoder-fusion pipeline, and are deleted after export unless --keep-split.
+# The deployment artifacts — the only graphs the GLiNER2 runtime loads. The split
+# graphs are intermediates: verified head-by-head at export time and consumed by
+# build_merged_graphs.py's encoder-fusion pipeline; pruned by default
+# (--no-prune-split keeps them for that pipeline).
 GLINER2_FINAL_FILES = ("ner_full.onnx", "classifier_full.onnx")
 
 
@@ -1427,22 +1428,25 @@ def export_gliner2(
         list[Variant] | None,
         typer.Option("--variant", help="Additional variants to generate (fp16, quantized)"),
     ] = None,
-    keep_split: Annotated[
+    prune_split: Annotated[
         bool,
         typer.Option(
-            "--keep-split/--no-keep-split",
-            help="Keep the intermediate split graphs (encoder/span_rep/scoring_head/"
-            "classifier_head) after export — needed if build_merged_graphs.py will run next",
+            "--prune-split/--no-prune-split",
+            help="Delete the split graphs (encoder/span_rep/scoring_head/classifier_head) "
+            "after export, keeping only ner_full/classifier_full — the only graphs the "
+            "runtime loads. Use --no-prune-split when build_merged_graphs.py (encoder "
+            "fusion) runs next; it consumes the split heads and prunes them itself.",
         ),
-    ] = False,
+    ] = True,
 ) -> None:
     """Export a GLiNER2 PyTorch model to ONNX models for gliner4j.
 
     Base FP32 models are always exported to {output_dir}/onnx/.
     Additional variants (fp16, quantized) are placed in {output_dir}/onnx_{variant}/.
     Config and tokenizer are written to {output_dir}/ (shared across variants).
-    The final deployment artifacts are ner_full.onnx + classifier_full.onnx; the split
-    graphs are intermediates and are removed after export unless --keep-split.
+    The final deployment artifacts are ner_full.onnx + classifier_full.onnx — the only
+    graphs the runtime loads. The split graphs are intermediates, pruned after export
+    unless --no-prune-split (needed when build_merged_graphs.py runs next).
     """
     # Import directly from gliner2.model to avoid __init__ pulling in api_client
     from gliner2.model import Extractor  # noqa: E402
@@ -1518,8 +1522,8 @@ def export_gliner2(
     # Step 9: Drop the intermediate split graphs — verification (step 7) and the
     # variant conversions (step 8) have already consumed them, and the runtime
     # only loads the merged deployment artifacts.
-    if not keep_split:
-        console.print("\n[bold]Removing intermediate split graphs (--keep-split to retain)...[/bold]")
+    if prune_split:
+        console.print("\n[bold]Pruning split graphs (--no-prune-split to retain)...[/bold]")
         intermediates = tuple(f for f in GLINER2_MODEL_FILES if f not in GLINER2_FINAL_FILES)
         for variant_dir in (base_dir, *(out / f"onnx_{v.value}" for v in variants or [])):
             for name in intermediates:

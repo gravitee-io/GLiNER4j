@@ -100,6 +100,15 @@ public abstract class AbstractNLP<D, R, RT extends BaseRuntime>
   /** The empty result returned for null/blank/empty-after-tokenization texts. */
   protected abstract R emptyResult();
 
+  /**
+   * The cached per-call override assembler for {@code defs}. Strategies that route override
+   * requests through their own merged-graph paths (instead of {@link #doExtractOverride})
+   * use this to swap the prompt schema for a single request.
+   */
+  protected final InputAssembler overrideAssembler(List<D> defs) {
+    return overrideAssemblers.get(defs);
+  }
+
   /** Number of items in {@code result}, recorded into telemetry. */
   protected abstract long resultSize(R result);
 

@@ -21,7 +21,6 @@ import io.gravitee.lab.gliner4j.GLiNER4jConfig;
 import io.gravitee.lab.gliner4j.arch.ModelArchitectures;
 import io.gravitee.lab.gliner4j.arch.TaskType;
 import io.gravitee.lab.gliner4j.postprocess.StructureDecoder;
-import io.gravitee.lab.gliner4j.processor.MultiSchemaEmbeddings;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaInput;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaInputAssembler;
 import io.gravitee.lab.gliner4j.processor.SchemaUnit;
@@ -118,7 +117,6 @@ public final class SchemaExtractor
     var tokenizer = new DjlTokenizerWrapper(modelDir);
     var runtime = new GLiNER4jNERRuntime(modelDir, variant, runtimeConfig);
     var assembler = assemblerFor(tokenizer, structures);
-    runtime.initEncoderBuffers(assembler.getSchemaPrefixIds());
 
     log.info("GLiNER4jSchemaExtractor loaded successfully");
     return new SchemaExtractor(
@@ -179,25 +177,14 @@ public final class SchemaExtractor
   protected List<StructureInstance> decodeUnit(
     StructureDefinition structure,
     UnitLayout layout,
-    MultiSchemaEmbeddings.UnitEmbeddings unitEmbs,
-    float[][][] spanRep,
+    float[][] countLogits,
+    float[][][][] spanScores,
     MultiSchemaInput input,
     String text,
     int textLen,
     float threshold
   ) {
-    if (unitEmbs.schemaEmbFields().length == 0) {
-      return List.of();
-    }
-
-    var scoringResult = runtime.runScoringHead(
-      spanRep,
-      unitEmbs.schemaEmbP(),
-      unitEmbs.schemaEmbFields(),
-      config.getMaxCount()
-    );
-
-    int predCount = argmax(scoringResult.countLogits()[0]);
+    int predCount = argmax(countLogits[0]);
     log.debug(
       "Structure '{}' predicted count: {}",
       structure.name(),
@@ -205,7 +192,7 @@ public final class SchemaExtractor
     );
 
     return decoder.decode(
-      scoringResult.spanScores(),
+      spanScores,
       predCount,
       structure,
       input.wordStartChars(),

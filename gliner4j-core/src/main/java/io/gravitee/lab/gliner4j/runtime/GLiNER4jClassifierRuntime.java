@@ -23,15 +23,13 @@ import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Classification runtime managing the classifier_head ONNX session
- * on top of the shared encoder from {@link BaseRuntime}.
+ * Classification runtime for the merged GLiNER2 graph ({@code classifier_full.onnx}):
+ * encoder, in-graph label gather and classifier head in one session. The split graphs
+ * ({@code encoder.onnx} / {@code classifier_head.onnx}) are no longer loaded.
  */
 @Slf4j
 public non-sealed class GLiNER4jClassifierRuntime extends BaseRuntime {
 
-  private OrtSession classifierHeadSession;
-  // Full merged graph (classifier_full.onnx): encoder + in-graph label gather + classifier_head
-  // in one session. Present only in artifacts composed offline; null otherwise.
   private OrtSession classifierFullSession;
   private final DirectBufferPool classifierInputBuffers = new DirectBufferPool(
     2
@@ -51,84 +49,44 @@ public non-sealed class GLiNER4jClassifierRuntime extends BaseRuntime {
     RuntimeConfig runtimeConfig,
     Path cacheDir
   ) throws OrtException {
-    int numCpus = Runtime.getRuntime().availableProcessors();
-
-    int scoringIntra = getOrDefault(
-      runtimeConfig.getScoringIntraOpThreads(),
-      Math.max(2, numCpus / 4)
-    );
-    int scoringInter = getOrDefault(
-      runtimeConfig.getScoringInterOpThreads(),
-      1
-    );
-
-    // Split classifier_head is only needed by the non-merged (per-text) path; a self-contained
-    // classifier_full.onnx deployment omits it.
-    if (
-      java.nio.file.Files.exists(variantDir.resolve("classifier_head.onnx"))
-    ) {
-      log.info("Loading classifier_head.onnx...");
-      try (
-        var opts = createSessionOptions(
-          scoringIntra,
-          scoringInter,
-          OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL,
-          runtimeConfig,
-          cacheDir,
-          "classifier_head.onnx"
-        )
-      ) {
-        this.classifierHeadSession = env.createSession(
-          variantDir.resolve("classifier_head.onnx").toString(),
-          opts
-        );
-      }
-    }
-
     var fullPath = variantDir.resolve("classifier_full.onnx");
-    if (java.nio.file.Files.exists(fullPath)) {
-      log.info(
-        "Loading classifier_full.onnx (merged graph: encoder + label gather + classifier_head)..."
+    if (!java.nio.file.Files.exists(fullPath)) {
+      throw new IllegalStateException(
+        "classifier_full.onnx not found in " +
+          variantDir +
+          " — this runtime requires the merged graph. Re-export the bundle with " +
+          "`uv run scripts/export_onnx.py gliner2 ...` (or the matching task in Taskfile.yml)."
       );
-      int encoderIntra = getOrDefault(
-        runtimeConfig.getEncoderIntraOpThreads(),
-        numCpus
-      );
-      int encoderInter = getOrDefault(
-        runtimeConfig.getEncoderInterOpThreads(),
-        Math.max(2, numCpus / 2)
-      );
-      try (
-        var opts = createSessionOptions(
-          encoderIntra,
-          encoderInter,
-          OrtSession.SessionOptions.ExecutionMode.PARALLEL,
-          runtimeConfig,
-          cacheDir,
-          "classifier_full.onnx"
-        )
-      ) {
-        this.classifierFullSession = env.createSession(
-          fullPath.toString(),
-          opts
-        );
-      }
     }
-  }
 
-  /**
-   * Whether the artifact ships the merged classifier graph ({@code classifier_full.onnx}) — one
-   * session run per batch, no standalone encoder/head round trip.
-   */
-  public boolean isClassifierFullGraph() {
-    return classifierFullSession != null;
+    int numCpus = Runtime.getRuntime().availableProcessors();
+    log.info(
+      "Loading classifier_full.onnx (merged graph: encoder + label gather + classifier_head)..."
+    );
+    int encoderIntra = getOrDefault(
+      runtimeConfig.getEncoderIntraOpThreads(),
+      numCpus
+    );
+    int encoderInter = getOrDefault(
+      runtimeConfig.getEncoderInterOpThreads(),
+      Math.max(2, numCpus / 2)
+    );
+    try (
+      var opts = createSessionOptions(
+        encoderIntra,
+        encoderInter,
+        OrtSession.SessionOptions.ExecutionMode.PARALLEL,
+        runtimeConfig,
+        cacheDir,
+        "classifier_full.onnx"
+      )
+    ) {
+      this.classifierFullSession = env.createSession(fullPath.toString(), opts);
+    }
   }
 
   @Override
   protected void closeTaskHeads() throws OrtException {
-    if (classifierHeadSession != null) {
-      classifierHeadSession.close();
-    }
     if (classifierFullSession != null) {
       classifierFullSession.close();
     }
@@ -140,39 +98,10 @@ public non-sealed class GLiNER4jClassifierRuntime extends BaseRuntime {
     if (encoderSession != null) {
       sessions.add(encoderSession);
     }
-    if (classifierHeadSession != null) {
-      sessions.add(classifierHeadSession);
-    }
     if (classifierFullSession != null) {
       sessions.add(classifierFullSession);
     }
     return sessions;
-  }
-
-  /**
-   * Runs the classifier head MLP on label embeddings (split path).
-   *
-   * @param labelEmbeddings label embeddings [numLabels][hiddenSize]
-   * @return logits [numLabels][1] (raw scores before activation)
-   */
-  public float[][] runClassifierHead(float[][] labelEmbeddings) {
-    if (classifierHeadSession == null) {
-      throw new IllegalStateException(
-        "classifier_head.onnx is not part of this artifact (merged classifier_full only)"
-      );
-    }
-    try {
-      try (
-        var embTensor = OnnxTensor.createTensor(env, labelEmbeddings);
-        var result = classifierHeadSession.run(
-          Map.of("label_embeddings", embTensor)
-        )
-      ) {
-        return (float[][]) result.get(0).getValue();
-      }
-    } catch (OrtException e) {
-      throw new RuntimeException("Classifier head inference failed", e);
-    }
   }
 
   /**
