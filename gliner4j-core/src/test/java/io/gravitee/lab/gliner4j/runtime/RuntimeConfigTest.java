@@ -46,6 +46,19 @@ class RuntimeConfigTest {
   }
 
   @Test
+  void defaultConfig_hasOverrideCacheEnabled() {
+    var config = RuntimeConfig.builder().build();
+    assertThat(config.isOverrideCacheEnabled()).isTrue();
+    assertThat(config.effectiveOverrideCacheSize()).isEqualTo(32);
+  }
+
+  @Test
+  void disablingOverrideCache_zeroesEffectiveSize() {
+    var config = RuntimeConfig.builder().overrideCacheEnabled(false).build();
+    assertThat(config.effectiveOverrideCacheSize()).isZero();
+  }
+
+  @Test
   void defaultConfig_autoDetectsExecutionProvider() {
     var config = RuntimeConfig.builder().build();
     assertThat(config.getExecutionProvider()).isEqualTo(ExecutionProvider.AUTO);

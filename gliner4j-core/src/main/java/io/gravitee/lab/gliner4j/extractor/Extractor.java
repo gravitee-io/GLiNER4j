@@ -16,17 +16,18 @@
 package io.gravitee.lab.gliner4j.extractor;
 
 import io.gravitee.lab.gliner4j.GLiNER4jConfig;
+import io.gravitee.lab.gliner4j.processor.AssemblerCache;
 import io.gravitee.lab.gliner4j.processor.BatchPreprocessor;
-import io.gravitee.lab.gliner4j.processor.MultiSchemaEmbeddings;
+import io.gravitee.lab.gliner4j.processor.BatchSpanPipeline;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaInput;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaInputAssembler;
-import io.gravitee.lab.gliner4j.processor.TextEncoder;
 import io.gravitee.lab.gliner4j.processor.UnitLayout;
 import io.gravitee.lab.gliner4j.runtime.GLiNER4jNERRuntime;
+import io.gravitee.lab.gliner4j.runtime.MicroBatcher;
+import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,19 +38,19 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Shared scaffolding for multi-unit task facades (relation extraction, structured/JSON
- * extraction, …).
+ * extraction, …) on the merged {@code ner_full.onnx} graph.
  *
  * <p>All tasks in this family build a multi-unit prompt: one {@code [P] / child-marker} block
- * per definition (relation, structure, …) joined by {@code [SEP_STRUCT]}. The encoder runs once
- * over the full prompt, {@code span_rep} once over the text region, then the scoring head runs
- * per unit with that unit's parent + child-marker embeddings, and the result is decoded into a
- * per-unit list of instances.
+ * per definition (relation, structure, …) joined by {@code [SEP_STRUCT]}. The merged graph
+ * scores one schema unit per session run (a single {@code p_position} + {@code field_positions}
+ * set), so each unit is one bucketed full-graph pass over the batch — units fan out on virtual
+ * threads (independent {@code OrtSession.run} calls overlap on CUDA).
  *
  * <p>Subclasses only supply:
  * <ul>
  *   <li>how to build a {@link MultiSchemaInputAssembler} from their definition type
  *       ({@link #buildAssembler(List)}), and</li>
- *   <li>how to decode one unit's scoring result into the per-unit instance list
+ *   <li>how to decode one unit's scoring output into the per-unit instance list
  *       ({@link #decodeUnit}).</li>
  * </ul>
  *
@@ -62,14 +63,21 @@ public abstract sealed class Extractor<D, R>
   permits RelationExtractor, SchemaExtractor {
 
   protected final GLiNER4jConfig config;
+  protected final RuntimeConfig runtimeConfig;
   protected final List<D> definitions;
   protected final DjlTokenizerWrapper tokenizer;
   protected final GLiNER4jNERRuntime runtime;
   protected final MultiSchemaInputAssembler inputAssembler;
   protected final GLiNER4jTelemetry telemetry;
+  private final AssemblerCache<
+    List<D>,
+    MultiSchemaInputAssembler
+  > overrideAssemblers;
+  private final MicroBatcher<Map<String, List<R>>> microBatcher;
 
   protected Extractor(
     GLiNER4jConfig config,
+    RuntimeConfig runtimeConfig,
     List<D> definitions,
     DjlTokenizerWrapper tokenizer,
     GLiNER4jNERRuntime runtime,
@@ -77,11 +85,23 @@ public abstract sealed class Extractor<D, R>
     GLiNER4jTelemetry telemetry
   ) {
     this.config = config;
+    this.runtimeConfig = runtimeConfig;
     this.definitions = definitions;
     this.tokenizer = tokenizer;
     this.runtime = runtime;
     this.inputAssembler = inputAssembler;
     this.telemetry = telemetry;
+    this.overrideAssemblers = new AssemblerCache<>(
+      runtimeConfig.effectiveOverrideCacheSize(),
+      this::buildAssembler
+    );
+    this.microBatcher = runtimeConfig.isMicroBatchingEnabled()
+      ? new MicroBatcher<>(
+        runtimeConfig.getMicroBatchMaxSize(),
+        runtimeConfig.getMicroBatchMaxWaitMicros(),
+        this::doExtractBatch
+      )
+      : null;
   }
 
   // ---- subclass hooks ------------------------------------------------------
@@ -95,12 +115,13 @@ public abstract sealed class Extractor<D, R>
   );
 
   /**
-   * Decodes one unit's scoring head output into a list of typed instances.
+   * Decodes one unit's scoring output into a list of typed instances.
    *
    * @param definition the original definition that produced this unit (same index as {@code layout})
    * @param layout     the resolved unit positions (parent + child markers)
-   * @param unitEmbs   the unit's {@code [P]} and child-marker embeddings
-   * @param spanRep    the per-text span representations, shape {@code [textLen][maxWidth][hiddenSize]}
+   * @param countLogits the unit's count logits, shape {@code [1][maxCount+1]}
+   * @param spanScores the unit's span scores for this text,
+   *                   shape {@code [count][numFields][textLen][maxWidth]}
    * @param input      the assembled input for this text
    * @param text       the original input text
    * @param textLen    number of words in {@code text}
@@ -110,8 +131,8 @@ public abstract sealed class Extractor<D, R>
   protected abstract List<R> decodeUnit(
     D definition,
     UnitLayout layout,
-    MultiSchemaEmbeddings.UnitEmbeddings unitEmbs,
-    float[][][] spanRep,
+    float[][] countLogits,
+    float[][][][] spanScores,
     MultiSchemaInput input,
     String text,
     int textLen,
@@ -121,127 +142,62 @@ public abstract sealed class Extractor<D, R>
   // ---- shared single-text / override paths ---------------------------------
 
   /**
-   * Runs the load-time assembler against {@code text}. Uses the runtime's prefix-cached encoder.
+   * Runs the load-time assembler against {@code text} (batch of one through the merged graph).
    */
   protected final Map<String, List<R>> doExtractOnce(
     String text,
     float threshold
   ) {
-    return doExtractWith(text, threshold, definitions, inputAssembler, false);
+    if (microBatcher != null) {
+      return microBatcher.extract(text, threshold);
+    }
+    return extractMerged(
+      List.of(text == null ? "" : text),
+      threshold,
+      definitions,
+      inputAssembler
+    ).get(0);
   }
 
   /**
-   * Runs a per-call schema against {@code text} via a fresh assembler. Uses
-   * {@code runEncoderFull} since the prefix cache is keyed on the load-time schema.
+   * Runs a per-call schema against {@code text} via a fresh assembler. The merged graph embeds
+   * the encoder, so the load-time and override assemblers take the exact same path.
    */
   protected final Map<String, List<R>> doExtractOverride(
     String text,
     List<D> overrideDefinitions,
     float threshold
   ) {
-    var overrideAssembler = buildAssembler(overrideDefinitions);
-    return doExtractWith(
-      text,
+    return extractMerged(
+      List.of(text == null ? "" : text),
       threshold,
       overrideDefinitions,
-      overrideAssembler,
-      true
-    );
-  }
-
-  private Map<String, List<R>> doExtractWith(
-    String text,
-    float threshold,
-    List<D> activeDefs,
-    MultiSchemaInputAssembler assembler,
-    boolean useFullEncoder
-  ) {
-    long startNanos = System.nanoTime();
-    if (text == null || text.isBlank()) {
-      telemetry.record(0.0, 1, 0);
-      return Map.of();
-    }
-    var textEncoder = new TextEncoder(text);
-    if (textEncoder.getTextLen() == 0) {
-      telemetry.record(0.0, 1, 0);
-      return Map.of();
-    }
-
-    var input = assembler.assemble(textEncoder);
-    var hiddenStates = useFullEncoder
-      ? runtime.runEncoderFull(input.inputIds(), input.attentionMask())
-      : runtime.runEncoder(input.inputIds(), input.attentionMask());
-
-    var result = decodeAllUnits(
-      hiddenStates[0],
-      input,
-      activeDefs,
-      text,
-      threshold
-    );
-    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-    telemetry.record(durationMs, 1, totalInstances(result));
-    return result;
-  }
-
-  private Map<String, List<R>> decodeAllUnits(
-    float[][] hiddenState,
-    MultiSchemaInput input,
-    List<D> activeDefs,
-    String text,
-    float threshold
-  ) {
-    int hiddenSize = config.getHiddenSize();
-    int maxWidth = config.getMaxWidth();
-    int textLen = input.textLen();
-
-    // 1. Pull text embeddings out (shared across all units)
-    var textEmbs = new float[textLen][hiddenSize];
-    MultiSchemaEmbeddings.extractText(
-      hiddenState,
-      input.wordFirstSubwordPos(),
-      textEmbs
-    );
-
-    // 2. One span_rep call per text
-    int numSpans = textLen * maxWidth;
-    var spanIdxFlat = buildSpanIdxFlat(textLen, maxWidth, numSpans);
-    var textEmbs3d = new float[1][textLen][hiddenSize];
-    System.arraycopy(textEmbs, 0, textEmbs3d[0], 0, textLen);
-    var spanRep4d = runtime.runSpanRepFlat(textEmbs3d, spanIdxFlat, numSpans);
-    var spanRep = spanRep4d[0];
-
-    // 3. Per unit: scoring head + decode
-    var layouts = input.unitLayouts();
-    var result = new LinkedHashMap<String, List<R>>();
-    for (int u = 0; u < layouts.size(); u++) {
-      var layout = layouts.get(u);
-      var def = activeDefs.get(u);
-      var unitEmbs = MultiSchemaEmbeddings.extractUnit(hiddenState, layout);
-      var instances = decodeUnit(
-        def,
-        layout,
-        unitEmbs,
-        spanRep,
-        input,
-        text,
-        textLen,
-        threshold
-      );
-      result.put(layout.unit().parentLabel(), instances);
-    }
-    return result;
+      overrideAssemblers.get(overrideDefinitions)
+    ).get(0);
   }
 
   // ---- shared batch path ---------------------------------------------------
 
   /**
-   * Batched multi-text extraction: encoder + span_rep batched, per-unit embeddings cached
-   * once from a representative slot, then per-text fanout over the units on virtual threads.
+   * Batched multi-text extraction through the merged graph.
    */
   protected final List<Map<String, List<R>>> doExtractBatch(
     List<String> texts,
     float threshold
+  ) {
+    return extractMerged(texts, threshold, definitions, inputAssembler);
+  }
+
+  /**
+   * The one extraction path: preprocess the batch once, then score one bucketed
+   * {@code ner_full} pass per schema unit, fanned out on virtual threads, and fold the
+   * per-unit results back into per-text maps in unit order.
+   */
+  private List<Map<String, List<R>>> extractMerged(
+    List<String> texts,
+    float threshold,
+    List<D> activeDefs,
+    MultiSchemaInputAssembler assembler
   ) {
     if (texts == null) {
       return List.of();
@@ -249,8 +205,7 @@ public abstract sealed class Extractor<D, R>
     long startNanos = System.nanoTime();
     int batchSize = texts.size();
 
-    // 1. Preprocess and pack the contiguous batch
-    var preproc = BatchPreprocessor.preprocess(texts, inputAssembler);
+    var preproc = BatchPreprocessor.preprocess(texts, assembler);
     int nonEmptyCount = preproc.nonEmptyCount();
 
     var results = new ArrayList<Map<String, List<R>>>(batchSize);
@@ -267,141 +222,171 @@ public abstract sealed class Extractor<D, R>
     var inputs = preproc.inputs();
     var batchIndices = preproc.batchIndices();
 
-    // 2. Single batched encoder call
-    var batchedHiddenStates = runtime.runEncoderBatch(
-      preproc.batchInputIds(),
-      preproc.batchAttentionMask(),
-      preproc.maxSeqLen()
-    );
-
-    // 3. Cache per-unit ([P] + child markers) embeddings from a representative slot
-    var layouts = inputs[batchIndices[0]].unitLayouts();
-    var unitEmbsCache =
-      new MultiSchemaEmbeddings.UnitEmbeddings[layouts.size()];
-    for (int u = 0; u < layouts.size(); u++) {
-      unitEmbsCache[u] = MultiSchemaEmbeddings.extractUnit(
-        batchedHiddenStates[0],
-        layouts.get(u)
-      );
-    }
-
-    // 4. Extract per-text text embeddings and find the batch max
-    int hiddenSize = config.getHiddenSize();
-    int maxWidth = config.getMaxWidth();
-    int maxTextLen = 0;
     var textLens = new int[nonEmptyCount];
-    var perTextEmbs = new float[nonEmptyCount][][];
     for (int s = 0; s < nonEmptyCount; s++) {
-      var input = inputs[batchIndices[s]];
-      int textLen = input.textLen();
-      textLens[s] = textLen;
-      if (textLen > maxTextLen) maxTextLen = textLen;
-      perTextEmbs[s] = new float[textLen][hiddenSize];
-      MultiSchemaEmbeddings.extractText(
-        batchedHiddenStates[s],
-        input.wordFirstSubwordPos(),
-        perTextEmbs[s]
-      );
+      textLens[s] = inputs[batchIndices[s]].textLen();
     }
 
-    // 5. Pad embeddings and build flat span indices, then run batched span_rep
-    int maxNumSpans = maxTextLen * maxWidth;
-    var batchTextEmbs = new float[nonEmptyCount][maxTextLen][hiddenSize];
-    var batchSpanIdxFlat = new long[nonEmptyCount * maxNumSpans * 2];
-    for (int s = 0; s < nonEmptyCount; s++) {
-      int textLen = textLens[s];
-      System.arraycopy(perTextEmbs[s], 0, batchTextEmbs[s], 0, textLen);
-      int batchOffset = s * maxNumSpans * 2;
-      for (int i = 0; i < textLen; i++) {
-        for (int w = 0; w < maxWidth; w++) {
-          int endPos = i + w;
-          if (endPos < textLen) {
-            int flatIdx = batchOffset + (i * maxWidth + w) * 2;
-            batchSpanIdxFlat[flatIdx] = i;
-            batchSpanIdxFlat[flatIdx + 1] = endPos;
-          }
-        }
-      }
-    }
+    // Unit layouts are identical across the batch (shared schema prefix).
+    var layouts = inputs[batchIndices[0]].unitLayouts();
+    int numUnits = layouts.size();
 
-    var batchSpanRep4d = runtime.runSpanRepBatch(
-      batchTextEmbs,
-      batchSpanIdxFlat,
-      nonEmptyCount,
-      maxNumSpans
-    );
-
-    // 6. Per-text fanout: scoring_head + decode for each unit on virtual threads.
-    var fanned = new ArrayList<Map<String, List<R>>>(batchSize);
-    for (int i = 0; i < batchSize; i++) {
-      fanned.add(Map.of());
-    }
-
+    // One merged-graph pass per unit, fanned out on virtual threads. OrtSession.run() is
+    // thread-safe; on CUDA, independent runs dispatch onto separate streams and overlap.
     @SuppressWarnings("unchecked")
-    var futures = (Future<Map<String, List<R>>>[]) new Future[nonEmptyCount];
+    var unitFutures = (Future<List<List<R>>>[]) new Future[numUnits];
 
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-      for (int s = 0; s < nonEmptyCount; s++) {
-        final int si = s;
-        futures[si] = executor.submit(() -> {
-          int origIdx = batchIndices[si];
-          var input = inputs[origIdx];
-          int textLen = textLens[si];
-          var text = texts.get(origIdx);
-
-          var spanRep = Arrays.copyOfRange(batchSpanRep4d[si], 0, textLen);
-
-          var perTextResult = new LinkedHashMap<String, List<R>>();
-          for (int u = 0; u < layouts.size(); u++) {
-            var layout = layouts.get(u);
-            var def = definitions.get(u);
-            var unitEmbs = unitEmbsCache[u];
-            var instances = decodeUnit(
-              def,
-              layout,
-              unitEmbs,
-              spanRep,
-              input,
-              text,
-              textLen,
-              threshold
-            );
-            perTextResult.put(layout.unit().parentLabel(), instances);
-          }
-          return perTextResult;
-        });
+      for (int u = 0; u < numUnits; u++) {
+        final var layout = layouts.get(u);
+        final var def = activeDefs.get(u);
+        unitFutures[u] = executor.submit(() ->
+          scoreUnit(
+            def,
+            layout,
+            preproc,
+            textLens,
+            texts,
+            threshold,
+            nonEmptyCount
+          )
+        );
       }
 
-      for (int s = 0; s < nonEmptyCount; s++) {
+      var perUnitResults = new ArrayList<List<List<R>>>(numUnits);
+      for (int u = 0; u < numUnits; u++) {
         try {
-          fanned.set(batchIndices[s], futures[s].get());
+          perUnitResults.add(unitFutures[u].get());
         } catch (ExecutionException e) {
           throw new RuntimeException(
             getClass().getSimpleName() +
-              " scoring head failed for batch slot " +
-              s,
+              " merged scoring failed for unit " +
+              layouts.get(u).unit().parentLabel(),
             e.getCause()
           );
         } catch (InterruptedException e) {
           Thread.currentThread().interrupt();
           throw new RuntimeException(
-            getClass().getSimpleName() + " batch fanout interrupted",
+            getClass().getSimpleName() + " unit fanout interrupted",
             e
           );
         }
       }
+
+      // Fold per-unit slot results into per-text maps, preserving unit order.
+      for (int s = 0; s < nonEmptyCount; s++) {
+        var perTextResult = new LinkedHashMap<String, List<R>>();
+        for (int u = 0; u < numUnits; u++) {
+          perTextResult.put(
+            layouts.get(u).unit().parentLabel(),
+            perUnitResults.get(u).get(s)
+          );
+        }
+        results.set(batchIndices[s], perTextResult);
+      }
     }
 
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-    long total = fanned.stream().mapToLong(Extractor::totalInstances).sum();
+    long total = results.stream().mapToLong(Extractor::totalInstances).sum();
     telemetry.record(durationMs, batchSize, total);
-    return fanned;
+    return results;
+  }
+
+  /**
+   * Scores one schema unit over the whole batch: one bucketed {@code ner_full} pass with
+   * this unit's {@code [P]} / child-marker positions, decoded slot by slot.
+   *
+   * @return per-slot instance lists, indexed like {@code textLens}
+   */
+  private List<List<R>> scoreUnit(
+    D def,
+    UnitLayout layout,
+    BatchPreprocessor.MultiResult preproc,
+    int[] textLens,
+    List<String> texts,
+    float threshold,
+    int nonEmptyCount
+  ) {
+    var slotResults = new ArrayList<List<R>>(nonEmptyCount);
+    for (int s = 0; s < nonEmptyCount; s++) {
+      slotResults.add(List.of());
+    }
+    if (layout.childMarkerPositions().length == 0) {
+      return slotResults;
+    }
+
+    var inputs = preproc.inputs();
+    var batchIndices = preproc.batchIndices();
+
+    var fieldPositions = new long[layout.childMarkerPositions().length];
+    for (int i = 0; i < fieldPositions.length; i++) {
+      fieldPositions[i] = layout.childMarkerPositions()[i];
+    }
+
+    var pipeline = BatchSpanPipeline.runFullGraph(
+      preproc.batchInputIds(),
+      preproc.batchAttentionMask(),
+      textLens,
+      slot -> inputs[batchIndices[slot]].wordFirstSubwordPos(),
+      config.getMaxWidth(),
+      runtimeConfig.getBatchLengthRatio(),
+      runtimeConfig.getMaxSubBatchSize(),
+      (ids, mask, maxSeqLen, wpFlat, bSize, maxTextLen, spanIdxFlat) ->
+        runtime.runNerFullBatch(
+          ids,
+          mask,
+          maxSeqLen,
+          wpFlat,
+          bSize,
+          maxTextLen,
+          layout.parentTokenPos(),
+          fieldPositions,
+          spanIdxFlat,
+          config.getMaxWidth(),
+          config.getMaxCount()
+        )
+    );
+
+    try {
+      for (var bucket : pipeline.buckets()) {
+        try (var scoring = bucket.scoring()) {
+          for (int j = 0; j < bucket.slots().length; j++) {
+            int si = bucket.slots()[j];
+            int origIdx = batchIndices[si];
+            var input = inputs[origIdx];
+            var spanScores = scoring.materializeSlot(j, textLens[si]);
+            slotResults.set(
+              si,
+              decodeUnit(
+                def,
+                layout,
+                scoring.countLogits(),
+                spanScores,
+                input,
+                texts.get(origIdx),
+                textLens[si],
+                threshold
+              )
+            );
+          }
+        }
+      }
+    } finally {
+      // Idempotent: releases anything not yet closed (e.g. on a decode failure).
+      for (var bucket : pipeline.buckets()) {
+        bucket.scoring().close();
+      }
+    }
+    return slotResults;
   }
 
   // ---- lifecycle / helpers -------------------------------------------------
 
   @Override
   public final void close() {
+    if (microBatcher != null) {
+      microBatcher.close();
+    }
     runtime.close();
     tokenizer.close();
     log.info("{} closed", getClass().getSimpleName());
@@ -409,24 +394,5 @@ public abstract sealed class Extractor<D, R>
 
   private static long totalInstances(Map<String, ? extends List<?>> result) {
     return result.values().stream().mapToLong(List::size).sum();
-  }
-
-  private static long[] buildSpanIdxFlat(
-    int textLen,
-    int maxWidth,
-    int numSpans
-  ) {
-    var flat = new long[numSpans * 2];
-    for (int i = 0; i < textLen; i++) {
-      for (int w = 0; w < maxWidth; w++) {
-        int endPos = i + w;
-        if (endPos < textLen) {
-          int flatIdx = (i * maxWidth + w) * 2;
-          flat[flatIdx] = i;
-          flat[flatIdx + 1] = endPos;
-        }
-      }
-    }
-    return flat;
   }
 }

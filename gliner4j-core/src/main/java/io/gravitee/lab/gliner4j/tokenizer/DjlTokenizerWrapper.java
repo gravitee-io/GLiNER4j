@@ -33,6 +33,8 @@ import lombok.extern.slf4j.Slf4j;
 public class DjlTokenizerWrapper implements AutoCloseable {
 
   private final HuggingFaceTokenizer tokenizer;
+  private static final int MAX_CACHED_WORDS = 50_000;
+
   private final ConcurrentHashMap<String, TokenizationResult> tokenCache =
     new ConcurrentHashMap<>();
 
@@ -91,7 +93,18 @@ public class DjlTokenizerWrapper implements AutoCloseable {
    * @return tokenization result with both token strings and vocabulary IDs
    */
   public TokenizationResult tokenizeWithIds(String word) {
+    evictIfOverCapacity();
     return tokenCache.computeIfAbsent(word, this::tokenizeUncached);
+  }
+
+  // Open-vocabulary inputs (ids, usernames, typos) would otherwise grow the cache without
+  // bound in long-running processes. Clearing resets it wholesale; hot words (schema tokens,
+  // common vocabulary) re-populate within a few calls, so the occasional full rebuild is far
+  // cheaper than an LRU bookkeeping cost on every lookup.
+  private void evictIfOverCapacity() {
+    if (tokenCache.size() >= MAX_CACHED_WORDS) {
+      tokenCache.clear();
+    }
   }
 
   private TokenizationResult tokenizeUncached(String word) {
@@ -114,6 +127,7 @@ public class DjlTokenizerWrapper implements AutoCloseable {
     if (words.isEmpty()) {
       return;
     }
+    evictIfOverCapacity();
 
     // Collect unique uncached words while preserving first-seen order.
     var uniqueUncached = new LinkedHashSet<String>();

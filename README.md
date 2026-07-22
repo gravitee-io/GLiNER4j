@@ -249,8 +249,8 @@ java -jar gliner4j-benchmark/target/gliner4j-benchmark.jar -p executionProvider=
 ## Adding a model family
 
 A family is `export script + a strategy + register` — the public façades don't change. The export
-scripts (`scripts/export_onnx.py` for GLiNER2, `scripts/export_gliclass_onnx.py`,
-`scripts/export_gliner_uni_onnx.py` for the GLiNER NER families) emit the ONNX graphs plus a
+script (`scripts/export_onnx.py`, with a subcommand per family: `gliner2`, `gliclass`,
+`gliner-uni` for the original GLiNER NER families) emits the ONNX graphs plus a
 `gliner4j_config.json` carrying the `architecture` discriminator and any family-specific keys under
 `architecture_config`.
 

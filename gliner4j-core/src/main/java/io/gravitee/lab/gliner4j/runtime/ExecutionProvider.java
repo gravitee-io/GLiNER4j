@@ -37,9 +37,6 @@ import lombok.extern.slf4j.Slf4j;
  *       with matching CUDA/cuDNN runtime libraries installed. Build the project with {@code -Pcuda}.</li>
  *   <li>{@link #OPENVINO} — requires an ONNX Runtime build compiled with the OpenVINO execution provider
  *       (no official Maven artifact ships it; supply your own native library / jar).</li>
- *   <li>{@link #COREML} — Apple's accelerator, bundled in the standard macOS {@code onnxruntime} jar.
- *       This is the ONNX Runtime equivalent of "use the Apple Neural Engine / GPU"; Apple MLX is a separate
- *       array framework and is <em>not</em> an ONNX Runtime execution provider.</li>
  * </ul>
  *
  * <p>If the requested provider cannot be registered (e.g. CUDA requested without the GPU runtime),
@@ -47,13 +44,13 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p>The default is {@link #AUTO}, which inspects the providers compiled into the loaded native
  * runtime ({@link OrtEnvironment#getAvailableProviders()}) and picks the best accelerator in the
- * order CUDA &gt; OpenVINO &gt; CoreML, falling back to CPU when none is present.
+ * order CUDA &gt; OpenVINO, falling back to CPU when none is present.
  */
 @Slf4j
 public enum ExecutionProvider {
   /**
    * Auto-detect the best provider compiled into the loaded native runtime. Resolves to the first
-   * available of CUDA, OpenVINO, CoreML, then CPU. This is the default; see {@link #resolve}.
+   * available of CUDA, OpenVINO, then CPU. This is the default; see {@link #resolve}.
    */
   AUTO,
   /** Default CPU provider. Always available. */
@@ -61,9 +58,7 @@ public enum ExecutionProvider {
   /** NVIDIA CUDA provider. Requires the {@code onnxruntime_gpu} native library. */
   CUDA,
   /** Intel OpenVINO provider. Requires an OpenVINO-enabled ONNX Runtime build. */
-  OPENVINO,
-  /** Apple CoreML provider. Bundled in the standard macOS {@code onnxruntime} jar. */
-  COREML;
+  OPENVINO;
 
   /**
    * Preference order used by {@link #AUTO} resolution — best accelerator first. CPU is the implicit
@@ -71,8 +66,7 @@ public enum ExecutionProvider {
    */
   private static final List<ExecutionProvider> AUTO_PREFERENCE = List.of(
     CUDA,
-    OPENVINO,
-    COREML
+    OPENVINO
   );
 
   /**
@@ -85,7 +79,7 @@ public enum ExecutionProvider {
    * Resolves a provider from a case-insensitive string (CLI arg, JMH param, env var).
    * Blank, {@code null}, or unrecognised values resolve to {@link #AUTO} (auto-detect the backend).
    *
-   * @param value the provider name (e.g. "auto", "cuda", "openvino", "coreml", "cpu")
+   * @param value the provider name (e.g. "auto", "cuda", "openvino", "cpu")
    * @return the matching provider, or {@link #AUTO} when unrecognised
    */
   public static ExecutionProvider fromString(String value) {
@@ -96,8 +90,6 @@ public enum ExecutionProvider {
       case "cpu" -> CPU;
       case "cuda", "gpu", "nvidia" -> CUDA;
       case "openvino", "vino", "intel" -> OPENVINO;
-      // MLX is not an ORT execution provider — CoreML is the Apple-accelerated backend.
-      case "coreml", "mlx", "apple", "ane" -> COREML;
       default -> AUTO;
     };
   }
@@ -118,7 +110,6 @@ public enum ExecutionProvider {
         // TensorRT ships in the same GPU build as CUDA; treat it as CUDA availability.
         case CUDA, TENSOR_RT -> providers.add(CUDA);
         case OPEN_VINO -> providers.add(OPENVINO);
-        case CORE_ML -> providers.add(COREML);
         default -> {
           /* provider not exposed by this enum */
         }
@@ -130,7 +121,7 @@ public enum ExecutionProvider {
   /**
    * Resolves a requested provider to a concrete one. Non-{@link #AUTO} values (and {@code null},
    * treated as {@code AUTO}) are returned unchanged; {@code AUTO} is resolved to the best available
-   * accelerator (CUDA &gt; OpenVINO &gt; CoreML), or {@link #CPU} when none is compiled in.
+   * accelerator (CUDA &gt; OpenVINO), or {@link #CPU} when none is compiled in.
    *
    * <p>The {@code AUTO} decision is detected once and memoized for the JVM lifetime, so it is logged
    * only the first time.
@@ -154,7 +145,7 @@ public enum ExecutionProvider {
         log.info(
           "AUTO execution provider resolved to CPU — no accelerator EP compiled into the loaded ONNX Runtime (available: {}). " +
             "To enable an accelerator, rebuild with the matching Maven profile: CUDA -> -Pcuda (also source scripts/cuda_env.sh on Linux), " +
-            "OpenVINO -> -Popenvino (run task build:openvino first); CoreML ships in the default jar on macOS.",
+            "OpenVINO -> -Popenvino (run task build:openvino first).",
           available
         );
       } else {
@@ -170,8 +161,8 @@ public enum ExecutionProvider {
 
   /**
    * Whether ONNX Runtime can serialize this provider's optimized graph to disk
-   * (via {@code setOptimizedModelFilePath}). Providers that compile/fuse nodes — CUDA, OpenVINO,
-   * CoreML — produce graphs ORT refuses to serialize ("contains compiled nodes"), so the optimized-
+   * (via {@code setOptimizedModelFilePath}). Providers that compile/fuse nodes — CUDA, OpenVINO —
+   * produce graphs ORT refuses to serialize ("contains compiled nodes"), so the optimized-
    * model cache is only meaningful for {@link #CPU}.
    *
    * @return {@code true} if the optimized-model cache can be written for this provider
@@ -190,16 +181,15 @@ public enum ExecutionProvider {
    * and registers nothing. Throws if the native library lacks the provider — callers are expected
    * to catch and fall back to CPU.
    *
-   * @param opts               the session options to mutate
-   * @param gpuDeviceId        device ordinal for CUDA (ignored by other providers)
-   * @param openVinoDeviceType OpenVINO device hint (e.g. "", "CPU", "GPU", "NPU"); ignored by other providers
+   * @param opts   the session options to mutate
+   * @param config the runtime config supplying provider-specific settings (GPU device id,
+   *               OpenVINO device type)
    * @throws OrtException if the provider is not available in the loaded native runtime
    */
-  void configure(
-    OrtSession.SessionOptions opts,
-    int gpuDeviceId,
-    String openVinoDeviceType
-  ) throws OrtException {
+  void configure(OrtSession.SessionOptions opts, RuntimeConfig config)
+    throws OrtException {
+    int gpuDeviceId = config.getGpuDeviceId();
+    String openVinoDeviceType = config.getOpenVinoDeviceType();
     switch (this) {
       case CPU -> log.debug(
         "Using default CPU execution provider — nothing to register"
@@ -220,11 +210,6 @@ public enum ExecutionProvider {
         log.info("Registering OpenVINO execution provider (device={})", device);
         registerOpenVino(opts, device);
         log.info("OpenVINO execution provider registered");
-      }
-      case COREML -> {
-        log.info("Registering CoreML execution provider");
-        opts.addCoreML();
-        log.info("CoreML execution provider registered");
       }
     }
   }

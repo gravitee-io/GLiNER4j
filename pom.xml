@@ -46,7 +46,7 @@
         <maven-jar-plugin.version>3.4.2</maven-jar-plugin.version>
         <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <onnxruntime.version>1.21.0</onnxruntime.version>
+        <onnxruntime.version>1.27.0</onnxruntime.version>
         <!-- ONNX Runtime native artifact: "onnxruntime" (CPU + CoreML) by default,
              switched to "onnxruntime_gpu" (CUDA/TensorRT) by the "cuda" profile. -->
         <onnxruntime.artifactId>onnxruntime</onnxruntime.artifactId>

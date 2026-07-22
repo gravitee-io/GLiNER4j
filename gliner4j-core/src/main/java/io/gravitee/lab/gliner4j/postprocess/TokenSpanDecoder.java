@@ -79,36 +79,33 @@ public class TokenSpanDecoder extends AbstractDecoder {
         if (startSig[st][c] < threshold) {
           continue;
         }
+        // Every inside score from st..ed (inclusive) must pass; span score is the minimum
+        // of start/insides/end. Carrying the inside minimum across ed and breaking on the
+        // first failing inside position (no larger span can recover it) removes the inner
+        // rescan loop: O(N²·C) instead of O(N³·C).
+        float minInside = startSig[st][c];
         for (int ed = st; ed < words; ed++) {
+          float ins = insideSig[ed][c];
+          if (ins < threshold) {
+            break;
+          }
+          if (ins < minInside) {
+            minInside = ins;
+          }
           if (endSig[ed][c] < threshold) {
             continue;
           }
-          // Every inside score from st..ed (inclusive) must pass; span score is the minimum.
-          float minScore = Math.min(startSig[st][c], endSig[ed][c]);
-          boolean valid = true;
-          for (int pos = st; pos <= ed; pos++) {
-            float ins = insideSig[pos][c];
-            if (ins < threshold) {
-              valid = false;
-              break;
-            }
-            if (ins < minScore) {
-              minScore = ins;
-            }
-          }
-          if (valid) {
-            int charStart = wordStartChars[st];
-            int charEnd = wordEndChars[ed];
-            candidates.add(
-              new EntitySpan(
-                fieldNames.get(c),
-                originalText.substring(charStart, charEnd),
-                minScore,
-                charStart,
-                charEnd
-              )
-            );
-          }
+          int charStart = wordStartChars[st];
+          int charEnd = wordEndChars[ed];
+          candidates.add(
+            new EntitySpan(
+              fieldNames.get(c),
+              originalText.substring(charStart, charEnd),
+              Math.min(minInside, endSig[ed][c]),
+              charStart,
+              charEnd
+            )
+          );
         }
       }
     }

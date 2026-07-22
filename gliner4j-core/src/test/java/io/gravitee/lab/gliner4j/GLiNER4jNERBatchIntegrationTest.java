@@ -36,7 +36,7 @@ class GLiNER4jNERBatchIntegrationTest {
   private static final Path MODEL_DIR = Path.of("models/gliner2-base-onnx");
 
   static boolean modelDirExists() {
-    return Files.exists(MODEL_DIR.resolve("onnx/encoder.onnx"));
+    return Files.exists(MODEL_DIR.resolve("onnx/ner_full.onnx"));
   }
 
   @Test
@@ -218,6 +218,60 @@ class GLiNER4jNERBatchIntegrationTest {
       );
 
       assertThat(results).hasSize(2);
+    }
+  }
+
+  @Test
+  void mixedLengthBatchWithBlanksMatchesSingleExtract() {
+    var entities = List.of(
+      new EntityDefinition("person"),
+      new EntityDefinition("organization")
+    );
+
+    try (var gliner = GLiNER4jNER.load(MODEL_DIR, entities)) {
+      // Skewed lengths so length-bucketing splits the batch into several
+      // sub-batches, with null/blank slots interleaved.
+      var longText =
+        "Marie Curie worked at the University of Paris for many years, " +
+        "collaborating with Pierre Curie and later advising Irène " +
+        "Joliot-Curie, who also joined the Radium Institute in Paris. " +
+        "During that period Albert Einstein visited from the Kaiser " +
+        "Wilhelm Institute in Berlin, and Ernest Rutherford wrote from " +
+        "the Cavendish Laboratory in Cambridge about their shared work " +
+        "on radioactivity, which the Nobel Committee in Stockholm " +
+        "recognized on several occasions.";
+      var texts = new java.util.ArrayList<String>();
+      texts.add("John works at Google.");
+      texts.add(null);
+      texts.add(longText);
+      texts.add("   ");
+      texts.add("Elon Musk founded SpaceX.");
+      texts.add("Tim Cook leads Apple in Cupertino.");
+
+      var batchResults = gliner.extractBatch(texts);
+
+      assertThat(batchResults).hasSize(texts.size());
+      assertThat(batchResults.get(1)).isEmpty();
+      assertThat(batchResults.get(3)).isEmpty();
+
+      for (int i : new int[] { 0, 2, 4, 5 }) {
+        var single = gliner.extract(texts.get(i));
+        assertThat(batchResults.get(i).keySet()).isEqualTo(single.keySet());
+        for (var type : single.keySet()) {
+          var batchTexts = batchResults
+            .get(i)
+            .get(type)
+            .stream()
+            .map(EntitySpan::text)
+            .toList();
+          var singleTexts = single
+            .get(type)
+            .stream()
+            .map(EntitySpan::text)
+            .toList();
+          assertThat(batchTexts).containsExactlyElementsOf(singleTexts);
+        }
+      }
     }
   }
 }

@@ -64,10 +64,10 @@ class ExecutionProviderTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = { "coreml", "mlx", "apple", "ane" })
-  void fromString_coremlAliases(String value) {
+  @ValueSource(strings = { "coreml", "mlx", "apple", "ane", "nonsense" })
+  void fromString_unsupportedResolvesToAuto(String value) {
     assertThat(ExecutionProvider.fromString(value)).isEqualTo(
-      ExecutionProvider.COREML
+      ExecutionProvider.AUTO
     );
   }
 
@@ -91,8 +91,7 @@ class ExecutionProviderTest {
     var available = ExecutionProvider.available();
     var expected = java.util.stream.Stream.of(
       ExecutionProvider.CUDA,
-      ExecutionProvider.OPENVINO,
-      ExecutionProvider.COREML
+      ExecutionProvider.OPENVINO
     )
       .filter(available::contains)
       .findFirst()
