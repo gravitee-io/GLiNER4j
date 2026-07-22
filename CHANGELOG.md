@@ -1,3 +1,10 @@
+# [1.0.0-alpha.9](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0-alpha.8...1.0.0-alpha.9) (2026-07-22)
+
+
+### Performance Improvements
+
+* **GLiNER2:** ONNX pipeline & inference reliability ([#32](https://github.com/gravitee-io/GLiNER4j/issues/32)) ([73381ec](https://github.com/gravitee-io/GLiNER4j/commit/73381ec0adaf8052bfb6e18db8b503645d6f7268))
+
 # [1.0.0-alpha.8](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0-alpha.7...1.0.0-alpha.8) (2026-06-02)
 
 
