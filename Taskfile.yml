@@ -250,13 +250,13 @@ tasks:
       - test -f {{.BASE_HF_LOCAL_DIR}}/config.json
 
   model:export:base:
-    desc: Export the base PyTorch model to ONNX (base + optional variants) and render its MODEL_CARD.md
+    desc: Export the base PyTorch model to ONNX (base + optional variants) and render its README.md
     deps:
       - model:download:base
       - check:uv
     cmds:
       - uv run scripts/export_onnx.py gliner2 --model-path {{.BASE_HF_LOCAL_DIR}} --output-dir {{.BASE_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
-      - uv run scripts/render_model_card.py base {{.BASE_ONNX_OUTPUT_DIR}}/MODEL_CARD.md
+      - uv run scripts/render_model_card.py base {{.BASE_ONNX_OUTPUT_DIR}}/README.md
     sources:
       - scripts/export_onnx.py
       - "{{.BASE_HF_LOCAL_DIR}}/**/*"
@@ -305,7 +305,7 @@ tasks:
         vars: { EP: coreml, VARIANT: '{{.VARIANT | default "onnx"}}' }
 
   hf-upload:base:
-    desc: Upload the base ONNX model directory to HuggingFace Hub
+    desc: Mirror the base ONNX model directory to HuggingFace Hub (deletes remote files not present locally)
     requires:
       vars:
         - HF_REPO
@@ -315,7 +315,7 @@ tasks:
       - sh: test -d {{.BASE_ONNX_OUTPUT_DIR}}/onnx
         msg: "Base ONNX model directory not found. Run: task model:export:base"
     cmds:
-      - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.BASE_ONNX_OUTPUT_DIR}} . --commit-message "Upload base ONNX model files (all variants) + model card"
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.BASE_ONNX_OUTPUT_DIR}} . --delete "*" --commit-message "Upload base ONNX model files (all variants) + model card"
 
   # ── PII model chain (fastino/gliner2-privacy-filter-PII-multi) ──────────────
 
@@ -360,13 +360,13 @@ tasks:
       - test -f {{.PII_HF_LOCAL_DIR}}/config.json
 
   model:export:pii:
-    desc: Export the PII PyTorch model to ONNX (base + optional variants) and render its MODEL_CARD.md
+    desc: Export the PII PyTorch model to ONNX (base + optional variants) and render its README.md
     deps:
       - model:download:pii
       - check:uv
     cmds:
       - uv run scripts/export_onnx.py gliner2 --model-path {{.PII_HF_LOCAL_DIR}} --output-dir {{.PII_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
-      - uv run scripts/render_model_card.py pii {{.PII_ONNX_OUTPUT_DIR}}/MODEL_CARD.md
+      - uv run scripts/render_model_card.py pii {{.PII_ONNX_OUTPUT_DIR}}/README.md
     sources:
       - scripts/export_onnx.py
       - "{{.PII_HF_LOCAL_DIR}}/**/*"
@@ -415,7 +415,7 @@ tasks:
         vars: { EP: coreml, VARIANT: '{{.VARIANT | default "onnx"}}' }
 
   hf-upload:pii:
-    desc: Upload the PII ONNX model directory to HuggingFace Hub
+    desc: Mirror the PII ONNX model directory to HuggingFace Hub (deletes remote files not present locally)
     requires:
       vars:
         - HF_REPO
@@ -425,12 +425,12 @@ tasks:
       - sh: test -d {{.PII_ONNX_OUTPUT_DIR}}/onnx
         msg: "PII ONNX model directory not found. Run: task model:export:pii"
     cmds:
-      - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.PII_ONNX_OUTPUT_DIR}} . --commit-message "Upload PII ONNX model files (all variants) + model card"
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.PII_ONNX_OUTPUT_DIR}} . --delete "*" --commit-message "Upload PII ONNX model files (all variants) + model card"
 
   # ── GLiGuard model chain (fastino/gliguard-LLMGuardrails-300M) ──────────────
 
   gliguard:
-    desc: Download and export the GLiGuard model (FP32 + FP16 + INT8) and render its MODEL_CARD.md
+    desc: Download and export the GLiGuard model (FP32 + FP16 + INT8) and render its README.md
     cmds:
       - task: model:download:gliguard
       - task: model:export:gliguard
@@ -448,13 +448,13 @@ tasks:
       - test -f {{.GLIGUARD_HF_LOCAL_DIR}}/config.json
 
   model:export:gliguard:
-    desc: Export the GLiGuard PyTorch model to ONNX (base + optional variants) and render its MODEL_CARD.md
+    desc: Export the GLiGuard PyTorch model to ONNX (base + optional variants) and render its README.md
     deps:
       - model:download:gliguard
       - check:uv
     cmds:
       - uv run scripts/export_onnx.py gliner2 --model-path {{.GLIGUARD_HF_LOCAL_DIR}} --output-dir {{.GLIGUARD_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
-      - uv run scripts/render_model_card.py gliguard {{.GLIGUARD_ONNX_OUTPUT_DIR}}/MODEL_CARD.md
+      - uv run scripts/render_model_card.py gliguard {{.GLIGUARD_ONNX_OUTPUT_DIR}}/README.md
     sources:
       - scripts/export_onnx.py
       - "{{.GLIGUARD_HF_LOCAL_DIR}}/**/*"
@@ -482,7 +482,7 @@ tasks:
       - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliguard {{.VARIANT}} {{.EP}}" 2>/dev/null
 
   hf-upload:gliguard:
-    desc: Upload the GLiGuard ONNX model directory to HuggingFace Hub
+    desc: Mirror the GLiGuard ONNX model directory to HuggingFace Hub (deletes remote files not present locally)
     requires:
       vars:
         - HF_REPO
@@ -492,7 +492,7 @@ tasks:
       - sh: test -d {{.GLIGUARD_ONNX_OUTPUT_DIR}}/onnx
         msg: "GLiGuard ONNX model directory not found. Run: task model:export:gliguard"
     cmds:
-      - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.GLIGUARD_ONNX_OUTPUT_DIR}} . --commit-message "Upload GLiGuard ONNX model files (all variants) + model card"
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.GLIGUARD_ONNX_OUTPUT_DIR}} . --delete "*" --commit-message "Upload GLiGuard ONNX model files (all variants) + model card"
 
   # ── GLiClass model chain (knowledgator/gliclass-modern-base-v3.0) ───────────
 

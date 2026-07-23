@@ -32,32 +32,28 @@ $tasks_table
 ├── tokenizer.json              # Shared HuggingFace tokenizer
 ├── tokenizer_config.json
 ├── onnx/                       # Base FP32 ($size_fp32)
-│   ├── encoder.onnx
-│   ├── span_rep.onnx
-│   ├── scoring_head.onnx
-│   └── classifier_head.onnx
+│   ├── ner_full.onnx
+│   └── classifier_full.onnx
 ├── onnx_fp16/                  # FP16 ($size_fp16)
-│   ├── encoder.onnx
-│   ├── span_rep.onnx
-│   ├── scoring_head.onnx
-│   └── classifier_head.onnx
+│   ├── ner_full.onnx
+│   └── classifier_full.onnx
 └── onnx_quantized/             # INT8 dynamic quantization ($size_int8)
-    ├── encoder.onnx
-    ├── span_rep.onnx
-    ├── scoring_head.onnx
-    └── classifier_head.onnx
+    ├── ner_full.onnx
+    └── classifier_full.onnx
 ```
+
+An `onnx_optimized_cpu/` folder with the same two files may also be present (ONNX Runtime graph-optimized for CPU).
 
 ## Model Architecture
 
-The model is split into 4 ONNX modules for modular inference:
+Each variant ships two merged, self-contained ONNX graphs — one per task:
 
-| Module | Description |
-|--------|-------------|
-| `encoder.onnx` | Transformer encoder (shared) |
-| `span_rep.onnx` | Span representation layer (NER) |
-| `scoring_head.onnx` | Count-aware scoring head (NER) |
-| `classifier_head.onnx` | Classifier head MLP (Classification) |
+| Graph | Description |
+|-------|-------------|
+| `ner_full.onnx` | Transformer encoder + span representation + count-aware scoring head (NER) |
+| `classifier_full.onnx` | Transformer encoder + classifier head MLP (Classification) |
+
+The graphs are fused at export time from the encoder and task heads; the intermediate split modules are not published.
 
 ## Variants
 
@@ -65,7 +61,7 @@ The model is split into 4 ONNX modules for modular inference:
 |---------|--------|-----------|------|----------|
 | Base | `onnx/` | FP32 | $size_fp32 | Maximum accuracy |
 | FP16 | `onnx_fp16/` | FP16 | $size_fp16 | Good accuracy/size trade-off |
-| Quantized | `onnx_quantized/` | INT8 (QUInt8, per-tensor) | $size_int8 | Smallest footprint, fastest on CPU |
+| Quantized | `onnx_quantized/` | INT8 (QUInt8, per-channel) | $size_int8 | Smallest footprint, fastest on CPU |
 
 To download a specific variant only:
 ```bash

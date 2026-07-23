@@ -18,14 +18,14 @@
 # requires-python = ">=3.12"
 # dependencies = []
 # ///
-"""Render a per-model MODEL_CARD.md from scripts/model_card_template.md.
+"""Render a per-model README.md from scripts/model_card_template.md.
 
 Usage:
     python scripts/render_model_card.py <variant> <output_path>
 
     variant: one of {base, pii, gliguard}
     output_path: where to write the rendered card, e.g.
-                 models/gliner2-base-onnx/MODEL_CARD.md
+                 models/gliner2-base-onnx/README.md
 """
 from __future__ import annotations
 
