@@ -1,5 +1,9 @@
 # gliner4j
 
+[![CircleCI](https://circleci.com/gh/gravitee-io/GLiNER4j/tree/main.svg?style=shield)](https://circleci.com/gh/gravitee-io/GLiNER4j/tree/main)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+[![Community Forum](https://img.shields.io/badge/community-forum-00bfa5.svg)](https://community.gravitee.io)
+
 Java/JVM runtime for the **GLiNER family** of zero-shot information-extraction models, via ONNX
 Runtime. One library hosts multiple model families behind a common API — the family is detected
 automatically from the model bundle, so the same Java façades drive every model.
