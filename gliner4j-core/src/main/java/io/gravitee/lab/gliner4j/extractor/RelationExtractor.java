@@ -16,19 +16,13 @@
 package io.gravitee.lab.gliner4j.extractor;
 
 import io.gravitee.lab.gliner4j.GLiNER4jConfig;
+import io.gravitee.lab.gliner4j.arch.LoadContext;
 import io.gravitee.lab.gliner4j.arch.ModelArchitectures;
-import io.gravitee.lab.gliner4j.arch.TaskType;
-import io.gravitee.lab.gliner4j.postprocess.RelationDecoder;
-import io.gravitee.lab.gliner4j.processor.MultiSchemaInput;
-import io.gravitee.lab.gliner4j.processor.MultiSchemaInputAssembler;
-import io.gravitee.lab.gliner4j.processor.SchemaUnit;
-import io.gravitee.lab.gliner4j.processor.UnitLayout;
 import io.gravitee.lab.gliner4j.runtime.BaseRuntime;
-import io.gravitee.lab.gliner4j.runtime.GLiNER4jNERRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.RelationDefinition;
 import io.gravitee.lab.gliner4j.schema.RelationInstance;
-import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
+import io.gravitee.lab.gliner4j.strategy.RelationStrategy;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
 import java.nio.file.Path;
 import java.util.List;
@@ -36,47 +30,20 @@ import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Standalone facade for GLiNER4j relation extraction.
- *
- * <p>Builds a multi-unit GLiNER prompt where each relation type is its own block joined by
- * {@code [SEP_STRUCT]}, runs the encoder once, then per relation type runs the scoring head
- * and decodes head/tail (or arbitrary fields) spans into {@link RelationInstance}s.
- *
- * <p>Usage:
- * <pre>{@code
- * var relations = List.of(
- *     new RelationDefinition("works_for", "Employment relationship"),
- *     new RelationDefinition("lives_in", "Residence relationship")
- * );
- * try (var extractor = GLiNER4jRelationExtractor.load(modelDir, relations)) {
- *     Map<String, List<RelationInstance>> result = extractor.extract("John works at Google.");
- * }
- * }</pre>
+ * Zero-shot relation extraction facade. The family is read from the bundle's
+ * {@code architecture} at load time and the matching {@link RelationStrategy} does the work:
+ * GLiNER2 scores each relation unit through the count-aware span head, GLiNER2.5 runs its typed
+ * pair generator + relation scorer inside {@code relation_full.onnx}.
  */
 @Slf4j
-public final class RelationExtractor
-  extends Extractor<RelationDefinition, RelationInstance> {
+public final class RelationExtractor implements AutoCloseable {
 
-  private final RelationDecoder relationDecoder;
+  private final GLiNER4jConfig config;
+  private final RelationStrategy strategy;
 
-  private RelationExtractor(
-    GLiNER4jConfig config,
-    RuntimeConfig runtimeConfig,
-    List<RelationDefinition> relations,
-    DjlTokenizerWrapper tokenizer,
-    GLiNER4jNERRuntime runtime,
-    MultiSchemaInputAssembler inputAssembler
-  ) {
-    super(
-      config,
-      runtimeConfig,
-      relations,
-      tokenizer,
-      runtime,
-      inputAssembler,
-      new GLiNER4jTelemetry("extract_relations")
-    );
-    this.relationDecoder = new RelationDecoder();
+  private RelationExtractor(GLiNER4jConfig config, RelationStrategy strategy) {
+    this.config = config;
+    this.strategy = strategy;
   }
 
   public static RelationExtractor load(
@@ -123,51 +90,47 @@ public final class RelationExtractor
         "GLiNER4jRelationExtractor requires at least one relation definition"
       );
     }
+    var config = GLiNER4jConfig.load(modelDir);
     log.info(
-      "Loading GLiNER4jRelationExtractor from {} (variant={}) with {} relations",
+      "Loading GLiNER4jRelationExtractor from {} (variant={}, architecture={}) with {} relations",
       modelDir,
       variant,
+      config.getArchitecture().configValue(),
       relations.size()
     );
-    var config = GLiNER4jConfig.load(modelDir);
-    ModelArchitectures.forId(config.getArchitecture()).requireSupported(
-      TaskType.RELATION
-    );
     var tokenizer = new DjlTokenizerWrapper(modelDir);
-    var runtime = new GLiNER4jNERRuntime(modelDir, variant, runtimeConfig);
-    var assembler = assemblerFor(tokenizer, relations);
+    var ctx = new LoadContext(
+      modelDir,
+      variant,
+      runtimeConfig,
+      config,
+      tokenizer
+    );
+    var strategy = ModelArchitectures.forConfig(config).newRelationStrategy(
+      ctx,
+      relations
+    );
 
     log.info("GLiNER4jRelationExtractor loaded successfully");
-    return new RelationExtractor(
-      config,
-      runtimeConfig,
-      relations,
-      tokenizer,
-      runtime,
-      assembler
-    );
+    return new RelationExtractor(config, strategy);
   }
 
   public Map<String, List<RelationInstance>> extract(String text) {
-    return doExtractOnce(text, config.getDefaultThreshold());
+    return strategy.extract(text, config.getDefaultThreshold());
   }
 
   public Map<String, List<RelationInstance>> extract(
     String text,
     float threshold
   ) {
-    return doExtractOnce(text, threshold);
+    return strategy.extract(text, threshold);
   }
 
   public Map<String, List<RelationInstance>> extract(
     String text,
     List<RelationDefinition> overrideRelations
   ) {
-    return doExtractOverride(
-      text,
-      overrideRelations,
-      config.getDefaultThreshold()
-    );
+    return extract(text, overrideRelations, config.getDefaultThreshold());
   }
 
   public Map<String, List<RelationInstance>> extract(
@@ -180,62 +143,25 @@ public final class RelationExtractor
         "Override relations list must not be empty"
       );
     }
-    return doExtractOverride(text, overrideRelations, threshold);
+    return strategy.extract(text, overrideRelations, threshold);
   }
 
   public List<Map<String, List<RelationInstance>>> extractBatch(
     List<String> texts
   ) {
-    return doExtractBatch(texts, config.getDefaultThreshold());
+    return strategy.extractBatch(texts, config.getDefaultThreshold());
   }
 
   public List<Map<String, List<RelationInstance>>> extractBatch(
     List<String> texts,
     float threshold
   ) {
-    return doExtractBatch(texts, threshold);
-  }
-
-  // ---- AbstractMultiUnitFacade hooks --------------------------------------
-
-  @Override
-  protected MultiSchemaInputAssembler buildAssembler(
-    List<RelationDefinition> relations
-  ) {
-    return assemblerFor(tokenizer, relations);
+    return strategy.extractBatch(texts, threshold);
   }
 
   @Override
-  protected List<RelationInstance> decodeUnit(
-    RelationDefinition relation,
-    UnitLayout layout,
-    float[][] countLogits,
-    float[][][][] spanScores,
-    MultiSchemaInput input,
-    String text,
-    int textLen,
-    float threshold
-  ) {
-    return relationDecoder.decode(
-      layout.unit().parentLabel(),
-      layout.unit().childNames(),
-      countLogits,
-      spanScores,
-      input.wordStartChars(),
-      input.wordEndChars(),
-      text,
-      textLen,
-      threshold
-    );
-  }
-
-  // ---- helpers -------------------------------------------------------------
-
-  private static MultiSchemaInputAssembler assemblerFor(
-    DjlTokenizerWrapper tokenizer,
-    List<RelationDefinition> relations
-  ) {
-    var units = relations.stream().map(SchemaUnit::forRelation).toList();
-    return new MultiSchemaInputAssembler(tokenizer, units);
+  public void close() {
+    strategy.close();
+    log.info("RelationExtractor closed");
   }
 }

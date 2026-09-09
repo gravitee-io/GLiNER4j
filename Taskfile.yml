@@ -33,6 +33,25 @@ vars:
   GLIGUARD_HF_LOCAL_DIR: "models/gliguard-hf"
   GLIGUARD_ONNX_OUTPUT_DIR: "models/gliguard-onnx"
 
+  # GLiNER2.5 models (fastino boundary architecture — span-free NER + classification)
+  GLINER2DOT5_HF_MODEL: "fastino/gliner2.5-base-v1" # deberta-v3-base, English
+  GLINER2DOT5_ONNX_OUTPUT_DIR: "models/gliner2dot5-base-onnx"
+  GLINER2DOT5_SMALL_HF_MODEL: "fastino/gliner2.5-small-v1" # deberta-v3-xsmall, English
+  GLINER2DOT5_SMALL_ONNX_OUTPUT_DIR: "models/gliner2dot5-small-onnx"
+  GLINER2DOT5_MULTI_HF_MODEL: "fastino/gliner2.5-multi-v1" # mdeberta-v3-base, multilingual
+  GLINER2DOT5_MULTI_ONNX_OUTPUT_DIR: "models/gliner2dot5-multi-onnx"
+
+  # GLiClass decoder-kv router (scx-admin/scx-router-v0.1 — Qwen3-0.6B on llama.cpp + ONNX scorer)
+  SCX_ROUTER_HF_MODEL: "scx-admin/scx-router-v0.1"
+  SCX_ROUTER_HF_LOCAL_DIR: "models/scx-router-hf"
+  SCX_ROUTER_OUTPUT_DIR: "models/scx-router-onnx"
+  LLAMA_CPP_DIR: '{{.LLAMA_CPP_DIR | default "../llama.cpp"}}' # checkout at llamaj.cpp's pinned llama.cpp tag (2.8.0 → v0.4.0 = b10818)
+
+  # GLiNER streaming-span PII (knowledgator/gliner-stream-pii-v1.0 — Qwen3-0.6B on llama.cpp + ggml span head)
+  STREAM_PII_HF_MODEL: "knowledgator/gliner-stream-pii-v1.0"
+  STREAM_PII_HF_LOCAL_DIR: "models/gliner-stream-pii-hf"
+  STREAM_PII_OUTPUT_DIR: "models/gliner-stream-pii-onnx"
+
   # GLiClass model (knowledgator/gliclass-modern-base-v3.0 — ModernBERT zero-shot classification)
   GLICLASS_HF_MODEL: "knowledgator/gliclass-modern-base-v3.0"
   GLICLASS_ONNX_OUTPUT_DIR: "models/gliclass-modern-base-onnx"
@@ -46,6 +65,7 @@ vars:
   GLICLASS_LARGE_ONNX_OUTPUT_DIR: "models/gliclass-large-onnx"
   GLICLASS_EDGE_HF_MODEL: "knowledgator/gliclass-edge-v3.0"
   GLICLASS_EDGE_ONNX_OUTPUT_DIR: "models/gliclass-edge-onnx"
+  GLICLASS_EDGE_LLAMACPP_OUTPUT_DIR: "models/gliclass-edge-llamacpp"
 
   # GLiNER NER families (original-GLiNER uni/bi-encoder span models — zero-shot NER)
   GLINER_PII_HF_MODEL: "knowledgator/gliner-pii-base-v1.0" # uni-encoder, deberta-v3-small
@@ -118,6 +138,18 @@ tasks:
     cmds:
       - mvn -pl gliner4j-benchmark -am package -DskipTests {{.MVN_FLAGS | default ""}}
       - java -jar gliner4j-benchmark/target/gliner4j-benchmark.jar -p executionProvider={{.EP}} {{.JMH_ARGS | default ""}}
+
+  benchmark:engines:
+    desc: 'ONNX Runtime vs llama.cpp on the same family (default: GLiClass edge classification), CPU and auto (Metal/CUDA). Override PROFILE, BENCH, JMH_ARGS'
+    deps:
+      - check:maven
+    vars:
+      PROFILE: '{{.PROFILE | default "gliclass-edge"}}'
+      BENCH: '{{.BENCH | default "ClassificationBenchmark"}}'
+    cmds:
+      - mvn -pl gliner4j-benchmark -am package -DskipTests {{.MVN_FLAGS | default ""}}
+      - java --enable-native-access=ALL-UNNAMED -jar gliner4j-benchmark/target/gliner4j-benchmark.jar {{.BENCH}} -p profile={{.PROFILE}} -p engine=onnx -p variant=onnx_quantized -p executionProvider=cpu -p batchSize=1,8 -p textLength=short,long {{.JMH_ARGS | default "-wi 2 -i 5 -f 1"}}
+      - java --enable-native-access=ALL-UNNAMED -jar gliner4j-benchmark/target/gliner4j-benchmark.jar {{.BENCH}} -p profile={{.PROFILE}} -p engine=llamacpp -p variant=q8_0 -p executionProvider=cpu,auto -p batchSize=1,8 -p textLength=short,long {{.JMH_ARGS | default "-wi 2 -i 5 -f 1"}}
 
   benchmark:cuda:
     desc: Run JMH benchmarks on the CUDA execution provider (sources scripts/cuda_env.sh on first run; requires an NVIDIA GPU)
@@ -282,6 +314,23 @@ tasks:
       EP: '{{.EP | default "cpu"}}'
     cmds:
       - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="base {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  demo:llamacpp:
+    desc: 'Run a demo profile on its llama.cpp / ggml bundle (PROFILE=base|pii|gliguard|gliner2dot5-small|gliclass-edge|gliner-pii|gliner-bi|gliner-multitask; VARIANT=f16|q8_0; EP=auto|cpu)'
+    deps:
+      - check:maven
+    vars:
+      PROFILE: '{{.PROFILE | default "base"}}'
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "auto"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="{{.PROFILE | replace "-" "_"}}_llamacpp {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  demo:base:llamacpp:
+    desc: 'Run the base (GLiNER2) demo on the llama.cpp / ggml engine (Metal/CUDA when available)'
+    cmds:
+      - task: demo:llamacpp
+        vars: { PROFILE: base }
 
   demo:base:cuda:
     desc: 'Run the base demo on the CUDA execution provider (sources scripts/cuda_env.sh on first run; requires an NVIDIA GPU)'
@@ -494,6 +543,364 @@ tasks:
     cmds:
       - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.GLIGUARD_ONNX_OUTPUT_DIR}} . --delete "*" --commit-message "Upload GLiGuard ONNX model files (all variants) + model card"
 
+  # ── GLiClass decoder-kv router (Qwen3 backbone on llama.cpp via llamaj.cpp) ─────
+  # Backbone → GGUF (f16 + q8_0) with llama.cpp's convert_hf_to_gguf.py; scorer → ONNX (+fp16/int8).
+  # Runs through the gliner4j-llamacpp module (Java 25).
+
+  scx-router:
+    desc: "Download + export the SCX GLiClass router (Qwen3-0.6B decoder-kv): GGUF backbone + ONNX scorer + reference scores"
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f {{.LLAMA_CPP_DIR}}/convert_hf_to_gguf.py
+        msg: "llama.cpp checkout not found at {{.LLAMA_CPP_DIR}} (set LLAMA_CPP_DIR); needed for convert_hf_to_gguf.py"
+    cmds:
+      - uvx --from huggingface-hub hf download {{.SCX_ROUTER_HF_MODEL}} --local-dir {{.SCX_ROUTER_HF_LOCAL_DIR}}
+      - uv run scripts/export_gliclass_decoder_kv.py --model-path {{.SCX_ROUTER_HF_LOCAL_DIR}} --output-dir {{.SCX_ROUTER_OUTPUT_DIR}} --llama-cpp-dir {{.LLAMA_CPP_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/render_model_card.py scx-router {{.SCX_ROUTER_OUTPUT_DIR}}/README.md
+    sources:
+      - scripts/export_gliclass_decoder_kv.py
+    generates:
+      - "{{.SCX_ROUTER_OUTPUT_DIR}}/gguf/backbone-q8_0.gguf"
+      - "{{.SCX_ROUTER_OUTPUT_DIR}}/onnx/scorer.onnx"
+      - "{{.SCX_ROUTER_OUTPUT_DIR}}/reference.json"
+
+  demo:scx-router:
+    desc: "Run the demo: SCX LLM router (model/task/reasoning/difficulty/length) + streaming session, interactive (needs: task scx-router, Java 25; EP=auto offloads to Metal/CUDA)"
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "auto"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="scx_router {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  stream-pii:
+    desc: "Download + export GLiNER Stream PII (streaming span NER, Qwen3-0.6B): GGUF backbone + ggml span head + reference outputs"
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f {{.LLAMA_CPP_DIR}}/convert_hf_to_gguf.py
+        msg: "llama.cpp checkout not found at {{.LLAMA_CPP_DIR}} (set LLAMA_CPP_DIR); needed for convert_hf_to_gguf.py"
+    cmds:
+      - uvx --from huggingface-hub hf download {{.STREAM_PII_HF_MODEL}} --local-dir {{.STREAM_PII_HF_LOCAL_DIR}}
+      - uv run scripts/export_gliner_streaming_span.py --model-path {{.STREAM_PII_HF_LOCAL_DIR}} --output-dir {{.STREAM_PII_OUTPUT_DIR}} --llama-cpp-dir {{.LLAMA_CPP_DIR}}
+      - uv run scripts/render_model_card.py stream-pii {{.STREAM_PII_OUTPUT_DIR}}/README.md
+    sources:
+      - scripts/export_gliner_streaming_span.py
+    generates:
+      - "{{.STREAM_PII_OUTPUT_DIR}}/gguf/backbone-q8_0.gguf"
+      - "{{.STREAM_PII_OUTPUT_DIR}}/gguf/scorer.gguf"
+
+  demo:stream-pii:
+    desc: "Run the demo: streaming PII NER — stateless samples, chunked sessions with revised snapshots, interactive /stream (needs: task stream-pii, Java 25)"
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "auto"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="stream_pii {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  # ── HuggingFace uploads for the GLiNER2.5 and llama.cpp bundles ─────────────
+  hf-upload:gliner2dot5:
+    desc: "Mirror the GLiNER2.5 base bundle to HuggingFace Hub (HF_REPO=<org>/<repo>; deletes remote files not present locally, skips local optimized-graph caches)"
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f {{.GLINER2DOT5_ONNX_OUTPUT_DIR}}/onnx/ner_full.onnx
+        msg: "GLiNER2.5 base bundle not found. Run: task gliner2dot5"
+    cmds:
+      - uv run scripts/render_model_card.py gliner2dot5-base {{.GLINER2DOT5_ONNX_OUTPUT_DIR}}/README.md
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.GLINER2DOT5_ONNX_OUTPUT_DIR}} . --delete "*" --exclude "onnx_*optimized*/*" --commit-message "Upload GLiNER2.5 base bundle (all variants) + model card"
+
+  hf-upload:gliner2dot5-small:
+    desc: "Mirror the GLiNER2.5 small bundle to HuggingFace Hub (HF_REPO=<org>/<repo>; deletes remote files not present locally, skips local optimized-graph caches)"
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f {{.GLINER2DOT5_SMALL_ONNX_OUTPUT_DIR}}/onnx/ner_full.onnx
+        msg: "GLiNER2.5 small bundle not found. Run: task gliner2dot5-small"
+    cmds:
+      - uv run scripts/render_model_card.py gliner2dot5-small {{.GLINER2DOT5_SMALL_ONNX_OUTPUT_DIR}}/README.md
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.GLINER2DOT5_SMALL_ONNX_OUTPUT_DIR}} . --delete "*" --exclude "onnx_*optimized*/*" --commit-message "Upload GLiNER2.5 small bundle (all variants) + model card"
+
+  hf-upload:gliner2dot5-multi:
+    desc: "Mirror the GLiNER2.5 multilingual bundle to HuggingFace Hub (HF_REPO=<org>/<repo>; deletes remote files not present locally, skips local optimized-graph caches)"
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f {{.GLINER2DOT5_MULTI_ONNX_OUTPUT_DIR}}/onnx/ner_full.onnx
+        msg: "GLiNER2.5 multilingual bundle not found. Run: task gliner2dot5-multi"
+    cmds:
+      - uv run scripts/render_model_card.py gliner2dot5-multi {{.GLINER2DOT5_MULTI_ONNX_OUTPUT_DIR}}/README.md
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.GLINER2DOT5_MULTI_ONNX_OUTPUT_DIR}} . --delete "*" --exclude "onnx_*optimized*/*" --commit-message "Upload GLiNER2.5 multilingual bundle (all variants) + model card"
+
+  hf-upload:scx-router:
+    desc: "Mirror the SCX router (llama.cpp) bundle to HuggingFace Hub (HF_REPO=<org>/<repo>; deletes remote files not present locally, skips local optimized-graph caches)"
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f {{.SCX_ROUTER_OUTPUT_DIR}}/gguf/backbone-q8_0.gguf
+        msg: "SCX router (llama.cpp) bundle not found. Run: task scx-router"
+    cmds:
+      - uv run scripts/render_model_card.py scx-router {{.SCX_ROUTER_OUTPUT_DIR}}/README.md
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.SCX_ROUTER_OUTPUT_DIR}} . --delete "*" --exclude "onnx_*optimized*/*" --commit-message "Upload SCX router (llama.cpp) bundle (all variants) + model card"
+
+  hf-upload:gliclass-edge:llamacpp:
+    desc: "Mirror the gliclass-edge llama.cpp/ggml bundle (models/gliclass-edge-llamacpp) to HuggingFace Hub (HF_REPO=<org>/<repo>; deletes remote files not present locally)"
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f models/gliclass-edge-llamacpp/gguf/heads.gguf
+        msg: "ggml bundle models/gliclass-edge-llamacpp not found. Run: task gliclass-edge:llamacpp"
+    cmds:
+      - uv run scripts/render_model_card.py ggml-gliclass-edge models/gliclass-edge-llamacpp/README.md
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} models/gliclass-edge-llamacpp . --delete "*" --commit-message "Upload gliclass-edge ggml bundle (engine=llamacpp) + model card"
+
+  hf-upload:gliner-pii:llamacpp:
+    desc: "Mirror the gliner-pii llama.cpp/ggml bundle (models/gliner-pii-base-llamacpp) to HuggingFace Hub (HF_REPO=<org>/<repo>; deletes remote files not present locally)"
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f models/gliner-pii-base-llamacpp/gguf/model.gguf
+        msg: "ggml bundle models/gliner-pii-base-llamacpp not found. Run: task gliner-pii:llamacpp"
+    cmds:
+      - uv run scripts/render_model_card.py ggml-gliner-pii models/gliner-pii-base-llamacpp/README.md
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} models/gliner-pii-base-llamacpp . --delete "*" --commit-message "Upload gliner-pii ggml bundle (engine=llamacpp) + model card"
+
+  hf-upload:gliner-bi:llamacpp:
+    desc: "Mirror the gliner-bi llama.cpp/ggml bundle (models/gliner-bi-small-llamacpp) to HuggingFace Hub (HF_REPO=<org>/<repo>; deletes remote files not present locally)"
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f models/gliner-bi-small-llamacpp/gguf/model.gguf
+        msg: "ggml bundle models/gliner-bi-small-llamacpp not found. Run: task gliner-bi:llamacpp"
+    cmds:
+      - uv run scripts/render_model_card.py ggml-gliner-bi models/gliner-bi-small-llamacpp/README.md
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} models/gliner-bi-small-llamacpp . --delete "*" --commit-message "Upload gliner-bi ggml bundle (engine=llamacpp) + model card"
+
+  hf-upload:gliner-multitask:llamacpp:
+    desc: "Mirror the gliner-multitask llama.cpp/ggml bundle (models/gliner-multitask-large-llamacpp) to HuggingFace Hub (HF_REPO=<org>/<repo>; deletes remote files not present locally)"
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f models/gliner-multitask-large-llamacpp/gguf/model.gguf
+        msg: "ggml bundle models/gliner-multitask-large-llamacpp not found. Run: task gliner-multitask:llamacpp"
+    cmds:
+      - uv run scripts/render_model_card.py ggml-gliner-multitask models/gliner-multitask-large-llamacpp/README.md
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} models/gliner-multitask-large-llamacpp . --delete "*" --commit-message "Upload gliner-multitask ggml bundle (engine=llamacpp) + model card"
+
+  hf-upload:base:llamacpp:
+    desc: "Mirror the base llama.cpp/ggml bundle (models/gliner2-base-llamacpp) to HuggingFace Hub (HF_REPO=<org>/<repo>; deletes remote files not present locally)"
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f models/gliner2-base-llamacpp/gguf/model.gguf
+        msg: "ggml bundle models/gliner2-base-llamacpp not found. Run: task base:llamacpp"
+    cmds:
+      - uv run scripts/render_model_card.py ggml-base models/gliner2-base-llamacpp/README.md
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} models/gliner2-base-llamacpp . --delete "*" --commit-message "Upload base ggml bundle (engine=llamacpp) + model card"
+
+  hf-upload:pii:llamacpp:
+    desc: "Mirror the pii llama.cpp/ggml bundle (models/gliner2-privacy-llamacpp) to HuggingFace Hub (HF_REPO=<org>/<repo>; deletes remote files not present locally)"
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f models/gliner2-privacy-llamacpp/gguf/model.gguf
+        msg: "ggml bundle models/gliner2-privacy-llamacpp not found. Run: task pii:llamacpp"
+    cmds:
+      - uv run scripts/render_model_card.py ggml-pii models/gliner2-privacy-llamacpp/README.md
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} models/gliner2-privacy-llamacpp . --delete "*" --commit-message "Upload pii ggml bundle (engine=llamacpp) + model card"
+
+  hf-upload:gliguard:llamacpp:
+    desc: "Mirror the gliguard llama.cpp/ggml bundle (models/gliguard-llamacpp) to HuggingFace Hub (HF_REPO=<org>/<repo>; deletes remote files not present locally)"
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f models/gliguard-llamacpp/gguf/model.gguf
+        msg: "ggml bundle models/gliguard-llamacpp not found. Run: task gliguard:llamacpp"
+    cmds:
+      - uv run scripts/render_model_card.py ggml-gliguard models/gliguard-llamacpp/README.md
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} models/gliguard-llamacpp . --delete "*" --commit-message "Upload gliguard ggml bundle (engine=llamacpp) + model card"
+
+  hf-upload:gliner2dot5-small:llamacpp:
+    desc: "Mirror the gliner2dot5-small llama.cpp/ggml bundle (models/gliner2dot5-small-llamacpp) to HuggingFace Hub (HF_REPO=<org>/<repo>; deletes remote files not present locally)"
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f models/gliner2dot5-small-llamacpp/gguf/model.gguf
+        msg: "ggml bundle models/gliner2dot5-small-llamacpp not found. Run: task gliner2dot5-small:llamacpp"
+    cmds:
+      - uv run scripts/render_model_card.py ggml-gliner2dot5-small models/gliner2dot5-small-llamacpp/README.md
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} models/gliner2dot5-small-llamacpp . --delete "*" --commit-message "Upload gliner2dot5-small ggml bundle (engine=llamacpp) + model card"
+
+  hf-upload:stream-pii:
+    desc: "Mirror the GLiNER Stream PII (llama.cpp) bundle to HuggingFace Hub (HF_REPO=<org>/<repo>; deletes remote files not present locally, skips local optimized-graph caches)"
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f {{.STREAM_PII_OUTPUT_DIR}}/gguf/backbone-q8_0.gguf
+        msg: "GLiNER Stream PII (llama.cpp) bundle not found. Run: task stream-pii"
+    cmds:
+      - uv run scripts/render_model_card.py stream-pii {{.STREAM_PII_OUTPUT_DIR}}/README.md
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.STREAM_PII_OUTPUT_DIR}} . --delete "*" --exclude "onnx_*optimized*/*" --commit-message "Upload GLiNER Stream PII (llama.cpp) bundle (all variants) + model card"
+
+  # ── llama.cpp engine bundles (engine=llamacpp) ─────────────────────────────
+  # Same families as the ONNX bundles, running on llamaj.cpp: encoder as GGUF (converted by
+  # llama.cpp's convert_hf_to_gguf.py from LLAMA_CPP_DIR) + task heads as ggml graphs.
+
+  gliclass-edge:llamacpp:
+    desc: Export knowledgator/gliclass-edge-v3.0 for the llama.cpp engine (GGUF f16 + q8_0 encoder, heads.gguf, reference.json)
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_llamacpp.py gliclass --model-path {{.GLICLASS_EDGE_HF_MODEL}} --output-dir {{.GLICLASS_EDGE_LLAMACPP_OUTPUT_DIR}} --llama-cpp-dir {{.LLAMA_CPP_DIR}} {{.EXPORT_ARGS | default ""}}
+    sources:
+      - scripts/export_llamacpp.py
+    generates:
+      - "{{.GLICLASS_EDGE_LLAMACPP_OUTPUT_DIR}}/gguf/backbone-q8_0.gguf"
+      - "{{.GLICLASS_EDGE_LLAMACPP_OUTPUT_DIR}}/gguf/heads.gguf"
+      - "{{.GLICLASS_EDGE_LLAMACPP_OUTPUT_DIR}}/gliner4j_config.json"
+
+  gliner-pii:llamacpp:
+    desc: Export knowledgator/gliner-pii-base-v1.0 for the ggml engine (DeBERTa encoder + markerV0 heads in one model.gguf, reference.json)
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_llamacpp.py gliner-uni --model-path {{.GLINER_PII_HF_MODEL}} --output-dir {{.GLINER_PII_LLAMACPP_OUTPUT_DIR}} {{.EXPORT_ARGS | default ""}}
+    sources:
+      - scripts/export_llamacpp.py
+    generates:
+      - "{{.GLINER_PII_LLAMACPP_OUTPUT_DIR}}/gguf/model.gguf"
+      - "{{.GLINER_PII_LLAMACPP_OUTPUT_DIR}}/gliner4j_config.json"
+
+  base:llamacpp:
+    desc: Export fastino/gliner2-base-v1 for the ggml engine (DeBERTa encoder + GLiNER2 heads in one model.gguf)
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_llamacpp_gliner2.py --model-path {{.GLINER2_BASE_HF_LOCAL_DIR | default "models/gliner2-base-hf"}} --output-dir models/gliner2-base-llamacpp {{.EXPORT_ARGS | default ""}}
+    sources:
+      - scripts/export_llamacpp_gliner2.py
+      - scripts/export_llamacpp.py
+    generates:
+      - models/gliner2-base-llamacpp/gguf/model.gguf
+
+  pii:llamacpp:
+    desc: Export fastino/gliner2-privacy-filter-PII-multi for the ggml engine
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_llamacpp_gliner2.py --model-path models/gliner2-privacy-hf --output-dir models/gliner2-privacy-llamacpp {{.EXPORT_ARGS | default ""}}
+    generates:
+      - models/gliner2-privacy-llamacpp/gguf/model.gguf
+
+  gliguard:llamacpp:
+    desc: Export the gliguard GLiNER2 checkpoint for the ggml engine
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_llamacpp_gliner2.py --model-path models/gliguard-hf --output-dir models/gliguard-llamacpp {{.EXPORT_ARGS | default ""}}
+    generates:
+      - models/gliguard-llamacpp/gguf/model.gguf
+
+  gliner2dot5-small:llamacpp:
+    desc: Export fastino/gliner2.5-small for the ggml engine (DeBERTa encoder + boundary / pool / scorer / relation / classifier heads in one model.gguf)
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_llamacpp_gliner2.py gliner2dot5 --model-path models/gliner2dot5-small-hf --output-dir models/gliner2dot5-small-llamacpp {{.EXPORT_ARGS | default ""}}
+    generates:
+      - models/gliner2dot5-small-llamacpp/gguf/model.gguf
+
+  gliner-bi:llamacpp:
+    desc: Export knowledgator/gliner-bi-small-v1.0 for the ggml engine (DeBERTa text model in model.gguf + MiniLM label encoder as llama.cpp GGUF)
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_llamacpp.py gliner-bi --model-path {{.GLINER_BI_HF_MODEL}} --output-dir models/gliner-bi-small-llamacpp --llama-cpp-dir {{.LLAMA_CPP_DIR}} {{.EXPORT_ARGS | default ""}}
+    generates:
+      - models/gliner-bi-small-llamacpp/gguf/model.gguf
+
+  gliner-multitask:llamacpp:
+    desc: Export knowledgator/gliner-multitask-large-v0.5 (token_level, deberta-v3-large) for the ggml engine
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_llamacpp.py gliner-uni --model-path {{.GLINER_MULTITASK_HF_MODEL}} --output-dir models/gliner-multitask-large-llamacpp {{.EXPORT_ARGS | default ""}}
+    generates:
+      - models/gliner-multitask-large-llamacpp/gguf/model.gguf
+
+  llamacpp:natives:
+    desc: 'Install the llama.cpp native libraries llamaj.cpp 2.8.0 expects into ~/.llama.cpp (they are no longer inside the jar). Override LLAMA_CPP_NATIVE_VERSION, LLAMAJ_CPP_DIR'
+    vars:
+      LLAMA_CPP_NATIVE_VERSION: '{{.LLAMA_CPP_NATIVE_VERSION | default "v0.4.0"}}'
+      LLAMAJ_CPP_DIR: '{{.LLAMAJ_CPP_DIR | default "../llamaj.cpp"}}'
+      OS: '{{if eq OS "darwin"}}macosx{{else}}linux{{end}}'
+      PLATFORM: '{{if eq ARCH "arm64"}}aarch64{{else}}x86_64{{end}}'
+    cmds:
+      - test -f {{.LLAMAJ_CPP_DIR}}/scripts/download-native-libraries.sh || (echo "clone https://github.com/gravitee-io/llamaj.cpp next to this repo or set LLAMAJ_CPP_DIR" && exit 1)
+      - rm -rf /tmp/gliner4j-natives && bash {{.LLAMAJ_CPP_DIR}}/scripts/download-native-libraries.sh -o {{.OS}} -p {{.PLATFORM}} -v {{.LLAMA_CPP_NATIVE_VERSION}} -d /tmp/gliner4j-natives
+      - mkdir -p ~/.llama.cpp && rm -f ~/.llama.cpp/lib* && cp -a /tmp/gliner4j-natives/{{.OS}}/{{.PLATFORM}}/. ~/.llama.cpp/ && echo {{.LLAMA_CPP_NATIVE_VERSION}} > ~/.llama.cpp/.llama-cpp-version
+      - ls ~/.llama.cpp
+
+  llamacpp:all:
+    desc: Export every llama.cpp / ggml engine bundle (needs the *-hf checkouts of the fastino models and a llama.cpp checkout)
+    cmds:
+      - task: gliclass-edge:llamacpp
+      - task: gliner-pii:llamacpp
+      - task: gliner-bi:llamacpp
+      - task: gliner-multitask:llamacpp
+      - task: base:llamacpp
+      - task: pii:llamacpp
+      - task: gliguard:llamacpp
+      - task: gliner2dot5-small:llamacpp
+
+  model:clean:llamacpp:
+    desc: Remove every llama.cpp / ggml engine bundle (models/*-llamacpp)
+    cmds:
+      - rm -rf models/*-llamacpp
+
   # ── GLiClass model chain (knowledgator/gliclass-modern-base-v3.0) ───────────
 
   gliclass:
@@ -623,6 +1030,77 @@ tasks:
       EP: '{{.EP | default "cpu"}}'
     cmds:
       - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliclass_large {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  # ── GLiNER2.5 (fastino boundary architecture — export & load) ────────────────
+  # One merged ner_full.onnx (encoder + boundary head + shared candidate pool) + classifier_full.onnx.
+  # FP32 + FP16 + INT8 (QInt8); DeBERTa-patched (0 If nodes) + name-sanitized (OpenVINO-ready).
+
+  gliner2dot5:
+    desc: "Export GLiNER2.5 base (deberta-v3-base) — span-free zero-shot NER + classification (FP32 + FP16 + INT8)"
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_onnx.py gliner2dot5 --model-path {{.GLINER2DOT5_HF_MODEL}} --output-dir {{.GLINER2DOT5_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/render_model_card.py gliner2dot5-base {{.GLINER2DOT5_ONNX_OUTPUT_DIR}}/README.md
+    sources:
+      - scripts/export_onnx.py
+    generates:
+      - "{{.GLINER2DOT5_ONNX_OUTPUT_DIR}}/onnx/ner_full.onnx"
+      - "{{.GLINER2DOT5_ONNX_OUTPUT_DIR}}/onnx/classifier_full.onnx"
+
+  gliner2dot5-small:
+    desc: "Export GLiNER2.5 small (deberta-v3-xsmall, 74M) — the bundle the integration tests use"
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_onnx.py gliner2dot5 --model-path {{.GLINER2DOT5_SMALL_HF_MODEL}} --output-dir {{.GLINER2DOT5_SMALL_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/render_model_card.py gliner2dot5-small {{.GLINER2DOT5_SMALL_ONNX_OUTPUT_DIR}}/README.md
+    sources:
+      - scripts/export_onnx.py
+    generates:
+      - "{{.GLINER2DOT5_SMALL_ONNX_OUTPUT_DIR}}/onnx/ner_full.onnx"
+
+  gliner2dot5-multi:
+    desc: "Export GLiNER2.5 multilingual (mdeberta-v3-base)"
+    deps:
+      - check:uv
+    cmds:
+      - uv run scripts/export_onnx.py gliner2dot5 --model-path {{.GLINER2DOT5_MULTI_HF_MODEL}} --output-dir {{.GLINER2DOT5_MULTI_ONNX_OUTPUT_DIR}} {{.EXPORT_ARGS | default "--variant fp16 --variant quantized"}}
+      - uv run scripts/render_model_card.py gliner2dot5-multi {{.GLINER2DOT5_MULTI_ONNX_OUTPUT_DIR}}/README.md
+    sources:
+      - scripts/export_onnx.py
+    generates:
+      - "{{.GLINER2DOT5_MULTI_ONNX_OUTPUT_DIR}}/onnx/ner_full.onnx"
+
+  demo:gliner2dot5:
+    desc: "Run the demo: GLiNER2.5 base NER + classification (needs: task gliner2dot5; VARIANT=onnx_fp16|onnx_quantized, EP=cuda|openvino|coreml)"
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliner2dot5 {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  demo:gliner2dot5-small:
+    desc: "Run the demo: GLiNER2.5 small (needs: task gliner2dot5-small)"
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliner2dot5_small {{.VARIANT}} {{.EP}}" 2>/dev/null
+
+  demo:gliner2dot5-multi:
+    desc: "Run the demo: GLiNER2.5 multilingual (needs: task gliner2dot5-multi)"
+    deps:
+      - check:maven
+    vars:
+      VARIANT: '{{.VARIANT | default "onnx"}}'
+      EP: '{{.EP | default "cpu"}}'
+    cmds:
+      - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="gliner2dot5_multi {{.VARIANT}} {{.EP}}" 2>/dev/null
 
   # ── GLiNER NER families (uni/bi-encoder span — export & load) ────────────────
   # Builds FP32 + FP16 + INT8 (QInt8); all DeBERTa-patched (0 If nodes) + name-sanitized (OpenVINO-ready).

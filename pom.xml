@@ -38,6 +38,7 @@
     <modules>
         <module>gliner4j-core</module>
         <module>gliner4j-demo</module>
+        <module>gliner4j-llamacpp</module>
         <module>gliner4j-benchmark</module>
     </modules>
 

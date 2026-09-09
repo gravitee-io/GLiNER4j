@@ -1,0 +1,48 @@
+{
+  "displayName": "Stream PII (streaming span, Qwen3-0.6B)",
+  "modelDir": "models/gliner-stream-pii-onnx",
+  "entities": [
+    {
+      "name": "person",
+      "description": "Names of individuals"
+    },
+    {
+      "name": "email address",
+      "description": ""
+    },
+    {
+      "name": "phone number",
+      "description": ""
+    },
+    {
+      "name": "street address",
+      "description": ""
+    },
+    {
+      "name": "credit card number",
+      "description": ""
+    },
+    {
+      "name": "passport number",
+      "description": ""
+    }
+  ],
+  "nerSamples": [
+    "Customer Alice Johnson can be reached at alice@example.com or +1 202-555-0147.",
+    "Please ship the order to 42 Maple Street, Springfield and charge card 4111 1111 1111 1111.",
+    "Jane Doe (passport X1234567) asked us to call +33 6 12 34 56 78 before Friday."
+  ],
+  "stream": [
+    [
+      "Customer Alice Johnson ",
+      "can be reached at alice@example.com ",
+      "or +1 202-555-0147."
+    ],
+    [
+      "Jane",
+      " Doe asked us to call",
+      " +1 (415) 555-0132.",
+      " Her card ends in 4242, full number 4111 1111 1111 1111."
+    ]
+  ]
+}

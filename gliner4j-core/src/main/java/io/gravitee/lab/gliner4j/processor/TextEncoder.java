@@ -17,6 +17,7 @@ package io.gravitee.lab.gliner4j.processor;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Pattern;
 import lombok.Getter;
 
@@ -50,6 +51,24 @@ public class TextEncoder {
    * @param text the input text to encode
    */
   public TextEncoder(String text) {
+    this(text, false, false);
+  }
+
+  /**
+   * Splits {@code text} into words with optional GLiNER2-processor parity options.
+   *
+   * @param text the input text
+   * @param lowercaseWords lower-case each word before subword tokenization (offsets still index
+   *                       the original text) — what fastino's {@code WhitespaceTokenSplitter} does
+   * @param appendPeriod append a final {@code "."} word when the text does not end in
+   *                     {@code . ! ?} — what fastino's collate step does; the extra word maps to
+   *                     the empty char range {@code [len, len)} so spans ending on it stay in bounds
+   */
+  public TextEncoder(
+    String text,
+    boolean lowercaseWords,
+    boolean appendPeriod
+  ) {
     this.originalText = text;
 
     // Capacity estimate: ~1 token per 5 chars (typical English). Grows by doubling on overflow.
@@ -67,9 +86,27 @@ public class TextEncoder {
         starts = Arrays.copyOf(starts, newCap);
         ends = Arrays.copyOf(ends, newCap);
       }
-      wordsArr[n] = matcher.group();
+      var word = matcher.group();
+      wordsArr[n] = lowercaseWords ? word.toLowerCase(Locale.ROOT) : word;
       starts[n] = matcher.start();
       ends[n] = matcher.end();
+      n++;
+    }
+    if (
+      appendPeriod &&
+      n > 0 &&
+      !text.endsWith(".") &&
+      !text.endsWith("!") &&
+      !text.endsWith("?")
+    ) {
+      if (n == wordsArr.length) {
+        wordsArr = Arrays.copyOf(wordsArr, n + 1);
+        starts = Arrays.copyOf(starts, n + 1);
+        ends = Arrays.copyOf(ends, n + 1);
+      }
+      wordsArr[n] = ".";
+      starts[n] = text.length();
+      ends[n] = text.length();
       n++;
     }
 

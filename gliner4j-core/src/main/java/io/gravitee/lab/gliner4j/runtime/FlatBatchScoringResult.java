@@ -44,6 +44,15 @@ public record FlatBatchScoringResult(
    * @param batchRow the text's row within the batch
    * @param textLen  the text's word count (may be shorter than the padded tensor textLen)
    */
+  /**
+   * Count logits of {@code batchRow}: {@code countLogits} has one row per batch row when the
+   * runtime scores schemas per row (ggml, ner_full exported after 2026-09-05), or a single row
+   * (older ONNX exports, which used row 0's schema for the whole bucket).
+   */
+  public float[] countLogitsFor(int batchRow) {
+    return countLogits[Math.min(batchRow, countLogits.length - 1)];
+  }
+
   public float[][][][] materializeSlot(int batchRow, int textLen) {
     int cnt = spanScores.dim(1);
     int numFields = spanScores.dim(2);
