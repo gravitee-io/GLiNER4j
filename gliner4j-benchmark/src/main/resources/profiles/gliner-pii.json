@@ -1,12 +1,25 @@
 {
   "displayName": "GLiNER PII (uni-encoder, deberta-v3-small)",
   "modelDir": "models/gliner-pii-base-onnx",
+  "llamacppModelDir": "models/gliner-pii-base-llamacpp",
   "entities": [
-    { "name": "person" },
-    { "name": "email" },
-    { "name": "phone number" },
-    { "name": "address" },
-    { "name": "organization" },
-    { "name": "date" }
+    {
+      "name": "person"
+    },
+    {
+      "name": "email"
+    },
+    {
+      "name": "phone number"
+    },
+    {
+      "name": "address"
+    },
+    {
+      "name": "organization"
+    },
+    {
+      "name": "date"
+    }
   ]
 }

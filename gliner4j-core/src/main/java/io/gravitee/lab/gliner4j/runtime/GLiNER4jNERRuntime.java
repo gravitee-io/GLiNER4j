@@ -29,7 +29,9 @@ import lombok.extern.slf4j.Slf4j;
  * loaded — every NER, relation and structure path scores through the merged graph.
  */
 @Slf4j
-public non-sealed class GLiNER4jNERRuntime extends BaseRuntime {
+public non-sealed class GLiNER4jNERRuntime
+  extends BaseRuntime
+  implements Gliner2SpanRuntime {
 
   private OrtSession nerFullSession;
 
@@ -134,6 +136,7 @@ public non-sealed class GLiNER4jNERRuntime extends BaseRuntime {
    * @param maxWidth max span width
    * @param count predicted count (scalar)
    */
+  @Override
   public FlatBatchScoringResult runNerFullBatch(
     long[][] inputIds,
     long[][] attentionMask,

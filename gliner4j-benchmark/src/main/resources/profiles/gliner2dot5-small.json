@@ -1,0 +1,31 @@
+{
+  "displayName": "GLiNER2.5 small",
+  "modelDir": "models/gliner2dot5-small-onnx",
+  "llamacppModelDir": "models/gliner2dot5-small-llamacpp",
+  "entities": [
+    {
+      "name": "person",
+      "description": "Names of real individuals"
+    },
+    {
+      "name": "organization",
+      "description": ""
+    },
+    {
+      "name": "location",
+      "description": "Cities, countries, geographical places"
+    },
+    {
+      "name": "date",
+      "description": ""
+    },
+    {
+      "name": "event",
+      "description": "Named events, conferences, historical events"
+    },
+    {
+      "name": "product",
+      "description": ""
+    }
+  ]
+}

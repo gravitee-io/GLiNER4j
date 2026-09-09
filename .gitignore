@@ -21,3 +21,4 @@ results/
 .ort-openvino-build/
 **/models/**
 **/models
+.ggml-deberta-*/

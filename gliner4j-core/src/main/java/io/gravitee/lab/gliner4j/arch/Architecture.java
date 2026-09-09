@@ -26,12 +26,29 @@ package io.gravitee.lab.gliner4j.arch;
 public enum Architecture {
   /** fastino GLiNER2: encoder → span_rep → count-aware scoring_head → classifier_head. */
   GLINER2("gliner2"),
+  /**
+   * fastino GLiNER2.5 (boundary architecture): encoder → boundary encoder → start/end/inside
+   * marginals → shared candidate pool → pooled pair scoring, in one merged {@code ner_full.onnx}.
+   */
+  GLINER2DOT5("gliner2dot5"),
   /** Original GLiNER uni-encoder (e.g. gliner-multitask, UTC-DeBERTa, gliner-x). */
   GLINER_UNI("gliner-uni"),
   /** GLiNER bi-encoder / poly-encoder (e.g. gliner-bi, modern-gliner-bi, relex, linker). */
   GLINER_BI("gliner-bi"),
   /** GLiClass zero-shot sequence classification. */
   GLICLASS("gliclass"),
+  /**
+   * GLiClass {@code decoder-kv}: a causal Qwen3 backbone (run by llama.cpp through llamaj.cpp, KV
+   * cache per session) plus a small ONNX scorer. Implemented by the {@code gliner4j-llamacpp}
+   * module and registered through {@link java.util.ServiceLoader}.
+   */
+  GLICLASS_DECODER_KV("gliclass-decoder-kv"),
+  /**
+   * GLiNER {@code gliner_streaming_span}: a causal Qwen3 backbone (llama.cpp via llamaj.cpp, KV
+   * cache per session) with a DeBERTa labels encoder and {@code markerV2} span head run as ggml
+   * graphs. Streaming NER with rolling span revision. Implemented by {@code gliner4j-llamacpp}.
+   */
+  GLINER_STREAMING_SPAN("gliner-streaming-span"),
   /** GLiNER encoder-decoder for scalable open-ontology NER. */
   GLINER_DECODER("gliner-decoder");
 

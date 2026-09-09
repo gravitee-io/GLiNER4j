@@ -1,55 +1,182 @@
 {
   "displayName": "GLiNER2 PII (42 labels)",
   "modelDir": "models/gliner2-privacy-onnx",
+  "llamacppModelDir": "models/gliner2-privacy-llamacpp",
   "entities": [
-    { "name": "person", "description": "Full name of a real individual" },
-    { "name": "full_name", "description": "Complete name as a single string" },
-    { "name": "first_name", "description": "Given name" },
-    { "name": "middle_name", "description": "Middle name or initial" },
-    { "name": "last_name", "description": "Family name / surname" },
-    { "name": "date_of_birth", "description": "Date of birth" },
-    { "name": "email", "description": "Email address" },
-    { "name": "phone_number", "description": "Phone or mobile number" },
-    { "name": "address", "description": "Full postal address" },
-    { "name": "street_address", "description": "Street and number" },
-    { "name": "city", "description": "City name" },
-    { "name": "state_or_region", "description": "State, province, or region" },
-    { "name": "postal_code", "description": "ZIP or postal code" },
-    { "name": "country", "description": "Country name" },
-    { "name": "government_id", "description": "Generic government-issued identifier" },
-    { "name": "national_id_number", "description": "National ID / SSN-like number" },
-    { "name": "passport_number", "description": "Passport number" },
-    { "name": "drivers_license_number", "description": "Driver's license number" },
-    { "name": "license_number", "description": "Other professional license number" },
-    { "name": "tax_id", "description": "Tax identifier (e.g. TIN, VAT)" },
-    { "name": "tax_number", "description": "Tax filing or registration number" },
-    { "name": "bank_account", "description": "Bank account number or reference" },
-    { "name": "account_number", "description": "Generic account number" },
-    { "name": "routing_number", "description": "Bank routing / sort code" },
-    { "name": "iban", "description": "IBAN" },
-    { "name": "payment_card", "description": "Payment card reference" },
-    { "name": "card_number", "description": "Credit / debit card number" },
-    { "name": "card_expiry", "description": "Card expiration date" },
-    { "name": "card_cvv", "description": "Card CVV / CVC" },
-    { "name": "username", "description": "Online username or handle" },
-    { "name": "ip_address", "description": "IPv4 / IPv6 address" },
-    { "name": "account_id", "description": "Account identifier" },
-    { "name": "sensitive_account_id", "description": "Sensitive account identifier" },
-    { "name": "password", "description": "Password value" },
-    { "name": "secret", "description": "Generic secret value" },
-    { "name": "api_key", "description": "API key" },
-    { "name": "access_token", "description": "Access token or bearer credential" },
-    { "name": "recovery_code", "description": "Recovery or backup code" },
-    { "name": "sensitive_date", "description": "Sensitive date" },
-    { "name": "document_date", "description": "Date associated with a document" },
-    { "name": "expiration_date", "description": "Generic expiration date" },
-    { "name": "transaction_date", "description": "Date of a financial transaction" }
+    {
+      "name": "person",
+      "description": "Full name of a real individual"
+    },
+    {
+      "name": "full_name",
+      "description": "Complete name as a single string"
+    },
+    {
+      "name": "first_name",
+      "description": "Given name"
+    },
+    {
+      "name": "middle_name",
+      "description": "Middle name or initial"
+    },
+    {
+      "name": "last_name",
+      "description": "Family name / surname"
+    },
+    {
+      "name": "date_of_birth",
+      "description": "Date of birth"
+    },
+    {
+      "name": "email",
+      "description": "Email address"
+    },
+    {
+      "name": "phone_number",
+      "description": "Phone or mobile number"
+    },
+    {
+      "name": "address",
+      "description": "Full postal address"
+    },
+    {
+      "name": "street_address",
+      "description": "Street and number"
+    },
+    {
+      "name": "city",
+      "description": "City name"
+    },
+    {
+      "name": "state_or_region",
+      "description": "State, province, or region"
+    },
+    {
+      "name": "postal_code",
+      "description": "ZIP or postal code"
+    },
+    {
+      "name": "country",
+      "description": "Country name"
+    },
+    {
+      "name": "government_id",
+      "description": "Generic government-issued identifier"
+    },
+    {
+      "name": "national_id_number",
+      "description": "National ID / SSN-like number"
+    },
+    {
+      "name": "passport_number",
+      "description": "Passport number"
+    },
+    {
+      "name": "drivers_license_number",
+      "description": "Driver's license number"
+    },
+    {
+      "name": "license_number",
+      "description": "Other professional license number"
+    },
+    {
+      "name": "tax_id",
+      "description": "Tax identifier (e.g. TIN, VAT)"
+    },
+    {
+      "name": "tax_number",
+      "description": "Tax filing or registration number"
+    },
+    {
+      "name": "bank_account",
+      "description": "Bank account number or reference"
+    },
+    {
+      "name": "account_number",
+      "description": "Generic account number"
+    },
+    {
+      "name": "routing_number",
+      "description": "Bank routing / sort code"
+    },
+    {
+      "name": "iban",
+      "description": "IBAN"
+    },
+    {
+      "name": "payment_card",
+      "description": "Payment card reference"
+    },
+    {
+      "name": "card_number",
+      "description": "Credit / debit card number"
+    },
+    {
+      "name": "card_expiry",
+      "description": "Card expiration date"
+    },
+    {
+      "name": "card_cvv",
+      "description": "Card CVV / CVC"
+    },
+    {
+      "name": "username",
+      "description": "Online username or handle"
+    },
+    {
+      "name": "ip_address",
+      "description": "IPv4 / IPv6 address"
+    },
+    {
+      "name": "account_id",
+      "description": "Account identifier"
+    },
+    {
+      "name": "sensitive_account_id",
+      "description": "Sensitive account identifier"
+    },
+    {
+      "name": "password",
+      "description": "Password value"
+    },
+    {
+      "name": "secret",
+      "description": "Generic secret value"
+    },
+    {
+      "name": "api_key",
+      "description": "API key"
+    },
+    {
+      "name": "access_token",
+      "description": "Access token or bearer credential"
+    },
+    {
+      "name": "recovery_code",
+      "description": "Recovery or backup code"
+    },
+    {
+      "name": "sensitive_date",
+      "description": "Sensitive date"
+    },
+    {
+      "name": "document_date",
+      "description": "Date associated with a document"
+    },
+    {
+      "name": "expiration_date",
+      "description": "Generic expiration date"
+    },
+    {
+      "name": "transaction_date",
+      "description": "Date of a financial transaction"
+    }
   ],
   "nerSamples": [
     "Hi, my name is John Smith. My email is john.smith@example.com and my mobile is +1-415-555-0123.",
     "Please charge card 4111-1111-1111-1111 exp 12/26 CVV 123 and credit to IBAN GB82WEST12345698765432.",
     "Logged in as jsmith01 with password Hunt3r2! from 192.168.1.42 using API key sk-live-9b2c4f8e0a1d.",
     "Passport AB1234567 issued 2021-03-14 in France; SSN 123-45-6789; date of birth 1985-04-23.",
-    "Shipping to Marie Dupont, 221B Baker Street, London NW1 6XE, United Kingdom — driver's license D1234-56789-01234."
+    "Shipping to Marie Dupont, 221B Baker Street, London NW1 6XE, United Kingdom \u2014 driver's license D1234-56789-01234."
   ]
 }

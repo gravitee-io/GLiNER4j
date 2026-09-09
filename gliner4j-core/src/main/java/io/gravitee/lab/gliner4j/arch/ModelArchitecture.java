@@ -17,8 +17,10 @@ package io.gravitee.lab.gliner4j.arch;
 
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
+import io.gravitee.lab.gliner4j.schema.RelationDefinition;
 import io.gravitee.lab.gliner4j.strategy.ClassificationStrategy;
 import io.gravitee.lab.gliner4j.strategy.NerStrategy;
+import io.gravitee.lab.gliner4j.strategy.RelationStrategy;
 import java.util.List;
 
 /**
@@ -36,6 +38,11 @@ import java.util.List;
 public interface ModelArchitecture {
   /** The family this implementation handles. */
   Architecture id();
+
+  /** The engine this implementation runs on. ONNX Runtime unless overridden. */
+  default Engine engine() {
+    return Engine.ONNX;
+  }
 
   /** Whether this family can serve {@code task}. */
   boolean supports(TaskType task);
@@ -70,6 +77,33 @@ public interface ModelArchitecture {
     List<ClassificationLabel> labels
   ) {
     throw unsupported(TaskType.CLASSIFICATION);
+  }
+
+  /**
+   * Builds the relation-extraction strategy for this family. Default-throws so families that do
+   * not serve relations need not implement it.
+   *
+   * @param ctx the family-agnostic load inputs
+   * @param relations the load-time relation schema
+   * @return a ready relation strategy
+   * @throws UnsupportedOperationException if this family does not support relations
+   */
+  default RelationStrategy newRelationStrategy(
+    LoadContext ctx,
+    List<RelationDefinition> relations
+  ) {
+    throw unsupported(TaskType.RELATION);
+  }
+
+  /**
+   * Builds the GLiNER2-style span runtime (merged encoder + span/count graph) the unified
+   * {@code GLiNER4j} facade and {@code SchemaExtractor} drive directly. Default-throws for
+   * families without one.
+   */
+  default io.gravitee.lab.gliner4j.runtime.Gliner2SpanRuntime newSpanRuntime(
+    LoadContext ctx
+  ) {
+    throw unsupported(TaskType.STRUCTURE);
   }
 
   private UnsupportedOperationException unsupported(TaskType task) {

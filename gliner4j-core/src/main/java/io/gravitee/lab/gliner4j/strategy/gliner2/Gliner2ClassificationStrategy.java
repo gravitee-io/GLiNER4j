@@ -23,7 +23,7 @@ import io.gravitee.lab.gliner4j.processor.InputAssembler;
 import io.gravitee.lab.gliner4j.processor.PreprocessedInput;
 import io.gravitee.lab.gliner4j.processor.SchemaEncoder;
 import io.gravitee.lab.gliner4j.processor.TextEncoder;
-import io.gravitee.lab.gliner4j.runtime.GLiNER4jClassifierRuntime;
+import io.gravitee.lab.gliner4j.runtime.Gliner2ClassifierRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
@@ -50,7 +50,7 @@ public final class Gliner2ClassificationStrategy
   extends AbstractNLP<
     ClassificationLabel,
     List<ClassificationResult>,
-    GLiNER4jClassifierRuntime
+    Gliner2ClassifierRuntime
   >
   implements ClassificationStrategy {
 
@@ -58,7 +58,7 @@ public final class Gliner2ClassificationStrategy
     GLiNER4jConfig config,
     RuntimeConfig runtimeConfig,
     DjlTokenizerWrapper tokenizer,
-    GLiNER4jClassifierRuntime runtime,
+    Gliner2ClassifierRuntime runtime,
     InputAssembler inputAssembler
   ) {
     super(
@@ -82,11 +82,23 @@ public final class Gliner2ClassificationStrategy
     LoadContext ctx,
     List<ClassificationLabel> labels
   ) {
-    var runtime = new GLiNER4jClassifierRuntime(
-      ctx.modelDir(),
-      ctx.variant(),
-      ctx.runtimeConfig()
+    return create(
+      ctx,
+      labels,
+      new io.gravitee.lab.gliner4j.runtime.GLiNER4jClassifierRuntime(
+        ctx.modelDir(),
+        ctx.variant(),
+        ctx.runtimeConfig()
+      )
     );
+  }
+
+  /** Same, over an already-built classifier runtime (e.g. the ggml one from {@code gliner4j-llamacpp}). */
+  public static Gliner2ClassificationStrategy create(
+    LoadContext ctx,
+    List<ClassificationLabel> labels,
+    Gliner2ClassifierRuntime runtime
+  ) {
     var schemaEncoder = labelSchemaEncoder(labels);
     var inputAssembler = new InputAssembler(ctx.tokenizer(), schemaEncoder);
     return new Gliner2ClassificationStrategy(
