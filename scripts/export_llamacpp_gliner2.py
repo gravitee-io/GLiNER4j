@@ -88,6 +88,9 @@ def gliner2(
     model_path: str = typer.Option(..., help="HF id or dir of a GLiNER2 checkpoint (fastino/gliner2-*)"),
     output_dir: Path = typer.Option(..., help="Bundle directory to write"),
     dtype: str = typer.Option("f16", help="f16 or f32 for the encoder / head matrices"),
+    quant: list[str] = typer.Option(
+        [], "--quant", help="also write gguf/model-<quant>.gguf with block-quantised encoder matrices (q8_0, q5_0, q4_0)"
+    ),
 ):
     """GLiNER2 → one model.gguf (DeBERTa encoder + span/count/classifier heads) bundle."""
     from gliner2 import GLiNER2
@@ -110,15 +113,8 @@ def gliner2(
     tokenizer = model.processor.tokenizer
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    console.print("[cyan]1/3[/cyan] model.gguf (encoder + heads)")
-    heads = HeadsWriter(output_dir / "gguf" / "model.gguf", "gliner4j-gliner2")
-    add_deberta_encoder(heads, encoder, dtype, prefix="enc.")
     max_count = int(core.count_embed.pos_embedding.weight.shape[0])
     hidden = int(encoder.config.hidden_size)
-    heads.kv("gliner2.hidden_size", hidden)
-    heads.kv("gliner2.max_width", int(d["max_width"]))
-    heads.kv("gliner2.max_count", max_count)
-    heads.kv("gliner2.counting_layer", counting)
     head_state = {
         _short_name(k, _GLINER2_RENAMES): v
         for k, v in core.state_dict().items()
@@ -128,8 +124,31 @@ def gliner2(
         gru = core.count_embed.gru
         # input side of the GRU for all count steps at once: pos_emb @ W_ihᵀ + b_ih  → (max_count, 3·hidden)
         head_state["count_embed.gi"] = core.count_embed.pos_embedding.weight @ gru.weight_ih_l0.T + gru.bias_ih_l0
-    heads.tensors(head_state)
-    heads.close()
+
+    # Head matrices the Java graph only multiplies with (GgmlWeights.linear / projection, the count
+    # GRU's W_hh, the count transformer's in_proj): f16 → tensor-core GEMMs on CUDA. count_embed.gi,
+    # pos_embedding, LayerNorm params and biases are read element-wise and stay f32.
+    def head_f16(name: str, arr) -> bool:
+        if dtype != "f16":
+            return False
+        return (
+            name.startswith(("span_rep.", "classifier.", "count_pred.", "count_tf.")) and name.endswith(".weight")
+        ) or name.endswith("in_proj_weight") or name == "count_embed.gru.weight_hh_l0"
+
+    def write_gguf(name: str, q: str | None) -> None:
+        heads = HeadsWriter(output_dir / "gguf" / name, "gliner4j-gliner2")
+        add_deberta_encoder(heads, encoder, dtype, prefix="enc.", quant=q)
+        heads.kv("gliner2.hidden_size", hidden)
+        heads.kv("gliner2.max_width", int(d["max_width"]))
+        heads.kv("gliner2.max_count", max_count)
+        heads.kv("gliner2.counting_layer", counting)
+        heads.tensors(head_state, f16_matrix=head_f16)
+        heads.close()
+
+    console.print(f"[cyan]1/3[/cyan] model.gguf (encoder + heads){' + ' + ', '.join(quant) if quant else ''}")
+    write_gguf("model.gguf", None)
+    for q in quant:
+        write_gguf(f"model-{q}.gguf", q)  # same heads, block-quantised encoder matrices (variant=<q>)
 
     console.print("[cyan]2/3[/cyan] config + tokenizer")
     added = tokenizer.get_added_vocab()
@@ -198,6 +217,9 @@ def gliner2dot5(
     model_path: str = typer.Option(..., help="HF id or dir of a GLiNER2.5 checkpoint (fastino/gliner2.5-*)"),
     output_dir: Path = typer.Option(..., help="Bundle directory to write"),
     dtype: str = typer.Option("f16", help="f16 or f32 for the encoder / head matrices"),
+    quant: list[str] = typer.Option(
+        [], "--quant", help="also write gguf/model-<quant>.gguf with block-quantised encoder matrices (q8_0, q5_0, q4_0)"
+    ),
 ):
     """GLiNER2.5 (boundary) → one model.gguf (DeBERTa encoder + boundary/pool/scorer/relation/classifier heads)."""
     from gliner2 import AutoExtractor
@@ -220,32 +242,46 @@ def gliner2dot5(
     output_dir.mkdir(parents=True, exist_ok=True)
     gen = model.relation_pair_generator.settings if getattr(model, "relation_pair_generator", None) else None
 
-    console.print("[cyan]1/3[/cyan] model.gguf (encoder + heads)")
-    heads = HeadsWriter(output_dir / "gguf" / "model.gguf", "gliner4j-gliner2dot5")
-    add_deberta_encoder(heads, encoder, dtype, prefix="enc.")
     attn = head.boundary_encoder.attention_blocks[0]
-    heads.kv("g25.hidden_size", int(model.hidden_size))
-    heads.kv("g25.boundary_dim", int(settings.boundary_dim))
-    heads.kv("g25.attention_heads", int(attn.num_heads))
-    heads.kv("g25.attention_window", int(attn.window))
-    heads.kv("g25.pool_top_k", int(head.shared_pool_builder.pool_boundary_top_k))
-    heads.kv("g25.pool_size", int(head.shared_pool_builder.pool_size))
-    heads.kv("g25.min_pool_per_query", int(head.shared_pool_builder.min_pool_per_query))
-    heads.kv("g25.content_dim", int(pooler.value_projection.out_features))
-    heads.kv("g25.layer_norm_eps", float(head.boundary_encoder.layer_norm.eps))
-    if gen is not None:
-        heads.kv("g25.relation_heads", int(gen.heads_per_relation))
-        heads.kv("g25.relation_tails", int(gen.tails_per_relation))
-        heads.kv("g25.relation_pair_cap", int(gen.pair_cap))
-        heads.kv("g25.relation_argument_threshold", float(gen.argument_threshold))
-        heads.kv("g25.relation_biaffine", bool(model.relation_scorer.use_biaffine_content))
     head_state = {
         _short_name(k, _G25_RENAMES): v
         for k, v in model.state_dict().items()
         if k.startswith(_G25_PREFIXES)
     }
-    heads.tensors(head_state)
-    heads.close()
+
+    def head_f16(name: str, arr) -> bool:
+        # 2-D head matrices that only feed mul_mat (boundary encoder, boundary / pool / scorer
+        # projections, classifier): f16 puts them on the tensor cores. Everything read
+        # element-wise (states, biases, norms, relation tables) stays f32.
+        return dtype == "f16" and name.endswith(".weight") and name.startswith(
+            ("benc.", "bqh.", "pool.", "scorer.", "classifier.", "null_projection.")
+        )
+
+    def write_gguf(name: str, q: str | None) -> None:
+        heads = HeadsWriter(output_dir / "gguf" / name, "gliner4j-gliner2dot5")
+        add_deberta_encoder(heads, encoder, dtype, prefix="enc.", quant=q)
+        heads.kv("g25.hidden_size", int(model.hidden_size))
+        heads.kv("g25.boundary_dim", int(settings.boundary_dim))
+        heads.kv("g25.attention_heads", int(attn.num_heads))
+        heads.kv("g25.attention_window", int(attn.window))
+        heads.kv("g25.pool_top_k", int(head.shared_pool_builder.pool_boundary_top_k))
+        heads.kv("g25.pool_size", int(head.shared_pool_builder.pool_size))
+        heads.kv("g25.min_pool_per_query", int(head.shared_pool_builder.min_pool_per_query))
+        heads.kv("g25.content_dim", int(pooler.value_projection.out_features))
+        heads.kv("g25.layer_norm_eps", float(head.boundary_encoder.layer_norm.eps))
+        if gen is not None:
+            heads.kv("g25.relation_heads", int(gen.heads_per_relation))
+            heads.kv("g25.relation_tails", int(gen.tails_per_relation))
+            heads.kv("g25.relation_pair_cap", int(gen.pair_cap))
+            heads.kv("g25.relation_argument_threshold", float(gen.argument_threshold))
+            heads.kv("g25.relation_biaffine", bool(model.relation_scorer.use_biaffine_content))
+        heads.tensors(head_state, f16_matrix=head_f16)
+        heads.close()
+
+    console.print(f"[cyan]1/3[/cyan] model.gguf (encoder + heads){' + ' + ', '.join(quant) if quant else ''}")
+    write_gguf("model.gguf", None)
+    for q in quant:
+        write_gguf(f"model-{q}.gguf", q)
 
     console.print("[cyan]2/3[/cyan] config + tokenizer")
     added = tokenizer.get_added_vocab()

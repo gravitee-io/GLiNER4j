@@ -108,7 +108,7 @@ public final class LlamaGlinerUniNerStrategy implements NerStrategy {
     int gpuLayers = LlamaGliclassClassificationStrategy.gpuLayers(rc);
     int threads = LlamaBackbone.threads(rc);
     var model = new GgmlGlinerUniModel(
-      ctx.modelDir().resolve("gguf").resolve("model.gguf"),
+      GgmlWeights.resolveModelGguf(ctx.modelDir(), ctx.variant()),
       gpuLayers > 0,
       threads
     );

@@ -74,6 +74,29 @@ public final class GgmlGliner2Model implements AutoCloseable {
    * @param count how many count steps to score (1 for entities, {@code maxCount} for relations / structures)
    * @param maxWidth span width
    */
+  /**
+   * Longest (padded) row for which {@link #scoreUnitBatch} beats per-row {@link #scoreUnit} on
+   * CUDA. Short rows are launch-bound, so one padded graph keeps the GPU busy; long rows already
+   * saturate the card and the padding plus 4-D attention layouts cost more than they save there.
+   * Mind the prompt: a 42-entity schema with descriptions is ~900 tokens before any text, so its
+   * rows run 1 400+ tokens and never batch under this default — raise the system property
+   * {@code gliner4j.ggml.batchMaxTokens} (2048) on cards with headroom, or drop the descriptions
+   * (rows shrink to ~870 tokens, and get cheaper with them).
+   */
+  private static final int BATCH_MAX_TOKENS = Integer.getInteger(
+    "gliner4j.ggml.batchMaxTokens",
+    384
+  );
+
+  /**
+   * Whether {@link #scoreUnitBatch} should be preferred over per-row {@link #scoreUnit} for rows
+   * padded to {@code n} tokens. Never on the CPU backend or Metal, where the batched graph
+   * measured slower at every length.
+   */
+  public boolean prefersBatchedScoring(int n) {
+    return w.gpu && !w.metal && n <= BATCH_MAX_TOKENS;
+  }
+
   public synchronized UnitScores scoreUnit(
     long[] ids,
     int[] wordPositions,
@@ -242,16 +265,21 @@ public final class GgmlGliner2Model implements AutoCloseable {
     for (var r : idsRows) n = Math.max(n, r.length);
     int fields = fieldPositions.length;
     count = Math.max(0, Math.min(count, maxCount));
-    // flat word / span indices across rows (column of row r token i = i + n·r)
+    // flat word indices across rows (column of row r token i = i + n·r), and spans padded to a
+    // per-row block of maxWords·maxWidth so every row's spans sit on a batch axis: the scores are
+    // then a batched matmul that pairs each row's fields with ITS spans only. (The earlier
+    // (M·count) × spansTotal product scored every row against every row's spans — B× the work,
+    // the readback and the host loop, growing with the square of the batch: 600 MB per call for
+    // 8 × 350-word rows with 42 fields.)
     var wordOffsets = new int[batch + 1];
-    var spanOffsets = new int[batch + 1];
+    int maxWords = 0;
     for (int r = 0; r < batch; r++) {
       wordOffsets[r + 1] = wordOffsets[r] + wordPositionsRows[r].length;
-      spanOffsets[r + 1] =
-        spanOffsets[r] + wordPositionsRows[r].length * maxWidth;
+      maxWords = Math.max(maxWords, wordPositionsRows[r].length);
     }
     int wordsTotal = wordOffsets[batch];
-    int spansTotal = spanOffsets[batch];
+    int maxSpans = maxWords * maxWidth;
+    int spansTotal = maxSpans * batch;
     var wordIdxAll = new int[Math.max(1, wordsTotal)];
     var spanStart = new int[Math.max(1, spansTotal)];
     var spanEnd = new int[Math.max(1, spansTotal)];
@@ -259,9 +287,9 @@ public final class GgmlGliner2Model implements AutoCloseable {
       int words = wordPositionsRows[r].length;
       for (int i = 0; i < words; i++) wordIdxAll[wordOffsets[r] + i] =
         wordPositionsRows[r][i] + r * n;
-      for (int s = 0; s < words; s++) {
+      for (int s = 0; s < maxWords; s++) {
         for (int k = 0; k < maxWidth; k++) {
-          int idx = spanOffsets[r] + s * maxWidth + k;
+          int idx = r * maxSpans + s * maxWidth + k;
           boolean valid = s + k < words;
           spanStart[idx] = wordOffsets[r] + (valid ? s : 0);
           spanEnd[idx] = wordOffsets[r] + (valid ? s + k : 0);
@@ -312,7 +340,7 @@ public final class GgmlGliner2Model implements AutoCloseable {
               0
             )
           );
-          var spanRep = w.projection(ctx, cat, "span_rep.out_project"); // (hidden, spansTotal)
+          var spanRep = w.projection(ctx, cat, "span_rep.out_project"); // (hidden, maxSpans·B)
           var fieldRows = Ggml.getRows(ctx, h, fieldIdx); // (hidden, B·M): column r·M + m
           var structAll = countEmbed(ctx, fieldRows, fields * batch, maxCount); // (hidden, B·M·maxCount)
           var struct = count == maxCount
@@ -327,8 +355,27 @@ public final class GgmlGliner2Model implements AutoCloseable {
                 Ggml.nb(structAll, 1),
                 0
               )
-            );
-          scores = Ggml.sigmoid(ctx, Ggml.mulMat(ctx, struct, spanRep)); // (M·count, spansTotal)
+            ); // columns t·(M·B) + r·M + m: count-major
+          // (hidden, M, B, count) → (hidden, M, count, B): the batch on the last axis for the batched matmul
+          var struct3 = Ggml.reshape3d(
+            ctx,
+            Ggml.cont(
+              ctx,
+              Ggml.permute(
+                ctx,
+                Ggml.reshape4d(ctx, struct, hidden, fields, batch, count),
+                0,
+                1,
+                3,
+                2
+              )
+            ),
+            hidden,
+            (long) fields * count,
+            batch
+          );
+          var spanRep3 = Ggml.reshape3d(ctx, spanRep, hidden, maxSpans, batch);
+          scores = Ggml.sigmoid(ctx, Ggml.mulMat(ctx, struct3, spanRep3)); // (M·count, maxSpans, B): [m + M·t + M·count·s + M·count·maxSpans·r]
         }
         var graph = Ggml.newGraph(ctx, nodes);
         Ggml.setOutput(countLogits);
@@ -354,25 +401,22 @@ public final class GgmlGliner2Model implements AutoCloseable {
         w.run(graph);
         var clAll = Ggml.getFloats(countLogits, call, maxCount * batch);
         float[] flat = scores != null
-          ? Ggml.getFloats(scores, call, spansTotal * fields * batch * count)
+          ? Ggml.getFloats(scores, call, fields * count * spansTotal)
           : null;
         var out = new UnitScores[batch];
+        int mc = fields * count;
         for (int r = 0; r < batch; r++) {
           int words = wordPositionsRows[r].length;
           var spans = new float[count][fields][words][maxWidth];
           if (flat != null) {
-            for (int t = 0; t < count; t++) {
-              for (int m = 0; m < fields; m++) {
-                for (int s = 0; s < words; s++) {
-                  for (int k = 0; k < maxWidth; k++) {
-                    int idx = spanOffsets[r] + s * maxWidth + k;
-                    spans[t][m][s][k] = s + k < words
-                      ? flat[idx * (fields * batch * count) +
-                      t * fields * batch +
-                      r * fields +
-                      m]
-                      : 0f;
-                  }
+            long rowBase = (long) mc * maxSpans * r;
+            for (int s = 0; s < words; s++) {
+              for (int k = 0; k < maxWidth && s + k < words; k++) {
+                int base = (int) (rowBase + (long) mc * (s * maxWidth + k));
+                for (int t = 0; t < count; t++) {
+                  int tb = base + fields * t;
+                  for (int m = 0; m < fields; m++) spans[t][m][s][k] = flat[tb +
+                  m];
                 }
               }
             }

@@ -480,6 +480,376 @@ final class Ggml {
     );
   }
 
+  static int typeF16() {
+    return LlamaRuntime.llama_h("GGML_TYPE_F16", new Class[0]);
+  }
+
+  static int typeQ8_0() {
+    return LlamaRuntime.llama_h("GGML_TYPE_Q8_0", new Class[0]);
+  }
+
+  static int precF32() {
+    return LlamaRuntime.llama_h("GGML_PREC_F32", new Class[0]);
+  }
+
+  private static final java.util.concurrent.ConcurrentHashMap<
+    String,
+    java.lang.invoke.MethodHandle
+  > RAW = new java.util.concurrent.ConcurrentHashMap<>();
+
+  /**
+   * A downcall to a ggml symbol the jextract bindings do not cover, resolved from the
+   * {@code System.load}ed libggml / libggml-base (see {@code LlamaLibLoader}).
+   */
+  private static java.lang.invoke.MethodHandle raw(
+    String symbol,
+    java.lang.foreign.FunctionDescriptor fd
+  ) {
+    return RAW.computeIfAbsent(symbol, s ->
+      java.lang.foreign.Linker.nativeLinker().downcallHandle(
+        java.lang.foreign.SymbolLookup.loaderLookup()
+          .find(s)
+          .orElseThrow(() ->
+            new IllegalStateException(s + " not found in loaded ggml libraries")
+          ),
+        fd
+      )
+    );
+  }
+
+  /** {@code ggml_cast(ctx, a, type)} — a typed copy (works on non-contiguous views). */
+  static MemorySegment cast(MemorySegment ctx, MemorySegment a, int type) {
+    try {
+      return (MemorySegment) raw(
+        "ggml_cast",
+        java.lang.foreign.FunctionDescriptor.of(
+          ValueLayout.ADDRESS,
+          ValueLayout.ADDRESS,
+          ValueLayout.ADDRESS,
+          ValueLayout.JAVA_INT
+        )
+      ).invokeExact(ctx, a, type);
+    } catch (RuntimeException e) {
+      throw e;
+    } catch (Throwable t) {
+      throw new IllegalStateException("ggml_cast failed", t);
+    }
+  }
+
+  /**
+   * Fused attention {@code softmax(scale·qkᵀ + mask)·v}. {@code q (d, n_q, heads, ne3)},
+   * {@code k / v (d, n_kv, heads_kv, ne3)} (v NOT transposed), {@code mask (n_kv, n_q, ne32, ne33)}
+   * F16 contiguous, result {@code (d, heads, n_q, ne3)} (permuted). On CUDA the mask must not
+   * carry a head dimension ({@code ne32 == 1}).
+   */
+  static MemorySegment flashAttnExt(
+    MemorySegment ctx,
+    MemorySegment q,
+    MemorySegment k,
+    MemorySegment v,
+    MemorySegment mask,
+    float scale
+  ) {
+    return LlamaRuntime.llama_h(
+      "ggml_flash_attn_ext",
+      new Class[] { S, S, S, S, S, float.class, float.class, float.class },
+      ctx,
+      q,
+      k,
+      v,
+      mask,
+      scale,
+      0.0f,
+      0.0f
+    );
+  }
+
+  /**
+   * {@code ggml_mul_mat_set_prec(t, GGML_PREC_F32)}: with an f16 {@code src0} CUDA then runs the
+   * tensor-core GEMM with f32 accumulation and an f32 result, instead of an f16 result plus a
+   * separate f16→f32 conversion pass.
+   */
+  static MemorySegment mulMatPrec(MemorySegment t, int prec) {
+    try {
+      raw(
+        "ggml_mul_mat_set_prec",
+        java.lang.foreign.FunctionDescriptor.ofVoid(
+          ValueLayout.ADDRESS,
+          ValueLayout.JAVA_INT
+        )
+      ).invokeExact(t, prec);
+      return t;
+    } catch (RuntimeException e) {
+      throw e;
+    } catch (Throwable x) {
+      throw new IllegalStateException("ggml_mul_mat_set_prec failed", x);
+    }
+  }
+
+  static void flashAttnExtSetPrec(MemorySegment t, int prec) {
+    try {
+      raw(
+        "ggml_flash_attn_ext_set_prec",
+        java.lang.foreign.FunctionDescriptor.ofVoid(
+          ValueLayout.ADDRESS,
+          ValueLayout.JAVA_INT
+        )
+      ).invokeExact(t, prec);
+    } catch (RuntimeException e) {
+      throw e;
+    } catch (Throwable x) {
+      throw new IllegalStateException("ggml_flash_attn_ext_set_prec failed", x);
+    }
+  }
+
+  // ---- backend registry, plugins, scheduler ---------------------------------
+
+  /** {@code ggml_backend_load(path)}: loads a backend plugin; NULL when rejected (missing symbol, API version). */
+  static MemorySegment backendLoad(String path) {
+    try (var a = Arena.ofConfined()) {
+      return LlamaRuntime.llama_h(
+        "ggml_backend_load",
+        S1,
+        a.allocateFrom(path)
+      );
+    }
+  }
+
+  static MemorySegment regByName(String name) {
+    try (var a = Arena.ofConfined()) {
+      return LlamaRuntime.llama_h(
+        "ggml_backend_reg_by_name",
+        S1,
+        a.allocateFrom(name)
+      );
+    }
+  }
+
+  static String regName(MemorySegment reg) {
+    MemorySegment s = LlamaRuntime.llama_h("ggml_backend_reg_name", S1, reg);
+    return s.reinterpret(Long.MAX_VALUE).getString(0);
+  }
+
+  static MemorySegment regDevGet(MemorySegment reg, long index) {
+    return LlamaRuntime.llama_h(
+      "ggml_backend_reg_dev_get",
+      new Class[] { S, long.class },
+      reg,
+      index
+    );
+  }
+
+  /** {@code ggml_backend_reg_get_proc_address}: a function pointer exported by a backend plugin, or NULL. */
+  static MemorySegment regGetProcAddress(MemorySegment reg, String name) {
+    try (var a = Arena.ofConfined()) {
+      return (MemorySegment) raw(
+        "ggml_backend_reg_get_proc_address",
+        java.lang.foreign.FunctionDescriptor.of(
+          ValueLayout.ADDRESS,
+          ValueLayout.ADDRESS,
+          ValueLayout.ADDRESS
+        )
+      ).invokeExact(reg, a.allocateFrom(name));
+    } catch (RuntimeException e) {
+      throw e;
+    } catch (Throwable t) {
+      throw new IllegalStateException(
+        "ggml_backend_reg_get_proc_address failed",
+        t
+      );
+    }
+  }
+
+  /** Calls a {@code const char * (*)(void)} exported through {@link #regGetProcAddress}. */
+  static String callStringFn(MemorySegment fn) {
+    try {
+      var h = java.lang.foreign.Linker.nativeLinker().downcallHandle(
+        fn,
+        java.lang.foreign.FunctionDescriptor.of(ValueLayout.ADDRESS)
+      );
+      var s = (MemorySegment) h.invokeExact();
+      return s.reinterpret(Long.MAX_VALUE).getString(0);
+    } catch (RuntimeException e) {
+      throw e;
+    } catch (Throwable t) {
+      throw new IllegalStateException("native string function failed", t);
+    }
+  }
+
+  /**
+   * {@code ggml_custom_4d}: an opaque op computed by whichever backend recognises {@code fun}
+   * (see the DEBERTA plugin). {@code args} are copied into the node's sources by ggml.
+   */
+  static MemorySegment custom4d(
+    MemorySegment ctx,
+    int type,
+    long ne0,
+    long ne1,
+    long ne2,
+    long ne3,
+    MemorySegment[] args,
+    MemorySegment fun,
+    int nTasks,
+    MemorySegment userdata
+  ) {
+    try (var a = Arena.ofConfined()) {
+      var arr = a.allocate(ValueLayout.ADDRESS, args.length);
+      for (int i = 0; i < args.length; i++) {
+        arr.setAtIndex(ValueLayout.ADDRESS, i, args[i]);
+      }
+      return LlamaRuntime.llama_h(
+        "ggml_custom_4d",
+        new Class[] {
+          S,
+          int.class,
+          long.class,
+          long.class,
+          long.class,
+          long.class,
+          S,
+          int.class,
+          S,
+          int.class,
+          S,
+        },
+        ctx,
+        type,
+        ne0,
+        ne1,
+        ne2,
+        ne3,
+        arr,
+        args.length,
+        fun,
+        nTasks,
+        userdata
+      );
+    }
+  }
+
+  /** {@code ggml_backend_sched_new(backends, NULL, n, graphSize, parallel, opOffload)}; the last backend must be the CPU one. */
+  /** Whether a symbol is exported by the loaded ggml libraries (feature detection, e.g. patched schedulers). */
+  static boolean hasSymbol(String name) {
+    return java.lang.foreign.SymbolLookup.loaderLookup().find(name).isPresent();
+  }
+
+  /** Calls a {@code void (*)(bool)} exported through {@link #regGetProcAddress}. */
+  static void callBoolFn(MemorySegment fn, boolean value) {
+    try {
+      java.lang.foreign.Linker.nativeLinker()
+        .downcallHandle(
+          fn,
+          java.lang.foreign.FunctionDescriptor.ofVoid(ValueLayout.JAVA_BOOLEAN)
+        )
+        .invokeExact(value);
+    } catch (RuntimeException e) {
+      throw e;
+    } catch (Throwable t) {
+      throw new IllegalStateException("native bool function failed", t);
+    }
+  }
+
+  static MemorySegment schedNew(
+    Arena arena,
+    MemorySegment[] backends,
+    long graphSize
+  ) {
+    return schedNew(arena, backends, graphSize, false);
+  }
+
+  /** {@code parallel} allocates per-backend events (4 input copies) — needed for stream-side cross-backend ordering. */
+  static MemorySegment schedNew(
+    Arena arena,
+    MemorySegment[] backends,
+    long graphSize,
+    boolean parallel
+  ) {
+    var arr = arena.allocate(ValueLayout.ADDRESS, backends.length);
+    for (int i = 0; i < backends.length; i++) {
+      arr.setAtIndex(ValueLayout.ADDRESS, i, backends[i]);
+    }
+    return LlamaRuntime.llama_h(
+      "ggml_backend_sched_new",
+      new Class[] { S, S, int.class, long.class, boolean.class, boolean.class },
+      arr,
+      MemorySegment.NULL,
+      backends.length,
+      graphSize,
+      parallel,
+      false
+    );
+  }
+
+  static void schedFree(MemorySegment sched) {
+    LlamaRuntime.llama_h("ggml_backend_sched_free", S1, sched);
+  }
+
+  static void schedReset(MemorySegment sched) {
+    LlamaRuntime.llama_h("ggml_backend_sched_reset", S1, sched);
+  }
+
+  static boolean schedAllocGraph(MemorySegment sched, MemorySegment graph) {
+    return LlamaRuntime.llama_h(
+      "ggml_backend_sched_alloc_graph",
+      S2,
+      sched,
+      graph
+    );
+  }
+
+  static int schedGraphCompute(MemorySegment sched, MemorySegment graph) {
+    return LlamaRuntime.llama_h(
+      "ggml_backend_sched_graph_compute",
+      S2,
+      sched,
+      graph
+    );
+  }
+
+  static int schedNumSplits(MemorySegment sched) {
+    return LlamaRuntime.llama_h("ggml_backend_sched_get_n_splits", S1, sched);
+  }
+
+  /** {@code ggml_view_4d}: strides {@code nb1..nb3} and {@code offset} in bytes; {@code nb0} is the element size. */
+  static MemorySegment view4d(
+    MemorySegment ctx,
+    MemorySegment a,
+    long ne0,
+    long ne1,
+    long ne2,
+    long ne3,
+    long nb1,
+    long nb2,
+    long nb3,
+    long offset
+  ) {
+    return LlamaRuntime.llama_h(
+      "ggml_view_4d",
+      new Class[] {
+        S,
+        S,
+        long.class,
+        long.class,
+        long.class,
+        long.class,
+        long.class,
+        long.class,
+        long.class,
+        long.class,
+      },
+      ctx,
+      a,
+      ne0,
+      ne1,
+      ne2,
+      ne3,
+      nb1,
+      nb2,
+      nb3,
+      offset
+    );
+  }
+
   static MemorySegment concat(
     MemorySegment ctx,
     MemorySegment a,
@@ -542,17 +912,83 @@ final class Ggml {
     );
   }
 
-  static MemorySegment cpuInit() {
-    return LlamaRuntime.llama_h("ggml_backend_cpu_init", new Class[0]);
+  static int deviceTypeCpu() {
+    return LlamaRuntime.llama_h("GGML_BACKEND_DEVICE_TYPE_CPU", new Class[0]);
   }
 
-  static void cpuSetThreads(MemorySegment backend, int n) {
-    LlamaRuntime.llama_h(
-      "ggml_backend_cpu_set_n_threads",
-      new Class[] { S, int.class },
-      backend,
-      n
+  /**
+   * The CPU backend through the device registry. {@code ggml_backend_cpu_init} lives in the
+   * {@code libggml-cpu*} plugin, which is dlopen'ed by {@code ggml_backend_load_all_from_path}
+   * (RTLD_LOCAL) and never {@code System.load}ed, so a direct symbol lookup fails on every build
+   * with {@code GGML_BACKEND_DL=ON} (the Linux prebuilt natives and any custom CUDA build).
+   */
+  static MemorySegment cpuDevice() {
+    MemorySegment dev = LlamaRuntime.llama_h(
+      "ggml_backend_dev_by_type",
+      new Class[] { int.class },
+      deviceTypeCpu()
     );
+    if (dev.address() == 0) {
+      throw new IllegalStateException(
+        "ggml CPU backend not registered — is libggml-cpu*.so next to libggml.so?"
+      );
+    }
+    return dev;
+  }
+
+  static MemorySegment cpuInit() {
+    return deviceInit(cpuDevice());
+  }
+
+  /**
+   * Backend-agnostic {@code ggml_backend_set_n_threads}: the CPU plugin exports it only through
+   * {@code ggml_backend_reg_get_proc_address} (libggml-base, which is {@code System.load}ed), and
+   * the returned function pointer is called with a plain FFM downcall.
+   */
+  static void cpuSetThreads(MemorySegment backend, int n) {
+    try {
+      MemorySegment reg = LlamaRuntime.llama_h(
+        "ggml_backend_dev_backend_reg",
+        S1,
+        cpuDevice()
+      );
+      var linker = java.lang.foreign.Linker.nativeLinker();
+      var getProc = linker.downcallHandle(
+        java.lang.foreign.SymbolLookup.loaderLookup()
+          .find("ggml_backend_reg_get_proc_address")
+          .orElseThrow(() ->
+            new IllegalStateException(
+              "ggml_backend_reg_get_proc_address not found in loaded libggml-base"
+            )
+          ),
+        java.lang.foreign.FunctionDescriptor.of(
+          ValueLayout.ADDRESS,
+          ValueLayout.ADDRESS,
+          ValueLayout.ADDRESS
+        )
+      );
+      try (var a = Arena.ofConfined()) {
+        var fn = (MemorySegment) getProc.invokeExact(
+          reg,
+          a.allocateFrom("ggml_backend_set_n_threads")
+        );
+        if (fn.address() == 0) {
+          return; // backend has no thread control; keep its default
+        }
+        var setThreads = linker.downcallHandle(
+          fn,
+          java.lang.foreign.FunctionDescriptor.ofVoid(
+            ValueLayout.ADDRESS,
+            ValueLayout.JAVA_INT
+          )
+        );
+        setThreads.invokeExact(backend, n);
+      }
+    } catch (RuntimeException e) {
+      throw e;
+    } catch (Throwable t) {
+      throw new IllegalStateException("ggml_backend_set_n_threads failed", t);
+    }
   }
 
   static void backendFree(MemorySegment backend) {
@@ -569,6 +1005,11 @@ final class Ggml {
       ctx,
       backend
     );
+  }
+
+  /** {@code ggml_backend_tensor_copy(src, dst)}: same-shape copy, device-to-device when both live on the backend. */
+  static void tensorCopy(MemorySegment src, MemorySegment dst) {
+    LlamaRuntime.llama_h("ggml_backend_tensor_copy", S2, src, dst);
   }
 
   static void bufferFree(MemorySegment buffer) {

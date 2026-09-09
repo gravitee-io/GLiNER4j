@@ -57,6 +57,7 @@ Families:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -233,12 +234,19 @@ class HeadsWriter:
         else:
             self.w.add_string(key, str(value))
 
-    def tensors(self, state: dict[str, torch.Tensor], rename=lambda k: k) -> None:
+    def tensors(self, state: dict[str, torch.Tensor], rename=lambda k: k, f16_matrix=None) -> None:
+        """Write ``state``; ``f16_matrix(name, arr)`` selects 2-D matrices stored as f16 (only ones the
+        graph uses as ``mul_mat`` weights — anything read element-wise must stay f32)."""
+        import numpy as np
+
         for name, tensor in state.items():
             short = rename(name)
             if len(short.encode()) >= 64:
                 raise RuntimeError(f"ggml tensor name too long ({len(short)}): {short}")
-            self.w.add_tensor(short, tensor.detach().float().cpu().numpy())
+            arr = tensor.detach().float().cpu().numpy()
+            if f16_matrix is not None and arr.ndim == 2 and f16_matrix(short, arr):
+                arr = arr.astype(np.float16)
+            self.w.add_tensor(short, arr)
             self.n += 1
 
     def close(self) -> None:
@@ -287,12 +295,19 @@ DEBERTA_REFERENCE_TEXTS = {
 }
 
 
-def add_deberta_encoder(heads: "HeadsWriter", encoder: nn.Module, dtype: str = "f16", prefix: str = "") -> None:
+def add_deberta_encoder(
+    heads: "HeadsWriter", encoder: nn.Module, dtype: str = "f16", prefix: str = "", quant: str | None = None
+) -> None:
     """Write a HF ``DebertaV2Model`` (embeddings + encoder) as ``encoder.gguf`` for ``GgmlDebertaV3``.
 
     Input-independent work is folded in: the rel-embedding LayerNorm is applied to the table, and
     with ``share_att_key`` the per-layer position keys/queries (``key_proj``/``query_proj`` of that
     table) are stored as ``layer.N.pos_key`` / ``layer.N.pos_query`` so the Java graph only gathers.
+
+    ``quant`` (``q8_0`` / ``q5_0`` / ``q4_0``) block-quantises the big matrices the graph only ever
+    uses as ``mul_mat`` / ``get_rows`` sources — the six linear weights per layer and the word
+    embeddings (row length must be a multiple of the 32-element block). Position tables, LayerNorm
+    params and biases stay f16 / f32.
     """
     import numpy as np
 
@@ -319,6 +334,7 @@ def add_deberta_encoder(heads: "HeadsWriter", encoder: nn.Module, dtype: str = "
     heads.kv("deberta.att_span", int(att_span))
     heads.kv("deberta.layer_norm_eps", float(cfg.layer_norm_eps))
     heads.kv("deberta.vocab_size", int(cfg.vocab_size))
+    heads.kv("deberta.pos_per_head", 1)  # pos_key / pos_query: (head_dim, 2·att_span, heads), pre-scaled
 
     np_dtype = np.float16 if dtype == "f16" else np.float32
     with torch.no_grad():
@@ -331,22 +347,58 @@ def add_deberta_encoder(heads: "HeadsWriter", encoder: nn.Module, dtype: str = "
         for i, layer in enumerate(enc.layer):
             a = layer.attention.self
             p = f"layer.{i}."
-            state[p + "pos_key"] = a.key_proj(rel)
-            state[p + "pos_query"] = a.query_proj(rel)
+            # Stored per head and pre-scaled by 1/sqrt(3·d): (heads, 2·att_span, head_dim) → ggml
+            # ne = (head_dim, 2·att_span, heads), so the Java graph gathers rows straight into the
+            # attention layout without a permute/copy or a scale pass (see GgmlDebertaV3).
+            head_dim = cfg.hidden_size // cfg.num_attention_heads
+            attn_scale = 1.0 / math.sqrt(3.0 * head_dim)
+            for name, proj in (("pos_key", a.key_proj), ("pos_query", a.query_proj)):
+                table = proj(rel) * attn_scale  # (2·att_span, hidden)
+                state[p + name] = table.view(table.shape[0], cfg.num_attention_heads, head_dim).permute(1, 0, 2).contiguous()
+            # q / k / v as one (3·hidden, hidden) projection: one GEMM (and one f32↔f16 round trip on
+            # CUDA) per layer instead of three; the Java graph slices the result.
+            state[p + "qkv.weight"] = torch.cat([a.query_proj.weight, a.key_proj.weight, a.value_proj.weight], 0)
+            state[p + "qkv.bias"] = torch.cat([a.query_proj.bias, a.key_proj.bias, a.value_proj.bias], 0)
             for name, mod in [
-                ("q", a.query_proj), ("k", a.key_proj), ("v", a.value_proj),
                 ("attn_out", layer.attention.output.dense), ("attn_ln", layer.attention.output.LayerNorm),
                 ("ffn_up", layer.intermediate.dense), ("ffn_down", layer.output.dense), ("ffn_ln", layer.output.LayerNorm),
             ]:
                 state[p + name + ".weight"] = mod.weight
                 state[p + name + ".bias"] = mod.bias
     # large matrices in the requested dtype, vectors/LN params in f32
+    qtype = _quant_type(quant)
     for name, t in state.items():
         arr = t.detach().float().cpu().numpy()
-        if arr.ndim == 2 and dtype == "f16" and not name.endswith("_ln.weight"):
-            arr = arr.astype(np_dtype)
-        heads.w.add_tensor(prefix + name, arr)
+        if qtype is not None and _quantizable_encoder_matrix(name, arr):
+            from gguf import quants
+
+            heads.w.add_tensor(prefix + name, quants.quantize(arr, qtype), raw_dtype=qtype)
+        else:
+            if arr.ndim >= 2 and dtype == "f16" and not name.endswith("_ln.weight"):
+                arr = arr.astype(np_dtype)
+            heads.w.add_tensor(prefix + name, arr)
         heads.n += 1
+
+
+_QUANTIZABLE_SUFFIXES = (".qkv.weight", ".q.weight", ".k.weight", ".v.weight", ".attn_out.weight", ".ffn_up.weight", ".ffn_down.weight")
+
+
+def _quant_type(quant: str | None):
+    if not quant:
+        return None
+    from gguf import GGMLQuantizationType
+
+    try:
+        return GGMLQuantizationType[quant.upper()]
+    except KeyError as e:
+        raise typer.BadParameter(f"unknown quantization {quant!r} (q8_0, q5_0, q4_0, …)") from e
+
+
+def _quantizable_encoder_matrix(name: str, arr) -> bool:
+    """Matrices used only as mul_mat / get_rows sources (row length a multiple of the 32-wide block)."""
+    if arr.ndim != 2 or arr.shape[1] % 32 != 0:
+        return False
+    return name == "embeddings.word_embeddings.weight" or name.endswith(_QUANTIZABLE_SUFFIXES)
 
 
 def export_deberta_encoder_gguf(encoder: nn.Module, out_path: Path, dtype: str = "f16") -> Path:
@@ -440,7 +492,10 @@ def _force_whitespace_splitter() -> None:
     _gtok.WordsSplitter.__init__ = _init
 
 
-def _gliner_bundle(model, gcfg: dict, output_dir: Path, dtype: str, architecture: str, labels_gguf: str | None, extra_cfg: dict) -> None:
+def _gliner_bundle(
+    model, gcfg: dict, output_dir: Path, dtype: str, architecture: str, labels_gguf: str | None, extra_cfg: dict,
+    quant: list[str] | None = None,
+) -> None:
     """Common part of the gliner-uni / gliner-bi exports: model.gguf, config, tokenizer, reference."""
     core = model.model
     encoder = core.token_rep_layer.bert_layer.model
@@ -454,13 +509,6 @@ def _gliner_bundle(model, gcfg: dict, output_dir: Path, dtype: str, architecture
     if has_rnn:
         assert core.rnn.lstm.num_layers == 1 and core.rnn.lstm.bidirectional, "expected 1-layer biLSTM"
 
-    console.print("[cyan]1/3[/cyan] model.gguf (encoder + heads)")
-    heads = HeadsWriter(output_dir / "gguf" / "model.gguf", "gliner4j-" + architecture)
-    add_deberta_encoder(heads, encoder, dtype, prefix="enc.")
-    heads.kv("gliner.hidden_size", int(gcfg["hidden_size"]))
-    heads.kv("gliner.max_width", int(gcfg["max_width"]))
-    heads.kv("gliner.has_rnn", bool(has_rnn))
-    heads.kv("gliner.span_mode", str(span_mode))
     renames = dict(_GLINER_UNI_RENAMES)
     renames["token_rep_layer.projection."] = "proj."
     renames["token_rep_layer.labels_projection."] = "labels_projection."
@@ -469,8 +517,29 @@ def _gliner_bundle(model, gcfg: dict, output_dir: Path, dtype: str, architecture
         for k, v in core.state_dict().items()
         if not k.startswith("token_rep_layer.bert_layer.") and not k.startswith("token_rep_layer.labels_encoder.")
     }
-    heads.tensors(head_state)
-    heads.close()
+
+    def head_f16(name: str, arr) -> bool:
+        # Every 2-D head matrix is a mul_mat weight (span / prompt / scorer projections, the
+        # encoder projection, the LSTM input and recurrent weights) — f16 puts them on the tensor
+        # cores like the GLiNER2 heads; biases stay f32. The plugin's fused LSTM reads W_hh in
+        # either type.
+        return dtype == "f16" and (name.endswith(".weight") or name.startswith("lstm.weight_"))
+
+    def write_gguf(name: str, q: str | None) -> None:
+        heads = HeadsWriter(output_dir / "gguf" / name, "gliner4j-" + architecture)
+        add_deberta_encoder(heads, encoder, dtype, prefix="enc.", quant=q)
+        heads.kv("gliner.hidden_size", int(gcfg["hidden_size"]))
+        heads.kv("gliner.max_width", int(gcfg["max_width"]))
+        heads.kv("gliner.has_rnn", bool(has_rnn))
+        heads.kv("gliner.span_mode", str(span_mode))
+        heads.tensors(head_state, f16_matrix=head_f16)
+        heads.close()
+
+    quant = quant or []
+    console.print(f"[cyan]1/3[/cyan] model.gguf (encoder + heads){' + ' + ', '.join(quant) if quant else ''}")
+    write_gguf("model.gguf", None)
+    for q in quant:
+        write_gguf(f"model-{q}.gguf", q)  # variant=<q> in GgmlWeights.resolveModelGguf
 
     console.print("[cyan]2/3[/cyan] config + tokenizer")
     config = {
@@ -529,6 +598,9 @@ def gliner_uni(
     model_path: str = typer.Option(..., help="HF id or dir of an original-GLiNER uni-encoder checkpoint"),
     output_dir: Path = typer.Option(..., help="Bundle directory to write"),
     dtype: str = typer.Option("f16", help="f16 or f32 for the encoder / head matrices"),
+    quant: list[str] = typer.Option(
+        [], "--quant", help="also write gguf/model-<quant>.gguf with block-quantised encoder matrices (q8_0, q5_0, q4_0)"
+    ),
 ):
     """Original GLiNER uni-encoder (markerV0 span model or token_level) → one model.gguf bundle."""
     console.print(f"[bold]GLiNER uni-encoder → ggml[/bold]  {model_path}")
@@ -541,7 +613,7 @@ def gliner_uni(
     if gcfg.get("labels_encoder"):
         raise typer.BadParameter("this is a bi-encoder checkpoint — use the gliner-bi command")
     output_dir.mkdir(parents=True, exist_ok=True)
-    _gliner_bundle(model, gcfg, output_dir, dtype, "gliner-uni", None, {})
+    _gliner_bundle(model, gcfg, output_dir, dtype, "gliner-uni", None, {}, quant=quant)
 
 
 @app.command("gliner-bi")
@@ -552,6 +624,9 @@ def gliner_bi(
         Path(os.environ.get("LLAMA_CPP_DIR", "../llama.cpp")), help="llama.cpp checkout (convert_hf_to_gguf.py)"
     ),
     dtype: str = typer.Option("f16", help="f16 or f32 for the text encoder / head matrices"),
+    quant: list[str] = typer.Option(
+        [], "--quant", help="also write gguf/model-<quant>.gguf with block-quantised encoder matrices (q8_0, q5_0, q4_0)"
+    ),
     labels_gguf_type: str = typer.Option("f16", help="GGUF outtype for the label encoder"),
 ):
     """Original GLiNER bi-encoder → model.gguf (text model) + labels-*.gguf (llama.cpp-native label encoder)."""
@@ -574,7 +649,7 @@ def gliner_bi(
         "labels_hidden_size": int(labels_encoder.config.hidden_size),
         "labels_n_ubatch": 512,
     }
-    _gliner_bundle(model, gcfg, output_dir, dtype, "gliner-bi", labels_gguf, extra)
+    _gliner_bundle(model, gcfg, output_dir, dtype, "gliner-bi", labels_gguf, extra, quant=quant)
 
 
 # ===========================================================================

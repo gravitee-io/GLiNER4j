@@ -318,68 +318,179 @@ length, batch size, and entity/label count.
 
 ### Cross-family comparison
 
-Indicative single-text latency on **one CPU dev machine** (FP32, short text, 4 entity types /
-labels). Absolute latency is machine-dependent — read this as a *relative* comparison across
-families, **not** as a match to the GLiNER2 table below (measured separately on different hardware).
+Single-text latency on one CPU dev machine (FP32, short text, 4 entity types / labels), ordered
+fastest first. Absolute latency is machine-dependent — run the benchmark on your own hardware.
 
-| Family / model | Task | Backbone | batch=1 (ms) |
-|---|---|---|---|
-| GLiClass **edge** (`gliclass-edge`) | classification | ettin-32m (~32M) | **36** |
-| GLiNER **bi-encoder** (`gliner-bi-small`) | NER | deberta-small + MiniLM | 170 |
-| GLiNER **uni-encoder** (`gliner-pii-base`) | NER | deberta-small | 193 |
-| GLiClass (`gliclass-modern-base`) | classification | ModernBERT-base | 256 |
-| GLiNER2 base (`gliner2-base`) | NER | deberta-base | 321 |
+| Family / model | Task | Backbone |
+|---|---|---|
+| GLiClass **edge** (`gliclass-edge`) | classification | ettin-32m (~32M) |
+| GLiNER **bi-encoder** (`gliner-bi-small`) | NER | deberta-small + MiniLM |
+| GLiNER **uni-encoder** (`gliner-pii-base`) | NER | deberta-small |
+| GLiClass (`gliclass-modern-base`) | classification | ModernBERT-base |
+| GLiNER2 base (`gliner2-base`) | NER | deberta-base |
 
 ### ONNX Runtime vs llama.cpp (same model)
 
 `task benchmark:engines` — `gliclass-edge` (ettin-32m), 8 labels, INT8 ONNX vs q8_0 GGUF, JMH
-average time per `classifyBatch` on an Apple M-series laptop (10 performance cores; ORT has no
-GPU provider there, llama.cpp uses Metal under `AUTO`):
+average time per `classifyBatch` on an Apple-silicon laptop (ORT has no GPU provider there,
+llama.cpp uses Metal under `AUTO`): llama.cpp CPU beats ONNX Runtime CPU at every batch and text
+length, and Metal beats both by a wide margin.
 
-| batch × text | ONNX Runtime CPU | llama.cpp CPU | llama.cpp Metal |
-|---|---|---|---|
-| 1 × short (~64 tok) | 13.0 ms | **4.4 ms** | **2.2 ms** |
-| 1 × long (~512 tok) | 50.6 ms | **18.2 ms** | **7.0 ms** |
-| 8 × short | 106.8 ms | **25.3 ms** | **9.3 ms** |
-| 8 × long | 424.0 ms | **164.1 ms** | **49.9 ms** |
+The same holds for GLiNER2 NER on that machine (`InferenceBenchmark`, 8 entity types): for
+`gliner2-base`, `gliner2-privacy` (mDeBERTa, 250k vocab) and `gliner-pii-base` (uni-encoder) alike,
+llama.cpp q8_0 CPU edges out ONNX int8 CPU and Metal is several times faster than either. Re-checked
+on llamaj.cpp 2.8.0 (llama.cpp v0.4.0): unchanged within noise.
 
-GLiNER2 NER on the same machine (`InferenceBenchmark`, 8 entity types, short text, batch 1):
-`gliner2-base` 56 ms ONNX int8 CPU vs 47 ms llama.cpp q8_0 CPU vs 20 ms Metal; `gliner2-privacy`
-(mDeBERTa, 250k vocab) 97 ms vs 79 ms vs 41 ms; `gliner-pii-base` (uni-encoder) 34 ms vs 31 ms vs 13 ms.
-Numbers re-checked on llamaj.cpp 2.8.0 (llama.cpp v0.4.0): unchanged within noise.
+On an NVIDIA GPU both engines get a real accelerator (ONNX Runtime with `-Pcuda`, llama.cpp with a
+CUDA build via `LLAMA_CPP_LIB_PATH`); the reference runs here used a consumer laptop CUDA card.
+Mind the methodology: a throttling card moves every figure substantially between a cool and a hot
+run, so only interleaved pairs are comparable (`gliner4j-benchmark/target/ab.sh` pattern).
+
+The ggml DeBERTa encoder builds its disentangled attention as strided views of the position scores
+(no `n·n·heads` gather), assembles the position bias in f16 and runs `ggml_flash_attn_ext` with it
+as the mask; Q/K/V are one fused projection, batch rows are merged into the sequence axis for the
+position products, and the GLiNER2 head matrices are f16 — that is the "composed" graph, an order
+of magnitude below the original gather-based one. The fused kernel below replaces that attention
+block again. On CUDA rows up to `gliner4j.ggml.batchMaxTokens` (default 384) are scored as one
+padded batch, longer ones one by one.
+
+Under the same paired protocol across all families (fused plugin loaded, batched GLiNER2.5 scoring,
+fused LSTM + f16 heads for the uni-encoder), llama.cpp f16 CUDA beats ONNX fp16 CUDA on every
+single-row call and every long batch of the DeBERTa-backbone families — GLiNER2 base, GLiNER2
+privacy (42 labels), GLiGuard classification, GLiNER2.5 small and GLiNER PII base. GLiNER2.5
+small's short batches are parity, with a run-to-run spread wider than the gap. That family's
+`short b8` improved several-fold in three steps — `scoreEntitiesBatch` pads the rows into one encoder pass, the boundary encoder
+and heads run once over the padded `(·, words, B)` stack (per-row `[EOS]` gathered at each
+row's length, padding masked out of the boundary attention) and all candidates are scored in
+one batched stage-B graph; f16 head matrices; and a host-side candidate pool that sorts packed
+primitive keys instead of boxed comparators (it cost more per call than the GPU pass). Two
+other gaps closed on the way: the GLiNER2 classifier used to score batch
+rows one by one (`classifyBatch` now serves CUDA batches under the same token threshold as NER),
+and the GLiNER2.5 and uni-encoder head matrices are exported in
+f16 like the GLiNER2 heads (tensor cores instead of `sgemm`; re-export with
+`task gliner2dot5-small:llamacpp` / `task gliner-pii:llamacpp`, older bundles keep working).
+The uni-encoder's word LSTM is the plugin's second op, one cooperative launch for the whole
+recurrence (every block owns a few hidden units, steps separated by a grid-wide barrier; the
+composed graph needed ~40 ops per word, and its long-text graph the larger scheduler capacity
+`GgmlWeights.SCHED_GRAPH_SIZE` now reserves). Quantized weights do not help on CUDA (q8_0 / q4_0
+measure slightly slower than f16: the encoder is not weight-bound and the dequantising matmuls cost
+more than they save) and f32 weights are markedly slower (plain `sgemm`, no tensor cores): f16 is
+the fast point on a tensor-core GPU.
+
+#### Fused DeBERTa attention plugin (CUDA)
+
+The remaining gap to ONNX Runtime on CUDA was the disentangled attention itself: composed from
+ggml ops it materialises two `(2n−1)·n·heads` position-score matrices per layer, reads them back
+as strided bands and adds them into an f16 mask for flash attention. `gliner4j-llamacpp/native/ggml-deberta/`
+is an out-of-tree **ggml backend plugin** — C++/CUDA living in this repo, built against a stock
+llama.cpp checkout at the tag llamaj.cpp pins — that computes
+`softmax(scale·q·kᵀ + q·P[i−j] + k·Qp[i−j])·v` in one tensor-core kernel, tile by tile in shared
+memory, so nothing n² is ever written. It registers a `DEBERTA` device that shares the CUDA buffer
+type; `GgmlWeights` then runs graphs through `ggml_backend_sched` over `[DEBERTA, CUDA, CPU]` with
+no copies at the split boundaries. CPU, Metal and plugin-less runs keep the composed graph. The
+disentangled attention itself is He et al.'s DeBERTa (see [References](#references)).
+
+The 2-layer DeBERTa-v2 stack of the GLiClass router scorer and the streaming-span labels encoder
+(`GgmlDeberta`) can run on the same op (`-Dgliner4j.ggml.fusedScorer=true`, tables built
+in-graph, and it is faster on a short label section) but stays on the composed graph by
+default: the kernel keeps its `q·kᵀ` tile in f16, which the LayerNorm-bounded backbone tolerates
+and the raw Qwen3 hidden states these scorers consume do not (logits drift ~1e-3 at unit scale
+and collapse at 50× — enough to flip a span sitting at the 0.5 threshold).
+
+```bash
+# needs cmake >= 3.24, nvcc, and ~/dev/llama.cpp built with -DBUILD_SHARED_LIBS=ON -DGGML_BACKEND_DL=ON -DGGML_CUDA=ON
+task llamacpp:deberta-plugin            # LLAMA_CPP_DIR, CUDA_ARCHS="80;86;89;90", PLUGIN_DIR overridable
+# → ~/.llama.cpp/plugins/libggml-deberta.so, picked up automatically (also $LLAMA_CPP_LIB_PATH/plugins/)
+#   -Dgliner4j.ggml.plugin=<file> | none   overrides discovery;  GLINER4J_DEBERTA_REF=1 selects the
+#   scalar reference kernel (debugging).  Rebuild the plugin whenever the llama.cpp pin changes: it
+#   bakes ggml's backend API version and is rejected at load time otherwise (the run logs it).
+```
+
+Two kernel families are compiled in. The original `wmma` kernel (`turing`: 64 queries × 32 keys,
+62 KB of shared memory; `ampere`: 64 × 64, 94 KB) stages scores and probabilities through shared
+memory as f16. The register-resident kernel (`reg64x32`, `reg64x64`, `reg128x32`, `reg128x64`:
+warps × keys, 56 to 147 KB) has the FlashAttention-2 structure on raw `mma.sync` + `ldmatrix`: each
+warp owns 16 query rows, the `q·kᵀ` scores stay in f32 registers, the probabilities re-pack in
+place as the next tensor-core operand and the accumulator rescale never touches shared memory;
+only the two position products `Q·Pᵀ` and `K·Qpᵀ` go through shared memory, because the score
+of `(i, j)` reads them on the diagonal `i − j`. On a 64 KB-shared-memory card (`reg64x32`, the one
+variant that fits) it beats the wmma kernel, and by more the longer the row.
+
+At first use on a device the plugin **autotunes**: every variant the card's shared memory holds is
+timed on a synthetic 1 024-token, 12-head problem and checked against the scalar reference kernel,
+the fastest correct one wins, and the whole table is logged (`gliner4j deberta: autotune … →`), so a
+deployment on an unfamiliar card shows what it runs. `GLINER4J_DEBERTA_KERNEL=<variant>` forces a
+kernel (`auto` re-enables the tuner), `GLINER4J_DEBERTA_AUTOTUNE=0` keeps the static rule (wmma
+64 × 64 where it fits, 64 × 32 elsewhere). The standalone harness runs every variant a card holds
+against a double-precision reference with timing in one command (`HEADS=12 N=1408 ./test_attn`).
+The op also accepts the f32 projections directly and converts them while staging
+(`-Dgliner4j.ggml.rawQkv=true` drops the three cast ops per layer); off by default because the
+kernel re-reads K / V per key tile and the doubled traffic costs more than the casts it removes.
+
+Requirements: per-head pre-scaled position tables in the bundle (exports from this version; older
+bundles silently keep the composed graph), head dim 64 (every DeBERTa-v3 size). The kernel is
+validated by `gliner4j-llamacpp/native/ggml-deberta/test_attn.cu` against a double-precision CPU
+reference and by `GgmlDebertaV3ParityTest` against HuggingFace hidden states.
+
+**Scheduler ordering.** ggml's scheduler orders consecutive splits on different backends with host
+round trips (or not at all when the split has inputs), which costs two per layer here. The build
+script applies `native/ggml-deberta/patches/0001-ggml-sched-cross-backend-events.patch` to the
+llama.cpp checkout (stream-side event waits between backends that share a device; ~20 lines,
+`git checkout ggml/` reverts it) and rebuilds `libggml-base`; the runtime detects it, creates the
+scheduler with events and switches the plugin's own host synchronisation off (log line
+"event ordering"; `-Dgliner4j.ggml.eventOrdering=false` forces the host-sync path). Without the
+patch everything still works, slightly slower on long calls.
+
+The DeBERTa-backbone bundles (`gliner2`, `gliner2dot5`, `gliner-uni`, `gliner-bi`) can also ship
+block-quantised encoder matrices: `--quant q8_0 --quant q4_0` on the export writes
+`gguf/model-<quant>.gguf` next to the f16 `model.gguf`, selected with `variant=q8_0` / `q4_0`
+(`f16` or the ONNX default name means `model.gguf`). GLiNER2 base: 485 MB f16 → 313 MB q8_0
+→ 221 MB q4_0. Against ONNX fp32 on five texts q8_0 keeps every span with scores within 0.006,
+q4_0 keeps the spans but confidences drift by up to 0.15. Speed is unchanged on both CPU and CUDA
+(the encoder is bound by the attention-bias tensors, not by the weight GEMMs), so the quantised
+variants are a memory choice, not a latency one.
 
 Concurrent calls (the batch fans out on virtual threads) are packed by the encoder dispatcher into
 shared `llama_encode` calls, which is where the batch-8 gap comes from. ggml threads default to the
 performance cores (`-Dgliner4j.llamacpp.threads=N` to override): one thread per logical CPU makes
 llama.cpp several times slower.
 
-The 32M **edge** classifier is ~7–9× faster than the base-size models; the **bi-encoder** NER (small
-DeBERTa + a tiny label encoder) edges out the uni-encoder; and **INT8** (`onnx_quantized`, the
-benchmark's default variant) is roughly **~2× faster again** on CPU.
+The 32M **edge** classifier is several times faster than the base-size models; the **bi-encoder**
+NER (small DeBERTa + a tiny label encoder) edges out the uni-encoder; and **INT8**
+(`onnx_quantized`, the benchmark's default variant) is faster again on CPU.
 
-### GLiNER2 reference (upstream measurement)
+### Running the benchmarks
 
-Measured with JMH (average time, 15 iterations) on the GLiNER2 `gliner2-base-onnx` model, NER:
-
-#### 4 entity types
-
-| Batch | Avg latency (ms/op) | ± (ms) | Per-text (ms) | Throughput (texts/s) |
-|:-----:|:-------------------:|:------:|:-------------:|:--------------------:|
-| 1 | 43.6 | 3.8 | 43.6 | ~23.0 |
-| 4 | 125.3 | 17.7 | 31.3 | ~31.9 |
-| 8 | 220.8 | 17.7 | 27.6 | ~36.2 |
-
-#### 8 entity types
-
-| Batch | Avg latency (ms/op) | ± (ms) | Per-text (ms) | Throughput (texts/s) |
-|:-----:|:-------------------:|:------:|:-------------:|:--------------------:|
-| 1 | 62.0 | 8.5 | 62.0 | ~16.1 |
-| 4 | 153.1 | 12.5 | 38.3 | ~26.1 |
-| 8 | 274.4 | 27.1 | 34.3 | ~29.2 |
+Batching amortises the encoder: per-text latency drops and throughput rises from batch 1 to 8, and
+more entity types cost more per call. Measure on your own hardware:
 
 ```bash
 java -jar gliner4j-benchmark/target/gliner4j-benchmark.jar -p executionProvider=cuda
 ```
+
+## References
+
+The disentangled attention that the ggml graphs, the CUDA plugin kernel and the export scripts
+implement is the DeBERTa research from Microsoft. This repository reimplements the maths from the
+papers and shares no code with the reference implementation; the model weights keep the licences
+stated on their HuggingFace model cards.
+
+- Pengcheng He, Xiaodong Liu, Jianfeng Gao, Weizhu Chen. *DeBERTa: Decoding-enhanced BERT with
+  Disentangled Attention.* ICLR 2021. [arXiv:2006.03654](https://arxiv.org/abs/2006.03654)
+- Pengcheng He, Jianfeng Gao, Weizhu Chen. *DeBERTaV3: Improving DeBERTa using ELECTRA-Style
+  Pre-Training with Gradient-Disentangled Embedding Sharing.* ICLR 2023.
+  [arXiv:2111.09543](https://arxiv.org/abs/2111.09543)
+- Reference implementation: [microsoft/DeBERTa](https://github.com/microsoft/DeBERTa), released
+  under the [MIT License](https://github.com/microsoft/DeBERTa/blob/master/LICENSE).
+
+### Third-party licences
+
+`gliner4j-llamacpp/licenses/`, shipped in that module's jar under `licenses/`:
+
+- `DEBERTA-V3-LICENSE.txt` — MIT, Microsoft Corporation
+  ([microsoft/DeBERTa](https://github.com/microsoft/DeBERTa)).
+- `LLAMA_CPP-LICENSE.txt` — MIT, the ggml authors
+  ([ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) `v0.4.0`, build `b10818`).
 
 ## Adding a model family
 

@@ -375,9 +375,47 @@ public final class GgmlGlinerUniModel implements AutoCloseable {
 
   /** gliner's {@code LstmSeq2SeqEncoder}: 1-layer bidirectional LSTM, output = [forward ; backward]. */
   private MemorySegment biLstm(MemorySegment ctx, MemorySegment x, int words) {
+    if (w.fusedLstm()) {
+      // DEBERTA plugin (CUDA): both recurrences in one kernel launch; only the per-step input
+      // contribution stays a regular matmul. The composed loop below costs ~40 ops per word.
+      return Ggml.custom4d(
+        ctx,
+        w.typeF32,
+        2L * lstmHidden,
+        words,
+        1,
+        1,
+        new MemorySegment[] {
+          inputContribution(ctx, x, ""),
+          inputContribution(ctx, x, "_reverse"),
+          w.get("lstm.weight_hh_l0"),
+          w.get("lstm.weight_hh_l0_reverse"),
+        },
+        w.lstmFn(),
+        1,
+        MemorySegment.NULL
+      ); // (2·lstmHidden, W) = [forward ; backward]
+    }
     var fwd = direction(ctx, x, words, "", false);
     var bwd = direction(ctx, x, words, "_reverse", true);
     return Ggml.concat(ctx, fwd, bwd, 0); // (2·lstmHidden, W)
+  }
+
+  /** {@code W_ih·x + b_ih + b_hh} for every step at once: {@code (4·lstmHidden, W)}. */
+  private MemorySegment inputContribution(
+    MemorySegment ctx,
+    MemorySegment x,
+    String suffix
+  ) {
+    return Ggml.add(
+      ctx,
+      Ggml.add(
+        ctx,
+        Ggml.mulMat(ctx, w.get("lstm.weight_ih_l0" + suffix), x),
+        w.get("lstm.bias_ih_l0" + suffix)
+      ),
+      w.get("lstm.bias_hh_l0" + suffix)
+    );
   }
 
   private MemorySegment direction(
@@ -388,16 +426,7 @@ public final class GgmlGlinerUniModel implements AutoCloseable {
     boolean reverse
   ) {
     int g = 4 * lstmHidden;
-    // Input contribution for every step at once: (4·lstmHidden, W), biases folded in.
-    var xw = Ggml.add(
-      ctx,
-      Ggml.add(
-        ctx,
-        Ggml.mulMat(ctx, w.get("lstm.weight_ih_l0" + suffix), x),
-        w.get("lstm.bias_ih_l0" + suffix)
-      ),
-      w.get("lstm.bias_hh_l0" + suffix)
-    );
+    var xw = inputContribution(ctx, x, suffix);
     var whh = w.get("lstm.weight_hh_l0" + suffix);
     long nb1 = Ggml.nb(xw, 1);
     long gateBytes = (long) lstmHidden * Float.BYTES;

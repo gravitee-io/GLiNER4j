@@ -27,6 +27,7 @@ import io.gravitee.llama.cpp.LlamaRuntime;
 import io.gravitee.llama.cpp.PoolingType;
 import io.gravitee.llama.cpp.nativelib.LlamaLibLoader;
 import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -143,6 +144,74 @@ public final class LlamaBackbone implements AutoCloseable {
     );
   }
 
+  /** Registry of the gliner4j DEBERTA plugin (fused disentangled attention), or NULL when not loaded. */
+  private static MemorySegment debertaPlugin = MemorySegment.NULL;
+
+  static MemorySegment debertaPlugin() {
+    return debertaPlugin;
+  }
+
+  /**
+   * Loads the out-of-tree {@code libggml-deberta} backend plugin (see
+   * {@code gliner4j-llamacpp/native/ggml-deberta}). ggml only auto-loads its own backend names, so
+   * the path is resolved here: {@code -Dgliner4j.ggml.plugin=<file|none>}, else
+   * {@code <natives dir>/plugins/}, else {@code ~/.llama.cpp/plugins/}. Absence is not an error —
+   * the encoder keeps its composed-ops graph.
+   */
+  private static MemorySegment loadDebertaPlugin(String libPath) {
+    var override = System.getProperty("gliner4j.ggml.plugin");
+    if ("none".equalsIgnoreCase(override)) {
+      return MemorySegment.NULL;
+    }
+    var file = System.getProperty("os.name")
+        .toLowerCase(java.util.Locale.ROOT)
+        .contains("mac")
+      ? "libggml-deberta.dylib"
+      : "libggml-deberta.so";
+    var candidates = new java.util.ArrayList<java.nio.file.Path>();
+    if (override != null && !override.isBlank()) {
+      candidates.add(java.nio.file.Path.of(override));
+    } else {
+      if (libPath != null) {
+        candidates.add(java.nio.file.Path.of(libPath, "plugins", file));
+      }
+      candidates.add(
+        java.nio.file.Path.of(
+          System.getProperty("user.home"),
+          ".llama.cpp",
+          "plugins",
+          file
+        )
+      );
+    }
+    for (var candidate : candidates) {
+      if (!java.nio.file.Files.isRegularFile(candidate)) {
+        continue;
+      }
+      var reg = Ggml.backendLoad(candidate.toAbsolutePath().toString());
+      if (reg.address() == 0) {
+        log.warn(
+          "ggml backend plugin {} was rejected (built against another ggml? rebuild with task llamacpp:deberta-plugin)",
+          candidate
+        );
+        return MemorySegment.NULL;
+      }
+      var versionFn = Ggml.regGetProcAddress(reg, "gliner4j_deberta_version");
+      log.info(
+        "Loaded ggml backend plugin {} ({}) from {}",
+        Ggml.regName(reg),
+        versionFn.address() == 0 ? "?" : Ggml.callStringFn(versionFn),
+        candidate
+      );
+      return reg;
+    }
+    log.info(
+      "No ggml DEBERTA plugin found ({}), using the composed attention graph",
+      candidates
+    );
+    return MemorySegment.NULL;
+  }
+
   static void initBackend() {
     synchronized (BACKEND_LOCK) {
       if (!backendInitialized) {
@@ -160,6 +229,7 @@ public final class LlamaBackbone implements AutoCloseable {
         });
         LlamaRuntime.llama_backend_init();
         LlamaRuntime.ggml_backend_load_all_from_path(backendArena, libPath);
+        debertaPlugin = loadDebertaPlugin(libPath);
         backendInitialized = true;
       }
     }

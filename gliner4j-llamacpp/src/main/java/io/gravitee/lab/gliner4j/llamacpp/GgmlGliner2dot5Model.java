@@ -127,251 +127,480 @@ public final class GgmlGliner2dot5Model implements AutoCloseable {
     float[] query // (H, Q)
   ) {}
 
+  /** Batched head outputs of a stage-A graph: every tensor carries the rows on its last axis. */
+  private record HeadOuts(
+    MemorySegment startLogits, // (BN, Q, B)
+    MemorySegment endLogits,
+    MemorySegment insideLogits, // (L, Q, B)
+    MemorySegment poolS, // (D, BN, B)
+    MemorySegment poolE,
+    MemorySegment scS,
+    MemorySegment scE,
+    MemorySegment values, // (cd, L, B)
+    MemorySegment qproj, // (D, Q, B)
+    MemorySegment film, // (2D, Q, B)
+    MemorySegment nullL, // (1, Q, B) or null
+    MemorySegment query, // (H, Q, B)
+    MemorySegment text // (H, L, B)
+  ) {}
+
+  /** Max nodes the batched heads add to the stage-A graph on top of the encoder. */
+  private static final long HEAD_NODES = 256;
+
   private StageA stageA(
     long[] ids,
     int[] wordPositions,
     int[] queryPositions,
     boolean withText
   ) {
-    int n = ids.length;
-    int l = wordPositions.length;
-    int q = queryPositions.length;
+    return stageABatch(
+      new long[][] { ids },
+      new int[][] { wordPositions },
+      queryPositions,
+      withText
+    )[0];
+  }
+
+  /**
+   * Stage A for {@code B} rows in one graph: the rows are padded to the longest and encoded
+   * together ({@link GgmlDebertaV3#build(MemorySegment, int, int)}), then the boundary encoder
+   * and the heads run once over the padded {@code (·, words, B)} stack — padded word slots hold
+   * a real token's state and are masked out of the boundary attention, the {@code [EOS]} state
+   * is gathered at each row's own length, and only the first {@code bn_r} columns of a row are
+   * read back. Short rows are launch-bound on CUDA, so one graph for the batch is what keeps the
+   * GPU busy; a single row is the {@code B = 1} case of the same code.
+   */
+  private StageA[] stageABatch(
+    long[][] idsRows,
+    int[][] wordPositionsRows,
+    int[] queryPositions,
+    boolean withText
+  ) {
+    int batch = idsRows.length;
+    int n = 0;
+    int l = 0;
+    for (int r = 0; r < batch; r++) {
+      n = Math.max(n, idsRows[r].length);
+      l = Math.max(l, wordPositionsRows[r].length);
+    }
     int bn = l + 1;
-    long nodes = encoder.graphNodes() + 160;
+    int q = queryPositions.length;
+    long nodes = encoder.graphNodes() + HEAD_NODES;
+    // host-side gathers: word / query states per row, [BOS] + words and words + [EOS] rows of
+    // the per-row (H, L+2) table, and the boundary attention mask (window + padding)
+    var wordAll = new int[l * batch];
+    var queryAll = new int[q * batch];
+    var leftAll = new int[bn * batch];
+    var rightAll = new int[bn * batch];
+    var mask = new float[bn * bn * batch];
+    for (int r = 0; r < batch; r++) {
+      var wp = wordPositionsRows[r];
+      int lr = wp.length;
+      for (int i = 0; i < l; i++) wordAll[r * l + i] =
+        (i < lr ? wp[i] : 0) + r * n;
+      for (int i = 0; i < q; i++) queryAll[r * q + i] =
+        queryPositions[i] + r * n;
+      int base = r * (l + 2);
+      for (int i = 0; i < bn; i++) {
+        leftAll[r * bn + i] = base + i; // 0 = [BOS], then word i-1
+        rightAll[r * bn + i] = base + (i < lr ? i + 1 : l + 1); // word i, then [EOS]
+      }
+      int bnr = lr + 1;
+      for (int i = 0; i < bn; i++) for (int j = 0; j < bn; j++) {
+        mask[(r * bn + i) * bn + j] = j < bnr && Math.abs(i - j) <= window
+          ? 0f
+          : MASK_LOGIT; // row = query i, ne0 = key j
+      }
+    }
     try (var call = Arena.ofConfined()) {
       var ctx = w.newGraphContext(call, nodes);
       try {
-        var built = encoder.build(ctx, n);
-        var wordIdx = Ggml.newTensor1d(ctx, w.typeI32, l);
-        var queryIdx = Ggml.newTensor1d(ctx, w.typeI32, q);
-        Ggml.setInput(wordIdx);
-        Ggml.setInput(queryIdx);
-        MemorySegment attnMask = null;
-        if (bn > window + 1) {
-          attnMask = Ggml.newTensor2d(ctx, w.typeF32, bn, bn);
-          Ggml.setInput(attnMask);
-        }
-        var h = built.output();
-        var text = Ggml.getRows(ctx, h, wordIdx); // (H, L)
-        var query = Ggml.getRows(ctx, h, queryIdx); // (H, Q)
-
-        // BoundaryEncoder
-        var bos = Ggml.reshape2d(ctx, w.get("benc.bos_state"), hidden, 1);
-        var eos = Ggml.reshape2d(ctx, w.get("benc.eos_state"), hidden, 1);
-        var left = Ggml.concat(ctx, bos, text, 1); // (H, N)
-        var right = Ggml.concat(ctx, text, eos, 1);
-        var states = layerNorm(
+        var built = encoder.build(ctx, n, batch);
+        var h = built.output(); // (H, n·B): column of row r token i = i + n·r
+        var wordIdx = Ggml.newTensor1d(ctx, w.typeI32, (long) l * batch);
+        var queryIdx = Ggml.newTensor1d(ctx, w.typeI32, (long) q * batch);
+        var leftIdx = Ggml.newTensor1d(ctx, w.typeI32, (long) bn * batch);
+        var rightIdx = Ggml.newTensor1d(ctx, w.typeI32, (long) bn * batch);
+        var attnMask = Ggml.newTensor3d(ctx, w.typeF32, bn, bn, batch);
+        for (var t : new MemorySegment[] {
+          wordIdx,
+          queryIdx,
+          leftIdx,
+          rightIdx,
+          attnMask,
+        })
+          Ggml.setInput(t);
+        var text = Ggml.reshape3d(
           ctx,
-          w.linear(
-            ctx,
-            Ggml.concat(
-              ctx,
-              w.linear(ctx, left, "benc.left_projection"),
-              w.linear(ctx, right, "benc.right_projection"),
-              0
-            ),
-            "benc.output_projection"
-          ),
-          "benc.layer_norm"
-        ); // (D, N)
-        int hd = dim / heads;
-        float attnScale = (float) (1.0 / Math.sqrt(hd));
-        for (
-          int b = 0;
-          w.has("benc.attention_blocks." + b + ".norm.weight");
-          b++
-        ) {
-          var p = "benc.attention_blocks." + b + ".";
-          var qkv = w.linear(
-            ctx,
-            layerNorm(ctx, states, p + "norm"),
-            p + "qkv_projection"
-          ); // (3D, N)
-          long nb1 = Ggml.nb(qkv, 1);
-          long dBytes = (long) dim * Float.BYTES;
-          var qh = splitHeads(
-            ctx,
-            Ggml.cont(ctx, Ggml.view2d(ctx, qkv, dim, bn, nb1, 0)),
-            hd,
-            bn
-          );
-          var kh = splitHeads(
-            ctx,
-            Ggml.cont(ctx, Ggml.view2d(ctx, qkv, dim, bn, nb1, dBytes)),
-            hd,
-            bn
-          );
-          var vh = splitHeads(
-            ctx,
-            Ggml.cont(ctx, Ggml.view2d(ctx, qkv, dim, bn, nb1, 2 * dBytes)),
-            hd,
-            bn
-          );
-          var scores = Ggml.mulMat(ctx, kh, qh); // (N_k, N_q, heads)
-          var probs = Ggml.softMaxExt(
-            ctx,
-            scores,
-            attnMask == null ? MemorySegment.NULL : attnMask,
-            attnScale
-          );
-          var vT = Ggml.cont(ctx, Ggml.permute(ctx, vh, 1, 0, 2, 3)); // (N_k, hd, heads)
-          var ctxv = Ggml.mulMat(ctx, vT, probs); // (hd, N_q, heads)
-          var merged = Ggml.reshape2d(
-            ctx,
-            Ggml.cont(ctx, Ggml.permute(ctx, ctxv, 0, 2, 1, 3)),
-            dim,
-            bn
-          );
-          states = Ggml.add(
-            ctx,
-            states,
-            w.linear(ctx, merged, p + "output_projection")
-          );
-        }
-        for (
-          int b = 0;
-          w.has("benc.refinement_blocks." + b + ".norm.weight");
-          b++
-        ) {
-          var p = "benc.refinement_blocks." + b + ".";
-          var ip = w.linear(
-            ctx,
-            layerNorm(ctx, states, p + "norm"),
-            p + "input_projection"
-          ); // (2F, N)
-          int f = (int) (Ggml.ne(ip, 0) / 2);
-          long nb1 = Ggml.nb(ip, 1);
-          var value = Ggml.cont(ctx, Ggml.view2d(ctx, ip, f, bn, nb1, 0));
-          var gate = Ggml.cont(
-            ctx,
-            Ggml.view2d(ctx, ip, f, bn, nb1, (long) f * Float.BYTES)
-          );
-          var upd = Ggml.mul(ctx, value, Ggml.silu(ctx, gate));
-          states = Ggml.add(
-            ctx,
-            states,
-            w.linear(ctx, upd, p + "output_projection")
-          );
-        }
-
-        float mScale = (float) (1.0 / Math.sqrt(dim));
-        var startLogits = Ggml.scale(
+          Ggml.getRows(ctx, h, wordIdx),
+          hidden,
+          l,
+          batch
+        ); // (H, L, B)
+        var query = Ggml.reshape3d(
           ctx,
-          Ggml.mulMat(
-            ctx,
-            w.linear(ctx, states, "bqh.start_boundary_projection"),
-            w.linear(ctx, query, "bqh.start_query_projection")
-          ),
-          mScale
-        ); // (N, Q)
-        var endLogits = Ggml.scale(
-          ctx,
-          Ggml.mulMat(
-            ctx,
-            w.linear(ctx, states, "bqh.end_boundary_projection"),
-            w.linear(ctx, query, "bqh.end_query_projection")
-          ),
-          mScale
-        );
-        var insideLogits = Ggml.scale(
-          ctx,
-          Ggml.mulMat(
-            ctx,
-            w.linear(ctx, text, "bqh.inside_text_projection"),
-            w.linear(ctx, query, "bqh.inside_query_projection")
-          ),
-          mScale
-        ); // (L, Q)
-        var poolS = w.linear(ctx, states, "pool.start_projection");
-        var poolE = w.linear(ctx, states, "pool.end_projection");
-        var scS = w.linear(ctx, states, "scorer.start_projection");
-        var scE = w.linear(ctx, states, "scorer.end_projection");
-        var values = w.linear(
+          Ggml.getRows(ctx, h, queryIdx),
+          hidden,
+          q,
+          batch
+        ); // (H, Q, B)
+        var o = heads(
           ctx,
           text,
-          "scorer.content_pooler.value_projection"
-        ); // (cd, L)
-        var qproj = w.linear(ctx, query, "scorer.query_projection"); // (D, Q)
-        var film = w.linear(ctx, qproj, "scorer.film"); // (2D, Q)
-        var nullL = w.has("null_projection.weight")
-          ? w.linear(ctx, query, "null_projection")
-          : null;
-
-        var outs = new ArrayList<MemorySegment>(
-          List.of(
-            startLogits,
-            endLogits,
-            insideLogits,
-            poolS,
-            poolE,
-            scS,
-            scE,
-            values,
-            qproj,
-            film,
-            query
-          )
+          query,
+          leftIdx,
+          rightIdx,
+          Ggml.reshape4d(ctx, attnMask, bn, bn, 1, batch),
+          l,
+          q,
+          batch
         );
-        if (nullL != null) outs.add(nullL);
-        if (withText) outs.add(text);
         var graph = Ggml.newGraph(ctx, nodes);
-        for (var t : outs) {
+        for (var t : new MemorySegment[] {
+          o.startLogits(),
+          o.endLogits(),
+          o.insideLogits(),
+          o.poolS(),
+          o.poolE(),
+          o.scS(),
+          o.scE(),
+          o.values(),
+          o.qproj(),
+          o.film(),
+          o.query(),
+          o.nullL(),
+          withText ? o.text() : null,
+        }) {
+          if (t == null) continue;
           Ggml.setOutput(t);
           Ggml.buildForwardExpand(graph, t);
         }
         w.alloc(graph);
-        encoder.feed(built, call, ids);
-        Ggml.setInts(wordIdx, call, wordPositions);
-        Ggml.setInts(queryIdx, call, queryPositions);
-        if (attnMask != null) {
-          var m = new float[bn * bn];
-          for (int i = 0; i < bn; i++) for (int j = 0; j < bn; j++) {
-            m[i * bn + j] = Math.abs(i - j) <= window ? 0f : MASK_LOGIT; // row = query i, ne0 = key j
-          }
-          Ggml.setFloats(attnMask, call, m);
-        }
+        encoder.feed(built, call, idsRows);
+        Ggml.setInts(wordIdx, call, wordAll);
+        Ggml.setInts(queryIdx, call, queryAll);
+        Ggml.setInts(leftIdx, call, leftAll);
+        Ggml.setInts(rightIdx, call, rightAll);
+        Ggml.setFloats(attnMask, call, mask);
         w.run(graph);
-        float[] nullOut = nullL != null
-          ? Ggml.getFloats(nullL, call, q)
-          : filled(q, MASK_LOGIT);
-        return new StageA(
-          l,
-          q,
-          Ggml.getFloats(startLogits, call, bn * q),
-          Ggml.getFloats(endLogits, call, bn * q),
-          Ggml.getFloats(insideLogits, call, l * q),
-          Ggml.getFloats(poolS, call, dim * bn),
-          Ggml.getFloats(poolE, call, dim * bn),
-          Ggml.getFloats(scS, call, dim * bn),
-          Ggml.getFloats(scE, call, dim * bn),
-          Ggml.getFloats(values, call, contentDim * l),
-          Ggml.getFloats(qproj, call, dim * q),
-          Ggml.getFloats(film, call, 2 * dim * q),
-          nullOut,
-          withText ? Ggml.getFloats(text, call, hidden * l) : null,
-          Ggml.getFloats(query, call, hidden * q)
+        // read the padded stacks once, then cut each row to its own length
+        var startAll = Ggml.getFloats(o.startLogits(), call, bn * q * batch);
+        var endAll = Ggml.getFloats(o.endLogits(), call, bn * q * batch);
+        var insideAll = Ggml.getFloats(o.insideLogits(), call, l * q * batch);
+        var poolSAll = Ggml.getFloats(o.poolS(), call, dim * bn * batch);
+        var poolEAll = Ggml.getFloats(o.poolE(), call, dim * bn * batch);
+        var scSAll = Ggml.getFloats(o.scS(), call, dim * bn * batch);
+        var scEAll = Ggml.getFloats(o.scE(), call, dim * bn * batch);
+        var valuesAll = Ggml.getFloats(
+          o.values(),
+          call,
+          contentDim * l * batch
         );
+        var qprojAll = Ggml.getFloats(o.qproj(), call, dim * q * batch);
+        var filmAll = Ggml.getFloats(o.film(), call, 2 * dim * q * batch);
+        var queryAllF = Ggml.getFloats(o.query(), call, hidden * q * batch);
+        var nullAll = o.nullL() != null
+          ? Ggml.getFloats(o.nullL(), call, q * batch)
+          : null;
+        var textAll = withText
+          ? Ggml.getFloats(o.text(), call, hidden * l * batch)
+          : null;
+        var result = new StageA[batch];
+        for (int r = 0; r < batch; r++) {
+          int lr = wordPositionsRows[r].length;
+          int bnr = lr + 1;
+          result[r] = new StageA(
+            lr,
+            q,
+            rows(startAll, bn, q, r, bnr),
+            rows(endAll, bn, q, r, bnr),
+            rows(insideAll, l, q, r, lr),
+            cols(poolSAll, dim, bn, r, bnr),
+            cols(poolEAll, dim, bn, r, bnr),
+            cols(scSAll, dim, bn, r, bnr),
+            cols(scEAll, dim, bn, r, bnr),
+            cols(valuesAll, contentDim, l, r, lr),
+            cols(qprojAll, dim, q, r, q),
+            cols(filmAll, 2 * dim, q, r, q),
+            nullAll != null
+              ? Arrays.copyOfRange(nullAll, r * q, (r + 1) * q)
+              : filled(q, MASK_LOGIT),
+            textAll != null ? cols(textAll, hidden, l, r, lr) : null,
+            cols(queryAllF, hidden, q, r, q)
+          );
+        }
+        return result;
       } finally {
         Ggml.free(ctx);
       }
     }
   }
 
+  /** Row {@code r} of a {@code (X, N, B)} stack, first {@code keep} columns: {@code [x + X·i]}. */
+  private static float[] cols(float[] all, int x, int nMax, int r, int keep) {
+    var out = new float[x * keep];
+    System.arraycopy(all, r * x * nMax, out, 0, x * keep);
+    return out;
+  }
+
+  /** Row {@code r} of a {@code (N, Q, B)} logit stack, first {@code keep} positions: {@code [i + keep·q]}. */
+  private static float[] rows(float[] all, int nMax, int q, int r, int keep) {
+    var out = new float[keep * q];
+    for (int qq = 0; qq < q; qq++) System.arraycopy(
+      all,
+      (r * q + qq) * nMax,
+      out,
+      qq * keep,
+      keep
+    );
+    return out;
+  }
+
+  /** {@code (X, N, B)} stack → {@code (hd, N, heads, B)} per-head layout, contiguous. */
+  private MemorySegment splitHeadsBatch(
+    MemorySegment ctx,
+    MemorySegment t,
+    int hd,
+    long n,
+    long batch
+  ) {
+    return Ggml.cont(
+      ctx,
+      Ggml.permute(ctx, Ggml.reshape4d(ctx, t, hd, heads, n, batch), 0, 2, 1, 3)
+    );
+  }
+
+  /** Contiguous copy of columns {@code [off, off + x)} of a {@code (X0, N, B)} stack: {@code (x, N, B)}. */
+  private MemorySegment sliceBatch(
+    MemorySegment ctx,
+    MemorySegment t,
+    long x,
+    long n,
+    long batch,
+    long off
+  ) {
+    long es = Ggml.nb(t, 0);
+    var v = Ggml.view4d(
+      ctx,
+      t,
+      x,
+      n,
+      batch,
+      1,
+      Ggml.nb(t, 1),
+      Ggml.nb(t, 2),
+      Ggml.nb(t, 2) * batch,
+      off * es
+    );
+    return Ggml.reshape3d(ctx, Ggml.cont(ctx, v), x, n, batch);
+  }
+
+  /** Boundary encoder + boundary / pooling / scorer projections over the padded row stack. */
+  private HeadOuts heads(
+    MemorySegment ctx,
+    MemorySegment text,
+    MemorySegment query,
+    MemorySegment leftIdx,
+    MemorySegment rightIdx,
+    MemorySegment attnMask,
+    int l,
+    int q,
+    int batch
+  ) {
+    int bn = l + 1;
+    // BoundaryEncoder: per row the table [BOS] · words · [EOS], gathered into the left / right rows
+    var tmpl = Ggml.newTensor3d(ctx, w.typeF32, hidden, 1, batch);
+    var bos = Ggml.repeat(
+      ctx,
+      Ggml.reshape3d(ctx, w.get("benc.bos_state"), hidden, 1, 1),
+      tmpl
+    );
+    var eos = Ggml.repeat(
+      ctx,
+      Ggml.reshape3d(ctx, w.get("benc.eos_state"), hidden, 1, 1),
+      tmpl
+    );
+    var table = Ggml.reshape2d(
+      ctx,
+      Ggml.concat(ctx, Ggml.concat(ctx, bos, text, 1), eos, 1),
+      hidden,
+      (long) (l + 2) * batch
+    ); // (H, (L+2)·B)
+    var left = Ggml.reshape3d(
+      ctx,
+      Ggml.getRows(ctx, table, leftIdx),
+      hidden,
+      bn,
+      batch
+    );
+    var right = Ggml.reshape3d(
+      ctx,
+      Ggml.getRows(ctx, table, rightIdx),
+      hidden,
+      bn,
+      batch
+    );
+    var states = layerNorm(
+      ctx,
+      w.linear(
+        ctx,
+        Ggml.concat(
+          ctx,
+          w.linear(ctx, left, "benc.left_projection"),
+          w.linear(ctx, right, "benc.right_projection"),
+          0
+        ),
+        "benc.output_projection"
+      ),
+      "benc.layer_norm"
+    ); // (D, BN, B)
+    int hd = dim / heads;
+    float attnScale = (float) (1.0 / Math.sqrt(hd));
+    for (int b = 0; w.has("benc.attention_blocks." + b + ".norm.weight"); b++) {
+      var p = "benc.attention_blocks." + b + ".";
+      var qkv = w.linear(
+        ctx,
+        layerNorm(ctx, states, p + "norm"),
+        p + "qkv_projection"
+      ); // (3D, BN, B)
+      var qh = splitHeadsBatch(
+        ctx,
+        sliceBatch(ctx, qkv, dim, bn, batch, 0),
+        hd,
+        bn,
+        batch
+      );
+      var kh = splitHeadsBatch(
+        ctx,
+        sliceBatch(ctx, qkv, dim, bn, batch, dim),
+        hd,
+        bn,
+        batch
+      );
+      var vh = splitHeadsBatch(
+        ctx,
+        sliceBatch(ctx, qkv, dim, bn, batch, 2L * dim),
+        hd,
+        bn,
+        batch
+      );
+      var scores = Ggml.mulMat(ctx, kh, qh); // (BN_k, BN_q, heads, B)
+      var probs = Ggml.softMaxExt(ctx, scores, attnMask, attnScale); // mask (BN, BN, 1, B)
+      var vT = Ggml.cont(ctx, Ggml.permute(ctx, vh, 1, 0, 2, 3)); // (BN_k, hd, heads, B)
+      var ctxv = Ggml.mulMat(ctx, vT, probs); // (hd, BN_q, heads, B)
+      var merged = Ggml.reshape3d(
+        ctx,
+        Ggml.cont(ctx, Ggml.permute(ctx, ctxv, 0, 2, 1, 3)),
+        dim,
+        bn,
+        batch
+      );
+      states = Ggml.add(
+        ctx,
+        states,
+        w.linear(ctx, merged, p + "output_projection")
+      );
+    }
+    for (
+      int b = 0;
+      w.has("benc.refinement_blocks." + b + ".norm.weight");
+      b++
+    ) {
+      var p = "benc.refinement_blocks." + b + ".";
+      var ip = w.linear(
+        ctx,
+        layerNorm(ctx, states, p + "norm"),
+        p + "input_projection"
+      ); // (2F, BN, B)
+      int f = (int) (Ggml.ne(ip, 0) / 2);
+      var value = sliceBatch(ctx, ip, f, bn, batch, 0);
+      var gate = sliceBatch(ctx, ip, f, bn, batch, f);
+      var upd = Ggml.mul(ctx, value, Ggml.silu(ctx, gate));
+      states = Ggml.add(
+        ctx,
+        states,
+        w.linear(ctx, upd, p + "output_projection")
+      );
+    }
+
+    float mScale = (float) (1.0 / Math.sqrt(dim));
+    var startLogits = Ggml.scale(
+      ctx,
+      Ggml.mulMat(
+        ctx,
+        w.linear(ctx, states, "bqh.start_boundary_projection"),
+        w.linear(ctx, query, "bqh.start_query_projection")
+      ),
+      mScale
+    ); // (BN, Q, B)
+    var endLogits = Ggml.scale(
+      ctx,
+      Ggml.mulMat(
+        ctx,
+        w.linear(ctx, states, "bqh.end_boundary_projection"),
+        w.linear(ctx, query, "bqh.end_query_projection")
+      ),
+      mScale
+    );
+    var insideLogits = Ggml.scale(
+      ctx,
+      Ggml.mulMat(
+        ctx,
+        w.linear(ctx, text, "bqh.inside_text_projection"),
+        w.linear(ctx, query, "bqh.inside_query_projection")
+      ),
+      mScale
+    ); // (L, Q, B)
+    var poolS = w.linear(ctx, states, "pool.start_projection");
+    var poolE = w.linear(ctx, states, "pool.end_projection");
+    var scS = w.linear(ctx, states, "scorer.start_projection");
+    var scE = w.linear(ctx, states, "scorer.end_projection");
+    var values = w.linear(ctx, text, "scorer.content_pooler.value_projection"); // (cd, L, B)
+    var qproj = w.linear(ctx, query, "scorer.query_projection"); // (D, Q, B)
+    var film = w.linear(ctx, qproj, "scorer.film"); // (2D, Q, B)
+    var nullL = w.has("null_projection.weight")
+      ? w.linear(ctx, query, "null_projection")
+      : null; // (1, Q, B)
+    return new HeadOuts(
+      startLogits,
+      endLogits,
+      insideLogits,
+      poolS,
+      poolE,
+      scS,
+      scE,
+      values,
+      qproj,
+      film,
+      nullL,
+      query,
+      text
+    );
+  }
+
   // ---- host: candidate pool ---------------------------------------------------
 
   private record Pool(int[] s, int[] e, boolean[] valid, float[] compat) {}
 
+  /** Scratch table of {@link #buildPool}: best candidate index per (start, end) pair. */
+  private int[] bestByPair;
+
+  /**
+   * Indices of the {@code k} best scores, score descending and index ascending on ties (matches
+   * ONNX TopK on rows padded with the mask logit); {@code -1} past {@code count}. One primitive
+   * sort of packed (inverted sortable score, index) keys — the boxed comparator version of this
+   * cost more per call than the GPU pass.
+   */
   private static int[] topKIndices(float[] scores, int count, int k) {
-    // stable: score desc, index asc — matches ONNX TopK on rows padded with the mask logit
-    Integer[] idx = new Integer[count];
-    for (int i = 0; i < count; i++) idx[i] = i;
-    Arrays.sort(idx, (a, b) ->
-      scores[a] == scores[b]
-        ? Integer.compare(a, b)
-        : Float.compare(scores[b], scores[a])
-    );
+    var keys = new long[count];
+    for (int i = 0; i < count; i++) {
+      int bits = Float.floatToIntBits(scores[i]);
+      int sortable = bits < 0 ? bits ^ 0x7fffffff : bits; // monotone in the float value
+      keys[i] = ((long) (~sortable) << 32) | (i & 0xffffffffL); // ascending = score desc, index asc
+    }
+    Arrays.sort(keys);
     var out = new int[k];
-    for (int i = 0; i < k; i++) out[i] = i < count ? idx[i] : -1;
+    for (int i = 0; i < k; i++) out[i] = i < count ? (int) keys[i] : -1;
     return out;
   }
 
@@ -445,18 +674,35 @@ public final class GgmlGliner2dot5Model implements AutoCloseable {
     System.arraycopy(unionPair, 0, allScore, q * quota, kk);
     for (int i = 0; i < m; i++) if (!allValid[i]) allScore[i] = MASK_LOGIT;
     // dedup: keep the best-scoring occurrence of each (start, end); ties → lowest index
-    var best = new HashMap<Long, Integer>();
-    for (int i = 0; i < m; i++) {
-      if (!allValid[i]) continue;
-      long key = (long) allS[i] * bn + allE[i];
-      var cur = best.get(key);
-      if (cur == null || allScore[i] > allScore[cur]) best.put(key, i);
-    }
-    var finalScore = new float[m];
     var keep = new boolean[m];
-    for (int i = 0; i < m; i++) {
-      keep[i] = allValid[i] && best.get((long) allS[i] * bn + allE[i]) == i;
-      finalScore[i] = keep[i] ? allScore[i] : MASK_LOGIT;
+    var finalScore = new float[m];
+    if ((long) bn * bn <= (1 << 22)) {
+      var best = bestByPair;
+      if (best == null || best.length < bn * bn) best = bestByPair =
+        new int[Math.max(bn * bn, 1 << 12)];
+      Arrays.fill(best, 0, bn * bn, -1);
+      for (int i = 0; i < m; i++) {
+        if (!allValid[i]) continue;
+        int key = allS[i] * bn + allE[i];
+        int cur = best[key];
+        if (cur < 0 || allScore[i] > allScore[cur]) best[key] = i;
+      }
+      for (int i = 0; i < m; i++) {
+        keep[i] = allValid[i] && best[allS[i] * bn + allE[i]] == i;
+        finalScore[i] = keep[i] ? allScore[i] : MASK_LOGIT;
+      }
+    } else {
+      var best = new HashMap<Long, Integer>();
+      for (int i = 0; i < m; i++) {
+        if (!allValid[i]) continue;
+        long key = (long) allS[i] * bn + allE[i];
+        var cur = best.get(key);
+        if (cur == null || allScore[i] > allScore[cur]) best.put(key, i);
+      }
+      for (int i = 0; i < m; i++) {
+        keep[i] = allValid[i] && best.get((long) allS[i] * bn + allE[i]) == i;
+        finalScore[i] = keep[i] ? allScore[i] : MASK_LOGIT;
+      }
     }
     var top = topKIndices(finalScore, m, poolSize);
     var selS = new int[poolSize];
@@ -479,62 +725,95 @@ public final class GgmlGliner2dot5Model implements AutoCloseable {
   // ---- stage B ------------------------------------------------------------------
 
   private float[][] scorePool(StageA a, Pool pool) {
-    int l = a.l();
-    int bn = l + 1;
-    int q = a.q();
+    return scorePoolBatch(new StageA[] { a }, new Pool[] { pool })[0];
+  }
+
+  /**
+   * Candidate scoring for {@code B} rows in one graph: the rows' candidates are laid out along
+   * one axis ({@code C·B}, the scorer start / end tables concatenated with per-row offsets) and
+   * the per-row query features sit on a batch axis, so the query dot products run as one batched
+   * matmul and the FiLM conditioning as one broadcast over {@code (D, Q, C, B)}.
+   */
+  private float[][][] scorePoolBatch(StageA[] as, Pool[] pools) {
+    int batch = as.length;
+    int q = as[0].q();
     int c = poolSize;
-    // host features: length, content means, inside evidence
-    var lenFeat = new float[3 * c];
-    var content = new float[contentDim * c];
-    var prefix = new double[(l + 1) * contentDim];
-    for (int t = 0; t < l; t++) {
-      for (int d = 0; d < contentDim; d++) {
-        prefix[(t + 1) * contentDim + d] =
-          prefix[t * contentDim + d] + a.values()[d + contentDim * t];
+    int bnTotal = 0;
+    for (var a : as) bnTotal += a.l() + 1;
+    // host features: length, content means (per row), candidate indices into the stacked tables
+    var lenFeat = new float[3 * c * batch];
+    var content = new float[contentDim * c * batch];
+    var compat = new float[c * batch];
+    var validMask = new float[c * batch];
+    var sIdxAll = new int[c * batch];
+    var eIdxAll = new int[c * batch];
+    var scSAll = new float[dim * bnTotal];
+    var scEAll = new float[dim * bnTotal];
+    var gammaP1 = new float[dim * q * batch];
+    var beta = new float[dim * q * batch];
+    var qprojAll = new float[dim * q * batch];
+    int bnOffset = 0;
+    for (int r = 0; r < batch; r++) {
+      var a = as[r];
+      var pool = pools[r];
+      int l = a.l();
+      int bn = l + 1;
+      System.arraycopy(a.scS(), 0, scSAll, dim * bnOffset, dim * bn);
+      System.arraycopy(a.scE(), 0, scEAll, dim * bnOffset, dim * bn);
+      var prefix = new double[(l + 1) * contentDim];
+      for (int t = 0; t < l; t++) {
+        for (int d = 0; d < contentDim; d++) {
+          prefix[(t + 1) * contentDim + d] =
+            prefix[t * contentDim + d] + a.values()[d + contentDim * t];
+        }
       }
-    }
-    float tl = Math.max(l, 1);
-    for (int i = 0; i < c; i++) {
-      int s = pool.s()[i],
-        e = pool.e()[i];
-      float len = Math.max(e - s, 1);
-      lenFeat[3 * i] = (float) Math.log1p(len);
-      lenFeat[3 * i + 1] = len / tl;
-      lenFeat[3 * i + 2] = (float) (1.0 / Math.sqrt(len));
-      for (int d = 0; d < contentDim; d++) {
-        content[d + contentDim * i] = (float) ((prefix[e * contentDim + d] -
-            prefix[s * contentDim + d]) /
-          len);
+      float tl = Math.max(l, 1);
+      for (int i = 0; i < c; i++) {
+        int o = r * c + i;
+        int s = pool.s()[i],
+          e = pool.e()[i];
+        float len = Math.max(e - s, 1);
+        lenFeat[3 * o] = (float) Math.log1p(len);
+        lenFeat[3 * o + 1] = len / tl;
+        lenFeat[3 * o + 2] = (float) (1.0 / Math.sqrt(len));
+        for (int d = 0; d < contentDim; d++) {
+          content[d + contentDim * o] = (float) ((prefix[e * contentDim + d] -
+              prefix[s * contentDim + d]) /
+            len);
+        }
+        compat[o] = pool.compat()[i];
+        validMask[o] = pool.valid()[i] ? 1f : 0f;
+        sIdxAll[o] = bnOffset + s;
+        eIdxAll[o] = bnOffset + e;
       }
-    }
-    var gammaP1 = new float[dim * q];
-    var beta = new float[dim * q];
-    for (int qq = 0; qq < q; qq++) {
-      for (int d = 0; d < dim; d++) {
-        gammaP1[d + dim * qq] = 1f + a.film()[d + 2 * dim * qq];
-        beta[d + dim * qq] = a.film()[dim + d + 2 * dim * qq];
+      for (int qq = 0; qq < q; qq++) {
+        int o = r * q + qq;
+        for (int d = 0; d < dim; d++) {
+          gammaP1[d + dim * o] = 1f + a.film()[d + 2 * dim * qq];
+          beta[d + dim * o] = a.film()[dim + d + 2 * dim * qq];
+          qprojAll[d + dim * o] = a.qproj()[d + dim * qq];
+        }
       }
+      bnOffset += bn;
     }
-    var validMask = new float[c];
-    for (int i = 0; i < c; i++) validMask[i] = pool.valid()[i] ? 1f : 0f;
 
     float[] base;
     try (var call = Arena.ofConfined()) {
       var ctx = w.newGraphContext(call, 96);
       try {
-        var scS = in2(ctx, dim, bn);
-        var scE = in2(ctx, dim, bn);
-        var sIdx = Ggml.newTensor1d(ctx, w.typeI32, c);
-        var eIdx = Ggml.newTensor1d(ctx, w.typeI32, c);
+        var scS = in2(ctx, dim, bnTotal);
+        var scE = in2(ctx, dim, bnTotal);
+        var sIdx = Ggml.newTensor1d(ctx, w.typeI32, (long) c * batch);
+        var eIdx = Ggml.newTensor1d(ctx, w.typeI32, (long) c * batch);
         Ggml.setInput(sIdx);
         Ggml.setInput(eIdx);
-        var lenT = in2(ctx, 3, c);
-        var compatT = in2(ctx, 1, c);
-        var contentT = in2(ctx, contentDim, c);
-        var maskT = in2(ctx, 1, c);
-        var qprojT = in2(ctx, dim, q);
-        var gammaT = in2(ctx, dim, q);
-        var betaT = in2(ctx, dim, q);
+        var lenT = in2(ctx, 3, (long) c * batch);
+        var compatT = in2(ctx, 1, (long) c * batch);
+        var contentT = in2(ctx, contentDim, (long) c * batch);
+        var maskT = in2(ctx, 1, (long) c * batch);
+        var qprojT = in2(ctx, dim, (long) q * batch);
+        var gammaT = in2(ctx, dim, (long) q * batch);
+        var betaT = in2(ctx, dim, (long) q * batch);
 
         var cand = Ggml.add(
           ctx,
@@ -564,22 +843,31 @@ public final class GgmlGliner2dot5Model implements AutoCloseable {
           ctx,
           layerNorm(ctx, cand, "scorer.candidate_norm"),
           maskT
-        ); // (D, C)
+        ); // (D, C·B)
+        var cand3 = Ggml.reshape3d(ctx, cand, dim, c, batch);
+        var qproj3 = Ggml.reshape3d(ctx, qprojT, dim, q, batch);
         var dots = Ggml.scale(
           ctx,
-          Ggml.mulMat(ctx, cand, qprojT),
+          Ggml.mulMat(ctx, cand3, qproj3),
           (float) (1.0 / Math.sqrt(dim))
-        ); // (C, Q)
-        var tmpl = Ggml.newTensor3d(ctx, w.typeF32, dim, q, c);
-        var cand3 = Ggml.repeat(
+        ); // (C, Q, B)
+        var tmpl = Ggml.newTensor3d(ctx, w.typeF32, dim, q, (long) c * batch);
+        var cand4 = Ggml.reshape4d(
           ctx,
-          Ggml.reshape3d(ctx, cand, dim, 1, c),
-          tmpl
-        ); // (D, Q, C)
+          Ggml.repeat(
+            ctx,
+            Ggml.reshape3d(ctx, cand, dim, 1, (long) c * batch),
+            tmpl
+          ),
+          dim,
+          q,
+          c,
+          batch
+        ); // (D, Q, C, B)
         var cond = Ggml.add(
           ctx,
-          Ggml.mul(ctx, cand3, Ggml.reshape3d(ctx, gammaT, dim, q, 1)),
-          Ggml.reshape3d(ctx, betaT, dim, q, 1)
+          Ggml.mul(ctx, cand4, Ggml.reshape4d(ctx, gammaT, dim, q, 1, batch)),
+          Ggml.reshape4d(ctx, betaT, dim, q, 1, batch)
         );
         var fo = w.linear(
           ctx,
@@ -587,63 +875,82 @@ public final class GgmlGliner2dot5Model implements AutoCloseable {
             ctx,
             w.linear(
               ctx,
-              Ggml.reshape2d(ctx, cond, dim, (long) q * c),
+              Ggml.reshape2d(ctx, cond, dim, (long) q * c * batch),
               "scorer.film_output.0"
             )
           ),
           "scorer.film_output.3"
-        ); // (1, Q·C)
+        ); // (1, Q·C·B)
         var filmT = Ggml.cont(
           ctx,
-          Ggml.permute(ctx, Ggml.reshape2d(ctx, fo, q, c), 1, 0, 2, 3)
-        ); // (C, Q)
+          Ggml.permute(ctx, Ggml.reshape3d(ctx, fo, q, c, batch), 1, 0, 2, 3)
+        ); // (C, Q, B)
         var total = Ggml.add(ctx, dots, filmT);
         var graph = Ggml.newGraph(ctx, 96);
         w.compute(ctx, graph, total);
-        Ggml.setFloats(scS, call, a.scS());
-        Ggml.setFloats(scE, call, a.scE());
-        Ggml.setInts(sIdx, call, pool.s());
-        Ggml.setInts(eIdx, call, pool.e());
+        Ggml.setFloats(scS, call, scSAll);
+        Ggml.setFloats(scE, call, scEAll);
+        Ggml.setInts(sIdx, call, sIdxAll);
+        Ggml.setInts(eIdx, call, eIdxAll);
         Ggml.setFloats(lenT, call, lenFeat);
-        Ggml.setFloats(compatT, call, pool.compat());
+        Ggml.setFloats(compatT, call, compat);
         Ggml.setFloats(contentT, call, content);
         Ggml.setFloats(maskT, call, validMask);
-        Ggml.setFloats(qprojT, call, a.qproj());
+        Ggml.setFloats(qprojT, call, qprojAll);
         Ggml.setFloats(gammaT, call, gammaP1);
         Ggml.setFloats(betaT, call, beta);
         w.run(graph);
-        base = Ggml.getFloats(total, call, c * q); // [c + C*q]
+        base = Ggml.getFloats(total, call, c * q * batch); // [i + C·qq + C·Q·r]
       } finally {
         Ggml.free(ctx);
       }
     }
-    // inside evidence prefix (fp32, mean-centred) per query
-    var out = new float[q][c];
-    var insidePrefix = new double[l + 1];
-    for (int qq = 0; qq < q; qq++) {
-      double sum = 0;
-      for (int t = 0; t < l; t++) sum += a.insideLogits()[t + l * qq];
-      double mean = l > 0 ? sum / l : 0;
-      insidePrefix[0] = 0;
-      for (int t = 0; t < l; t++) insidePrefix[t + 1] =
-        insidePrefix[t] + (a.insideLogits()[t + l * qq] - mean);
-      for (int i = 0; i < c; i++) {
-        if (!pool.valid()[i]) {
-          out[qq][i] = MASK_LOGIT;
-          continue;
+    // inside evidence prefix (fp32, mean-centred) per row and query
+    var out = new float[batch][q][c];
+    for (int r = 0; r < batch; r++) {
+      var a = as[r];
+      var pool = pools[r];
+      int l = a.l();
+      int bn = l + 1;
+      var insidePrefix = new double[l + 1];
+      for (int qq = 0; qq < q; qq++) {
+        double sum = 0;
+        for (int t = 0; t < l; t++) sum += a.insideLogits()[t + l * qq];
+        double mean = l > 0 ? sum / l : 0;
+        insidePrefix[0] = 0;
+        for (int t = 0; t < l; t++) insidePrefix[t + 1] =
+          insidePrefix[t] + (a.insideLogits()[t + l * qq] - mean);
+        for (int i = 0; i < c; i++) {
+          if (!pool.valid()[i]) {
+            out[r][qq][i] = MASK_LOGIT;
+            continue;
+          }
+          int s = pool.s()[i],
+            e = pool.e()[i];
+          double score =
+            base[i + c * qq + c * q * r] +
+            a.startLogits()[s + bn * qq] +
+            a.endLogits()[e + bn * qq];
+          double interval = insidePrefix[e] - insidePrefix[s] + mean * (e - s);
+          score += interval / Math.sqrt(Math.max(e - s, 1));
+          out[r][qq][i] = (float) score;
         }
-        int s = pool.s()[i],
-          e = pool.e()[i];
-        double score =
-          base[i + c * qq] +
-          a.startLogits()[s + bn * qq] +
-          a.endLogits()[e + bn * qq];
-        double interval = insidePrefix[e] - insidePrefix[s] + mean * (e - s);
-        score += interval / Math.sqrt(Math.max(e - s, 1));
-        out[qq][i] = (float) score;
       }
     }
     return out;
+  }
+
+  /**
+   * Longest (padded) row for which {@link #scoreEntitiesBatch} beats per-row
+   * {@link #scoreEntities} on CUDA — same rule as {@link GgmlGliner2Model#prefersBatchedScoring}:
+   * short rows are launch-bound, long ones already fill the GPU. Never on CPU or Metal.
+   */
+  public boolean prefersBatchedScoring(int n) {
+    return (
+      w.gpu &&
+      !w.metal &&
+      n <= Integer.getInteger("gliner4j.ggml.batchMaxTokens", 384)
+    );
   }
 
   /** NER for one unpadded row. */
@@ -652,15 +959,38 @@ public final class GgmlGliner2dot5Model implements AutoCloseable {
     int[] wordPositions,
     int[] queryPositions
   ) {
-    var a = stageA(ids, wordPositions, queryPositions, false);
-    var pool = buildPool(a);
-    var logits = scorePool(a, pool);
-    var cands = new int[poolSize][2];
-    for (int i = 0; i < poolSize; i++) {
-      cands[i][0] = pool.s()[i];
-      cands[i][1] = pool.e()[i];
+    return scoreEntitiesBatch(
+      new long[][] { ids },
+      new int[][] { wordPositions },
+      queryPositions
+    )[0];
+  }
+
+  /** NER for {@code B} unpadded rows sharing the same row-relative {@code queryPositions}. */
+  public synchronized NerResult[] scoreEntitiesBatch(
+    long[][] idsRows,
+    int[][] wordPositionsRows,
+    int[] queryPositions
+  ) {
+    var as = stageABatch(idsRows, wordPositionsRows, queryPositions, false);
+    var pools = new Pool[as.length];
+    for (int r = 0; r < as.length; r++) pools[r] = buildPool(as[r]);
+    var logits = scorePoolBatch(as, pools);
+    var out = new NerResult[as.length];
+    for (int r = 0; r < as.length; r++) {
+      var cands = new int[poolSize][2];
+      for (int i = 0; i < poolSize; i++) {
+        cands[i][0] = pools[r].s()[i];
+        cands[i][1] = pools[r].e()[i];
+      }
+      out[r] = new NerResult(
+        logits[r],
+        cands,
+        pools[r].valid(),
+        as[r].nullLogits()
+      );
     }
-    return new NerResult(logits, cands, pool.valid(), a.nullLogits());
+    return out;
   }
 
   // ---- stage C: relations -------------------------------------------------------

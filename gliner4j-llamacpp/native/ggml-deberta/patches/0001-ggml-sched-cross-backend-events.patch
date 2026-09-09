@@ -1,0 +1,54 @@
+diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
+index cc3f8cd36..6ba605812 100644
+--- a/ggml/include/ggml-backend.h
++++ b/ggml/include/ggml-backend.h
+@@ -329,6 +329,9 @@ extern "C" {
+     // Get the number of splits of the last graph
+     GGML_API int                  ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched);
+     GGML_API int                  ggml_backend_sched_get_n_copies(ggml_backend_sched_t sched);
++    // true when consecutive splits on different backends are ordered with stream-side event waits
++    // (both backends implement events, scheduler created with parallel=true)
++    GGML_API bool                 ggml_backend_sched_cross_backend_events(void);
+ 
+     GGML_API ggml_backend_buffer_type_t ggml_backend_sched_get_buffer_type(ggml_backend_sched_t sched, ggml_backend_t backend);
+     GGML_API size_t                     ggml_backend_sched_get_buffer_size(ggml_backend_sched_t sched, ggml_backend_t backend);
+diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
+index 6862128e6..6085a84ac 100644
+--- a/ggml/src/ggml-backend.cpp
++++ b/ggml/src/ggml-backend.cpp
+@@ -1668,11 +1668,19 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+ 
+         // ensure the previous split's async work has completed before we start
+         // this split, the allocator may have reused buffer regions across splits
+-        if (split->n_inputs == 0 && prev_backend_id >= 0 && prev_backend_id != split_backend_id) {
+-            if (sched->events[prev_backend_id][sched->cur_copy] != NULL) {
+-                ggml_backend_event_synchronize(sched->events[prev_backend_id][sched->cur_copy]);
+-            } else {
+-                ggml_backend_synchronize(sched->backends[prev_backend_id]);
++        if (prev_backend_id >= 0 && prev_backend_id != split_backend_id) {
++            ggml_backend_event_t prev_event = sched->events[prev_backend_id][sched->cur_copy];
++            if (prev_event != NULL && split_backend->iface.event_wait != NULL) {
++                // stream-side ordering: the split backend waits for the previous backend's event
++                // on its own queue (backends sharing a device and event objects, e.g. an
++                // out-of-tree plugin next to the CUDA backend) — no host round trip
++                ggml_backend_event_wait(split_backend, prev_event);
++            } else if (split->n_inputs == 0) {
++                if (prev_event != NULL) {
++                    ggml_backend_event_synchronize(prev_event);
++                } else {
++                    ggml_backend_synchronize(sched->backends[prev_backend_id]);
++                }
+             }
+         }
+ 
+@@ -2057,6 +2065,10 @@ int ggml_backend_sched_get_n_splits(ggml_backend_sched_t sched) {
+     return sched->n_splits;
+ }
+ 
++bool ggml_backend_sched_cross_backend_events(void) {
++    return true;
++}
++
+ int ggml_backend_sched_get_n_copies(ggml_backend_sched_t sched) {
+     GGML_ASSERT(sched);
+     return sched->n_copies;

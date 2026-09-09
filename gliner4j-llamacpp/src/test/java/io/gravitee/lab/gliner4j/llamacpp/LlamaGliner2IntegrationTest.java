@@ -217,8 +217,19 @@ class LlamaGliner2IntegrationTest {
         List.of("organization", "location")
       )
     );
+    // Relations are compared span-for-span, and the located_in candidates for "Mountain View" are a
+    // near-tie (Google 0.6155 vs Microsoft 0.6145). The GPU's f16 flash attention rounds that
+    // margin away, so this exact comparison runs the ggml engine on the CPU backend.
+    var cpu = io.gravitee.lab.gliner4j.runtime.RuntimeConfig.builder()
+      .executionProvider(io.gravitee.lab.gliner4j.runtime.ExecutionProvider.CPU)
+      .build();
     try (
-      var a = RelationExtractor.load(ggml, relations);
+      var a = RelationExtractor.load(
+        ggml,
+        relations,
+        io.gravitee.lab.gliner4j.runtime.BaseRuntime.DEFAULT_VARIANT,
+        cpu
+      );
       var b = RelationExtractor.load(onnx, relations)
     ) {
       for (var text : TEXTS)

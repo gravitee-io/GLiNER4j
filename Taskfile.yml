@@ -70,6 +70,7 @@ vars:
   # GLiNER NER families (original-GLiNER uni/bi-encoder span models — zero-shot NER)
   GLINER_PII_HF_MODEL: "knowledgator/gliner-pii-base-v1.0" # uni-encoder, deberta-v3-small
   GLINER_PII_ONNX_OUTPUT_DIR: "models/gliner-pii-base-onnx"
+  GLINER_PII_LLAMACPP_OUTPUT_DIR: "models/gliner-pii-base-llamacpp"
   GLINER_BI_HF_MODEL: "knowledgator/gliner-bi-small-v1.0" # bi-encoder, deberta + MiniLM
   GLINER_BI_ONNX_OUTPUT_DIR: "models/gliner-bi-small-onnx"
   # GLiNER-X (mT5 multilingual NER). Trained with stanza word-splitting; we force whitespace
@@ -815,23 +816,25 @@ tasks:
       - "{{.GLINER_PII_LLAMACPP_OUTPUT_DIR}}/gliner4j_config.json"
 
   base:llamacpp:
-    desc: Export fastino/gliner2-base-v1 for the ggml engine (DeBERTa encoder + GLiNER2 heads in one model.gguf)
+    desc: Export fastino/gliner2-base-v1 for the ggml engine (DeBERTa encoder + GLiNER2 heads in one model.gguf, plus model-q8_0/q4_0.gguf variants)
     deps:
       - check:uv
     cmds:
-      - uv run scripts/export_llamacpp_gliner2.py --model-path {{.GLINER2_BASE_HF_LOCAL_DIR | default "models/gliner2-base-hf"}} --output-dir models/gliner2-base-llamacpp {{.EXPORT_ARGS | default ""}}
+      - uv run scripts/export_llamacpp_gliner2.py gliner2 --model-path {{.GLINER2_BASE_HF_LOCAL_DIR | default "models/gliner2-base-hf"}} --output-dir models/gliner2-base-llamacpp {{.EXPORT_ARGS | default "--quant q8_0 --quant q4_0"}}
     sources:
       - scripts/export_llamacpp_gliner2.py
       - scripts/export_llamacpp.py
     generates:
       - models/gliner2-base-llamacpp/gguf/model.gguf
+      - models/gliner2-base-llamacpp/gguf/model-q8_0.gguf
+      - models/gliner2-base-llamacpp/gguf/model-q4_0.gguf
 
   pii:llamacpp:
     desc: Export fastino/gliner2-privacy-filter-PII-multi for the ggml engine
     deps:
       - check:uv
     cmds:
-      - uv run scripts/export_llamacpp_gliner2.py --model-path models/gliner2-privacy-hf --output-dir models/gliner2-privacy-llamacpp {{.EXPORT_ARGS | default ""}}
+      - uv run scripts/export_llamacpp_gliner2.py gliner2 --model-path models/gliner2-privacy-hf --output-dir models/gliner2-privacy-llamacpp {{.EXPORT_ARGS | default "--quant q8_0 --quant q4_0"}}
     generates:
       - models/gliner2-privacy-llamacpp/gguf/model.gguf
 
@@ -840,7 +843,7 @@ tasks:
     deps:
       - check:uv
     cmds:
-      - uv run scripts/export_llamacpp_gliner2.py --model-path models/gliguard-hf --output-dir models/gliguard-llamacpp {{.EXPORT_ARGS | default ""}}
+      - uv run scripts/export_llamacpp_gliner2.py gliner2 --model-path models/gliguard-hf --output-dir models/gliguard-llamacpp {{.EXPORT_ARGS | default "--quant q8_0 --quant q4_0"}}
     generates:
       - models/gliguard-llamacpp/gguf/model.gguf
 
@@ -849,6 +852,7 @@ tasks:
     deps:
       - check:uv
     cmds:
+      - uvx --from huggingface-hub hf download {{.GLINER2DOT5_SMALL_HF_MODEL}} --local-dir models/gliner2dot5-small-hf
       - uv run scripts/export_llamacpp_gliner2.py gliner2dot5 --model-path models/gliner2dot5-small-hf --output-dir models/gliner2dot5-small-llamacpp {{.EXPORT_ARGS | default ""}}
     generates:
       - models/gliner2dot5-small-llamacpp/gguf/model.gguf
@@ -872,7 +876,7 @@ tasks:
       - models/gliner-multitask-large-llamacpp/gguf/model.gguf
 
   llamacpp:natives:
-    desc: 'Install the llama.cpp native libraries llamaj.cpp 2.8.0 expects into ~/.llama.cpp (they are no longer inside the jar). Override LLAMA_CPP_NATIVE_VERSION, LLAMAJ_CPP_DIR'
+    desc: 'Install the llama.cpp native libraries llamaj.cpp 2.8.0 expects into ~/.llama.cpp (they are no longer inside the jar; backend plugins such as libggml-deberta go to ~/.llama.cpp/plugins, see llamacpp:deberta-plugin). Override LLAMA_CPP_NATIVE_VERSION, LLAMAJ_CPP_DIR'
     vars:
       LLAMA_CPP_NATIVE_VERSION: '{{.LLAMA_CPP_NATIVE_VERSION | default "v0.4.0"}}'
       LLAMAJ_CPP_DIR: '{{.LLAMAJ_CPP_DIR | default "../llamaj.cpp"}}'
@@ -883,6 +887,14 @@ tasks:
       - rm -rf /tmp/gliner4j-natives && bash {{.LLAMAJ_CPP_DIR}}/scripts/download-native-libraries.sh -o {{.OS}} -p {{.PLATFORM}} -v {{.LLAMA_CPP_NATIVE_VERSION}} -d /tmp/gliner4j-natives
       - mkdir -p ~/.llama.cpp && rm -f ~/.llama.cpp/lib* && cp -a /tmp/gliner4j-natives/{{.OS}}/{{.PLATFORM}}/. ~/.llama.cpp/ && echo {{.LLAMA_CPP_NATIVE_VERSION}} > ~/.llama.cpp/.llama-cpp-version
       - ls ~/.llama.cpp
+
+  llamacpp:deberta-plugin:
+    desc: 'Build the gliner4j DEBERTA ggml backend plugin (fused disentangled attention, CUDA) against LLAMA_CPP_DIR and install it into ~/.llama.cpp/plugins (override CUDA_ARCHS, PLUGIN_DIR)'
+    cmds:
+      - LLAMA_CPP_DIR={{.LLAMA_CPP_DIR}} CUDA_ARCHS={{.CUDA_ARCHS | default "80;86;89;90"}} PLUGIN_DIR={{.PLUGIN_DIR | default "$HOME/.llama.cpp/plugins"}} scripts/build_ggml_deberta.sh
+    sources:
+      - gliner4j-llamacpp/native/ggml-deberta/*
+      - scripts/build_ggml_deberta.sh
 
   llamacpp:all:
     desc: Export every llama.cpp / ggml engine bundle (needs the *-hf checkouts of the fastino models and a llama.cpp checkout)

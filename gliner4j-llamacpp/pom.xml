@@ -52,9 +52,15 @@
             <artifactId>llamaj.cpp</artifactId>
             <version>${llamaj.cpp.version}</version>
         </dependency>
+        <!-- Like core: provided, so the consuming module picks the runtime artifact (onnxruntime /
+             onnxruntime_gpu / onnxruntime_openvino) under its own profile. A compile-scoped
+             dependency here resolves to the CPU artifact in this module's installed pom and would
+             put both natives on a consumer's classpath — the CPU one wins and CUDA silently falls
+             back ("This binary was not compiled with CUDA support"). -->
         <dependency>
             <groupId>com.microsoft.onnxruntime</groupId>
             <artifactId>${onnxruntime.artifactId}</artifactId>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
@@ -80,7 +86,49 @@
     </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- Bundled verbatim next to pom.xml (not under src/main/resources) so it's visible
+                 in the module root too, but still lands at licenses/ in the jar root. -->
+            <resource>
+                <directory>${project.basedir}/licenses</directory>
+                <targetPath>licenses</targetPath>
+            </resource>
+        </resources>
         <plugins>
+            <!-- The root pom's plugin-level <excludes> is a no-op in license-maven-plugin 4.6
+                 (deprecated legacyConfigExcludes, superseded by gravitee-parent's licenseSets);
+                 override with the same licenseSet here, plus licenses/**, so the verbatim
+                 third-party license texts below aren't rejected for missing an Apache header. -->
+            <plugin>
+                <groupId>com.mycila</groupId>
+                <artifactId>license-maven-plugin</artifactId>
+                <configuration>
+                    <licenseSets>
+                        <licenseSet>
+                            <header>com/mycila/maven/plugin/license/templates/APACHE-2.txt</header>
+                            <excludes>
+                                <exclude>LICENSE.txt</exclude>
+                                <exclude>NOTICE.txt</exclude>
+                                <exclude>**/README</exclude>
+                                <exclude>src/main/packaging/**</exclude>
+                                <exclude>src/test/resources/**</exclude>
+                                <exclude>src/main/resources/**</exclude>
+                                <exclude>src/main/webapp/**</exclude>
+                                <exclude>node_modules/**</exclude>
+                                <exclude>dist/**</exclude>
+                                <exclude>.tmp/**</exclude>
+                                <exclude>.*</exclude>
+                                <exclude>.*/**</exclude>
+                                <exclude>**/*.adoc</exclude>
+                                <exclude>licenses/**</exclude>
+                            </excludes>
+                        </licenseSet>
+                    </licenseSets>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>

@@ -24,7 +24,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * GLiNER2.5 NER (and the GLiNER2 classifier contract) on the ggml engine over one
- * {@link GgmlGliner2dot5Model}; rows are scored one at a time.
+ * {@link GgmlGliner2dot5Model}; rows are scored one at a time, or as one padded batch on CUDA.
  */
 public final class GgmlGliner2dot5NerRuntime
   implements Gliner2dot5NerRuntime, Gliner2ClassifierRuntime {
@@ -43,7 +43,7 @@ public final class GgmlGliner2dot5NerRuntime
     var rc = ctx.runtimeConfig();
     int gpuLayers = LlamaGliclassClassificationStrategy.gpuLayers(rc);
     var model = new GgmlGliner2dot5Model(
-      ctx.modelDir().resolve("gguf").resolve("model.gguf"),
+      GgmlWeights.resolveModelGguf(ctx.modelDir(), ctx.variant()),
       gpuLayers > 0,
       LlamaBackbone.threads(rc)
     );
@@ -75,12 +75,23 @@ public final class GgmlGliner2dot5NerRuntime
     var pairLogits = new float[batchSize * q * c];
     var candidates = new long[batchSize * c * 2];
     var nullLogits = new float[batchSize * q];
+    var rows = new long[batchSize][];
+    var words = new int[batchSize][];
+    int longest = 0;
     for (int b = 0; b < batchSize; b++) {
-      var res = model.scoreEntities(
-        unpadded(inputIds[b], attentionMask[b]),
-        wordPositions(wordPositionsFlat, b, maxTextLen),
-        qp
-      );
+      rows[b] = unpadded(inputIds[b], attentionMask[b]);
+      words[b] = wordPositions(wordPositionsFlat, b, maxTextLen);
+      longest = Math.max(longest, rows[b].length);
+    }
+    // CUDA: short rows are launch-bound, so pad them into one graph (GgmlGliner2Runtime does the same)
+    GgmlGliner2dot5Model.NerResult[] batched = batchSize > 1 &&
+      model.prefersBatchedScoring(longest)
+      ? model.scoreEntitiesBatch(rows, words, qp)
+      : null;
+    for (int b = 0; b < batchSize; b++) {
+      var res = batched != null
+        ? batched[b]
+        : model.scoreEntities(rows[b], words[b], qp);
       for (int qq = 0; qq < q; qq++) {
         System.arraycopy(
           res.pairLogits()[qq],
