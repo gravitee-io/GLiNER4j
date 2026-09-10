@@ -74,7 +74,8 @@ final class GgmlWeights implements AutoCloseable {
         log.info("{} on {}", what, device);
       }
     }
-    this.metal = device.startsWith("Metal");
+    // ggml names Metal devices MTL0, MTL1 … since its virtual-device refactor ("Metal" before)
+    this.metal = device.startsWith("MTL") || device.startsWith("Metal");
     this.gpu = !"CPU".equals(device);
     if (chosen == null || chosen.address() == 0) {
       chosen = Ggml.cpuInit();
