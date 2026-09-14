@@ -31,10 +31,14 @@ import java.util.TreeMap;
  *
  * <p>Chunks are concatenated verbatim and each chunk is word-split on its own, exactly like the
  * Python session. Not thread-safe.
+ *
+ * <p><b>Failures.</b> An append that would overflow the context window is rejected before anything
+ * changes, so the session stays usable. Any failure once the chunk reached the backbone closes the
+ * session: the KV cache may already hold the chunk, and the Java view could no longer match it.
  */
 public final class StreamingSpanSession implements AutoCloseable {
 
-  private final StreamingSpanEngine engine;
+  private final StreamingSpanBackend engine;
   private final String id;
   private final List<String> labels;
   private final int seq;
@@ -46,9 +50,10 @@ public final class StreamingSpanSession implements AutoCloseable {
   private float[][] labelReps;
   private int tokenLen;
   private boolean closed;
+  private RuntimeException failure;
 
   StreamingSpanSession(
-    StreamingSpanEngine engine,
+    StreamingSpanBackend engine,
     String id,
     List<String> labels
   ) {
@@ -82,84 +87,110 @@ public final class StreamingSpanSession implements AutoCloseable {
     return wordStates.size();
   }
 
-  /** Appends a chunk, rescoring the affected spans, and returns the full snapshot at {@code threshold}. */
+  /**
+   * Appends a chunk, rescoring the affected spans, and returns the full snapshot at {@code threshold}.
+   *
+   * @throws IllegalStateException if the chunk would overflow the context window (the session is
+   *     left unchanged), or if the session is closed
+   */
   public List<EntitySpan> append(String chunk, float threshold) {
     checkOpen();
     if (chunk == null || chunk.isEmpty()) {
       return snapshot(threshold);
     }
     var words = engine.words(chunk);
-    int charOffset = text.length();
-    text.append(chunk);
     if (words.words().isEmpty()) {
+      text.append(chunk);
       return snapshot(threshold);
     }
-    for (int i = 0; i < words.words().size(); i++) {
-      charStarts.add(charOffset + words.starts()[i]);
-      charEnds.add(charOffset + words.ends()[i]);
+
+    // Cold pass: prompt + first chunk in one decode; label vectors from the prompt rows.
+    var prompt = labelReps == null ? engine.prompt(labels) : null;
+    int startPos = prompt == null ? tokenLen : 0;
+    long[] ids = prompt == null
+      ? words.ids()
+      : concat(prompt.ids(), words.ids());
+    if (startPos + ids.length > engine.nCtx()) {
+      throw new IllegalStateException(
+        "append would exceed the context window: " +
+          (startPos + ids.length) +
+          " > nCtx=" +
+          engine.nCtx() +
+          " — session " +
+          id +
+          " is unchanged; start a new session to continue"
+      );
     }
 
-    List<float[]> rows;
-    int wordRowOffset;
-    if (labelReps == null) {
-      // Cold pass: prompt + first chunk in one decode; label vectors from the prompt rows.
-      var prompt = engine.prompt(labels);
-      var ids = new long[prompt.ids().length + words.ids().length];
-      System.arraycopy(prompt.ids(), 0, ids, 0, prompt.ids().length);
-      System.arraycopy(
-        words.ids(),
-        0,
-        ids,
-        prompt.ids().length,
-        words.ids().length
-      );
-      rows = engine.decode(seq, ids, 0);
-      labelReps = engine.labelEmbeddings(
-        rows.subList(0, prompt.ids().length),
-        prompt
-      );
-      wordRowOffset = prompt.ids().length;
-      tokenLen = ids.length;
-    } else {
-      rows = engine.decode(seq, words.ids(), tokenLen);
-      wordRowOffset = 0;
-      tokenLen += words.ids().length;
+    try {
+      var rows = engine.decode(seq, ids, startPos);
+      int wordRowOffset = 0;
+      if (prompt != null) {
+        labelReps = engine.labelEmbeddings(
+          rows.subList(0, prompt.ids().length),
+          prompt
+        );
+        wordRowOffset = prompt.ids().length;
+      }
+      // The KV cache now holds the chunk: bring the Java side level with it.
+      int charOffset = text.length();
+      text.append(chunk);
+      for (int i = 0; i < words.words().size(); i++) {
+        charStarts.add(charOffset + words.starts()[i]);
+        charEnds.add(charOffset + words.ends()[i]);
+      }
+      tokenLen = startPos + ids.length;
+      int past = wordStates.size();
+      for (int first : words.firstSubtoken()) {
+        wordStates.add(rows.get(wordRowOffset + first));
+      }
+      rescore(past);
+    } catch (RuntimeException e) {
+      fail(e);
+      throw e;
     }
-    int past = wordStates.size();
-    for (int first : words.firstSubtoken()) {
-      wordStates.add(rows.get(wordRowOffset + first));
-    }
+    return snapshot(threshold);
+  }
+
+  /** Rescores the candidate spans for the words added after the first {@code past}. */
+  private void rescore(int past) {
     int total = wordStates.size();
-
     var cands = candidates(
       past,
       total - past,
       engine.maxWidth(),
       engine.rightContextWidth()
     );
-    if (cands.length > 0) {
-      int firstStart = Integer.MAX_VALUE;
-      for (long key : cands)
-        firstStart = Math.min(firstStart, (int) (key >>> 32));
-      var window = wordStates.subList(firstStart, total);
-      var starts = new int[cands.length];
-      var ends = new int[cands.length];
-      for (int i = 0; i < cands.length; i++) {
-        starts[i] = (int) (cands[i] >>> 32) - firstStart;
-        ends[i] = (int) (cands[i] & 0xffffffffL) - firstStart;
-      }
-      var logits = engine.spanLogits(
-        window,
-        starts,
-        ends,
-        total - 1 - firstStart,
-        labelReps
-      );
-      for (int i = 0; i < cands.length; i++) {
-        spanLogits.put(cands[i], logits[i]);
-      }
+    if (cands.length == 0) {
+      return;
     }
-    return snapshot(threshold);
+    int firstStart = Integer.MAX_VALUE;
+    for (long key : cands)
+      firstStart = Math.min(firstStart, (int) (key >>> 32));
+    var window = wordStates.subList(firstStart, total);
+    var starts = new int[cands.length];
+    var ends = new int[cands.length];
+    for (int i = 0; i < cands.length; i++) {
+      starts[i] = (int) (cands[i] >>> 32) - firstStart;
+      ends[i] = (int) (cands[i] & 0xffffffffL) - firstStart;
+    }
+    var logits = engine.spanLogits(
+      window,
+      starts,
+      ends,
+      total - 1 - firstStart,
+      labelReps
+    );
+    for (int i = 0; i < cands.length; i++) {
+      spanLogits.put(cands[i], logits[i]);
+    }
+  }
+
+  private static long[] concat(long[] a, long[] b) {
+    var out = new long[a.length + b.length];
+    System.arraycopy(a, 0, out, 0, a.length);
+    System.arraycopy(b, 0, out, a.length, b.length);
+    return out;
   }
 
   /**
@@ -241,7 +272,23 @@ public final class StreamingSpanSession implements AutoCloseable {
     return out;
   }
 
+  /** Closes the session after a failure past the capacity check; later calls report the cause. */
+  private void fail(RuntimeException cause) {
+    failure = cause;
+    try {
+      close();
+    } catch (RuntimeException e) {
+      cause.addSuppressed(e);
+    }
+  }
+
   private void checkOpen() {
+    if (failure != null) {
+      throw new IllegalStateException(
+        "session " + id + " was closed after a failed append",
+        failure
+      );
+    }
     if (closed) {
       throw new IllegalStateException("session " + id + " is closed");
     }

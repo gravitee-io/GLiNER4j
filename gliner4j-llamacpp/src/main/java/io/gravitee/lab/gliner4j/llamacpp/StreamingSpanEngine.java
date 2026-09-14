@@ -33,7 +33,9 @@ import org.slf4j.LoggerFactory;
  * sub-token's final hidden state; label vectors come from the DeBERTa labels encoder over the
  * prompt rows and are cached for the session.
  */
-public final class StreamingSpanEngine implements AutoCloseable {
+public final class StreamingSpanEngine
+  extends StreamingSpanBackend
+  implements AutoCloseable {
 
   private static final Logger log = LoggerFactory.getLogger(
     StreamingSpanEngine.class
