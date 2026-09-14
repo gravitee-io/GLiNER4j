@@ -17,8 +17,8 @@ automatically from the model bundle, so the same Java façades drive every model
 | **GLiNER2** (fastino) | `gliner2` *(default)* | NER · classification · relation · structure | uni-encoder + count-aware scoring | DeBERTa-v3 | `fastino/gliner2-base-v1`, PII, GLiGuard |
 | **GLiNER2.5** (fastino) | `gliner2dot5` | NER · classification · relation | uni-encoder + span-free boundary head (start/end/inside marginals, shared candidate pool, pooled reranker) | DeBERTa-v3, mDeBERTa-v3 | `fastino/gliner2.5-base-v1`, `gliner2.5-small-v1`, `gliner2.5-multi-v1` |
 | **GLiClass** | `gliclass` | zero-shot classification | uni-encoder + score head (`simple`/`mlp`) | ModernBERT, DeBERTa / mDeBERTa, ettin | `knowledgator/gliclass-modern-base-v3.0`, `gliclass-x-base` (multilingual), `gliclass-edge-v3.0` |
-| **GLiNER streaming-span** (`gliner4j-llamacpp`, Java 25) | `gliner-streaming-span` | NER · streaming NER with rolling revision | causal decoder on **llama.cpp** (KV cache per session) + DeBERTa labels encoder and `markerV2` span head as **ggml graphs** | Qwen3-0.6B | `knowledgator/gliner-stream-pii-v1.0` |
-| **GLiClass decoder-kv** (`gliner4j-llamacpp`, Java 25) | `gliclass-decoder-kv` | zero-shot classification · LLM routing · streaming sessions | causal decoder on **llama.cpp** (KV cache per session) + DeBERTa scorer as a **ggml graph** on the same backend | Qwen3-0.6B | `scx-admin/scx-router-v0.1` |
+| **GLiNER streaming-span** (`gliner4j-llamacpp`; Java 25, required by full-reactor builds) | `gliner-streaming-span` | NER · streaming NER with rolling revision | causal decoder on **llama.cpp** (KV cache per session) + DeBERTa labels encoder and `markerV2` span head as **ggml graphs** | Qwen3-0.6B | `knowledgator/gliner-stream-pii-v1.0` |
+| **GLiClass decoder-kv** (`gliner4j-llamacpp`; Java 25, required by full-reactor builds) | `gliclass-decoder-kv` | zero-shot classification · LLM routing · streaming sessions | causal decoder on **llama.cpp** (KV cache per session) + DeBERTa scorer as a **ggml graph** on the same backend | Qwen3-0.6B | `scx-admin/scx-router-v0.1` |
 | **GLiNER uni-encoder** | `gliner-uni` | NER | single span graph (`markerV0`) | DeBERTa | `knowledgator/gliner-pii-base-v1.0`, `gliner-multitask-large` |
 | **GLiNER bi-encoder** | `gliner-bi` | NER | dual text + label encoders | DeBERTa/ModernBERT/ettin + bge/MiniLM | `knowledgator/gliner-bi-small-v1.0`, `modern-gliner-bi-base` |
 
@@ -41,7 +41,8 @@ facade change per family.
 
 ## Prerequisites
 
-- Java 21+
+- Java 21+ to consume `gliner4j-core`; **JDK 25** to build the full reactor (`task build` /
+  `task test`), which includes the `gliner4j-llamacpp` module
 - [Task](https://taskfile.dev) — task runner
 - [Maven](https://maven.apache.org/install.html) — Java build tool
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) — Python package manager (for model
