@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0...1.1.0) (2026-09-14)
+
+
+### Features
+
+* gliner 2.5, streaming gliclass + gliner pii + ggml backend ([#34](https://github.com/gravitee-io/GLiNER4j/issues/34)) ([aecea47](https://github.com/gravitee-io/GLiNER4j/commit/aecea47faadd26e7f1e94915a4f68adb8dcc6446))
+
 # 1.0.0 (2026-08-05)
 
 
