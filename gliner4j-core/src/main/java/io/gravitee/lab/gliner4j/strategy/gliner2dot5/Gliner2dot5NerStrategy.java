@@ -22,7 +22,7 @@ import io.gravitee.lab.gliner4j.processor.AssemblerCache;
 import io.gravitee.lab.gliner4j.processor.InputAssembler;
 import io.gravitee.lab.gliner4j.processor.PreprocessedInput;
 import io.gravitee.lab.gliner4j.processor.SchemaEncoder;
-import io.gravitee.lab.gliner4j.processor.TextEncoder;
+import io.gravitee.lab.gliner4j.processor.TextPreprocessing;
 import io.gravitee.lab.gliner4j.runtime.Gliner2dot5NerRuntime;
 import io.gravitee.lab.gliner4j.runtime.MicroBatcher;
 import io.gravitee.lab.gliner4j.runtime.OnnxGliner2dot5NerRuntime;
@@ -62,8 +62,7 @@ public final class Gliner2dot5NerStrategy implements NerStrategy {
     InputAssembler
   > overrideAssemblers;
   private final BoundaryDecoder decoder;
-  private final boolean lowercaseWords;
-  private final boolean appendPeriod;
+  private final TextPreprocessing preprocessing;
   private final GLiNER4jTelemetry telemetry = new GLiNER4jTelemetry("extract");
   private final MicroBatcher<Map<String, List<EntitySpan>>> microBatcher;
 
@@ -90,8 +89,7 @@ public final class Gliner2dot5NerStrategy implements NerStrategy {
       config.archBoolean("enable_abstention", true),
       (float) config.archDouble("abstention_threshold", 0.5)
     );
-    this.lowercaseWords = config.archBoolean("lowercase_words", true);
-    this.appendPeriod = config.archBoolean("append_period", true);
+    this.preprocessing = TextPreprocessing.whitespaceSplitter(config);
     this.microBatcher = runtimeConfig.isMicroBatchingEnabled()
       ? new MicroBatcher<>(
         runtimeConfig.getMicroBatchMaxSize(),
@@ -208,7 +206,7 @@ public final class Gliner2dot5NerStrategy implements NerStrategy {
     for (int i = 0; i < batchSize; i++) {
       var text = texts.get(i);
       if (text == null || text.isBlank()) continue;
-      var enc = new TextEncoder(text, lowercaseWords, appendPeriod);
+      var enc = preprocessing.encode(text);
       if (enc.getTextLen() == 0) continue;
       inputs[i] = assembler.assemble(enc);
       slots.add(i);

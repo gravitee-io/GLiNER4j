@@ -36,6 +36,21 @@ public class TextEncoder {
     "\\w+(?:[-_]\\w+)*|\\S"
   );
 
+  /**
+   * Port of the GLiNER2 {@code WhitespaceTokenSplitter} ({@code gliner2/processing/word_splitter.py}):
+   * URLs, emails and {@code @mentions} stay one word, and {@code \w} is Unicode like Python's
+   * {@code re}. The email/mention classes stay {@code [a-z…]} under Unicode case-folding, exactly as
+   * upstream, so {@code @café} splits into {@code @caf} + {@code é}.
+   */
+  public static final Pattern WHITESPACE_SPLITTER_PATTERN = Pattern.compile(
+    "(?:https?://\\S+|www\\.\\S+)" +
+      "|[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}" +
+      "|@[a-z0-9_]+" +
+      "|\\w+(?:[-_]\\w+)*" +
+      "|\\S",
+    Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS
+  );
+
   private final List<String> words;
   private final int[] wordStartChars;
   private final int[] wordEndChars;
@@ -69,6 +84,16 @@ public class TextEncoder {
     boolean lowercaseWords,
     boolean appendPeriod
   ) {
+    this(text, TOKEN_PATTERN, lowercaseWords, appendPeriod);
+  }
+
+  /** Same, splitting words with {@code pattern} instead of {@link #TOKEN_PATTERN}. */
+  public TextEncoder(
+    String text,
+    Pattern pattern,
+    boolean lowercaseWords,
+    boolean appendPeriod
+  ) {
     this.originalText = text;
 
     // Capacity estimate: ~1 token per 5 chars (typical English). Grows by doubling on overflow.
@@ -78,7 +103,7 @@ public class TextEncoder {
     var ends = new int[initCap];
     int n = 0;
 
-    var matcher = TOKEN_PATTERN.matcher(text);
+    var matcher = pattern.matcher(text);
     while (matcher.find()) {
       if (n == wordsArr.length) {
         int newCap = wordsArr.length << 1;

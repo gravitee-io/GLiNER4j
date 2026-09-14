@@ -19,6 +19,7 @@ import io.gravitee.lab.gliner4j.arch.Architecture;
 import io.gravitee.lab.gliner4j.arch.LoadContext;
 import io.gravitee.lab.gliner4j.arch.ModelArchitecture;
 import io.gravitee.lab.gliner4j.arch.TaskType;
+import io.gravitee.lab.gliner4j.processor.TextPreprocessing;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.RelationDefinition;
@@ -67,8 +68,13 @@ public final class Gliner2dot5Architecture implements ModelArchitecture {
     List<ClassificationLabel> labels
   ) {
     // Same prompt, same [L]-marker gather and the same classifier MLP as GLiNER2 — the
-    // classifier_full.onnx contract is identical, so the GLiNER2 strategy serves it as is.
-    return Gliner2ClassificationStrategy.create(ctx, labels);
+    // classifier_full.onnx contract is identical, so the GLiNER2 strategy serves it, fed with
+    // the text conventions the NER and relation paths use.
+    return Gliner2ClassificationStrategy.create(
+      ctx,
+      labels,
+      TextPreprocessing.whitespaceSplitter(ctx.config())
+    );
   }
 
   @Override

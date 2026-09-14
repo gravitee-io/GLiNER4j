@@ -16,18 +16,26 @@
 package io.gravitee.lab.gliner4j;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import org.junit.jupiter.api.Test;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * GLiNER2.5 zero-shot classification through the shared {@code classifier_full.onnx} contract
- * (same [L]-marker prompt and classifier MLP as GLiNER2). Skipped unless the small bundle is
- * exported ({@code task gliner2dot5-small}).
+ * (same [L]-marker prompt and classifier MLP as GLiNER2), fed with the GLiNER2 processor text conventions.
+ *
+ * <p>Expected top labels and confidences come from the upstream reference implementation
+ * ({@code AutoExtractor.classify_text}, gliner2 package) on {@code fastino/gliner2.5-small-v1}. The
+ * cases cover upper-case text, a missing terminal period, accents, a URL, an email and a mention.
+ * Skipped unless the small bundle is exported ({@code task gliner2dot5-small}).
  */
 @EnabledIf("modelDirExists")
 class Gliner2dot5ClassifierIntegrationTest {
@@ -40,20 +48,52 @@ class Gliner2dot5ClassifierIntegrationTest {
     return Files.exists(MODEL_DIR.resolve("onnx/classifier_full.onnx"));
   }
 
-  @Test
-  void classifiesSentimentZeroShot() {
-    var labels = List.of(
-      new ClassificationLabel("positive"),
-      new ClassificationLabel("negative")
-    );
-    try (var classifier = GLiNER4jClassifier.load(MODEL_DIR, labels)) {
-      var results = classifier.classify(
+  static Stream<Arguments> upstreamReference() {
+    return Stream.of(
+      Arguments.of(
         "This movie is absolutely fantastic and I loved every minute of it!",
-        0.3f
-      );
+        List.of("positive", "negative"),
+        "positive",
+        0.9818537f
+      ),
+      Arguments.of(
+        "The Service Was TERRIBLE and the food arrived cold",
+        List.of("positive", "negative"),
+        "negative",
+        0.9617798f
+      ),
+      Arguments.of(
+        "Élodie jane.doe@example.com visited https://example.com in Montréal @café",
+        List.of("travel", "contact information", "sports"),
+        "contact information",
+        0.9697773f
+      )
+    );
+  }
+
+  @ParameterizedTest
+  @MethodSource("upstreamReference")
+  void matchesUpstreamScores(
+    String text,
+    List<String> labelNames,
+    String expectedLabel,
+    float expectedConfidence
+  ) {
+    var labels = labelNames.stream().map(ClassificationLabel::new).toList();
+    try (var classifier = GLiNER4jClassifier.load(MODEL_DIR, labels)) {
+      var results = classifier.classify(text, 0.0f);
       assertThat(results).isNotEmpty();
-      assertThat(results.get(0).label()).isEqualTo("positive");
-      assertThat(results.get(0).confidence()).isBetween(0.0f, 1.0f);
+      assertThat(results.get(0).label()).isEqualTo(expectedLabel);
+      assertThat(results.get(0).confidence()).isCloseTo(
+        expectedConfidence,
+        within(0.01f)
+      );
+      // Batch path shares the same preprocessing.
+      var batch = classifier.classifyBatch(List.of(text), 0.0f).get(0);
+      assertThat(batch.get(0).confidence()).isCloseTo(
+        results.get(0).confidence(),
+        within(1e-4f)
+      );
     }
   }
 }

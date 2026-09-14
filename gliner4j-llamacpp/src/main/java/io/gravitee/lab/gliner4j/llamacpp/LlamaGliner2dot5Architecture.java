@@ -20,6 +20,7 @@ import io.gravitee.lab.gliner4j.arch.Engine;
 import io.gravitee.lab.gliner4j.arch.LoadContext;
 import io.gravitee.lab.gliner4j.arch.ModelArchitecture;
 import io.gravitee.lab.gliner4j.arch.TaskType;
+import io.gravitee.lab.gliner4j.processor.TextPreprocessing;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.RelationDefinition;
@@ -73,7 +74,8 @@ public final class LlamaGliner2dot5Architecture implements ModelArchitecture {
     return Gliner2ClassificationStrategy.create(
       ctx,
       labels,
-      GgmlGliner2dot5NerRuntime.load(ctx)
+      GgmlGliner2dot5NerRuntime.load(ctx),
+      TextPreprocessing.whitespaceSplitter(ctx.config())
     );
   }
 

@@ -22,7 +22,7 @@ import io.gravitee.lab.gliner4j.processor.AssemblerCache;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaInput;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaInputAssembler;
 import io.gravitee.lab.gliner4j.processor.SchemaUnit;
-import io.gravitee.lab.gliner4j.processor.TextEncoder;
+import io.gravitee.lab.gliner4j.processor.TextPreprocessing;
 import io.gravitee.lab.gliner4j.runtime.Gliner2dot5RelationRuntime;
 import io.gravitee.lab.gliner4j.runtime.MicroBatcher;
 import io.gravitee.lab.gliner4j.runtime.OnnxGliner2dot5RelationRuntime;
@@ -63,8 +63,7 @@ public final class Gliner2dot5RelationStrategy implements RelationStrategy {
     MultiSchemaInputAssembler
   > overrideAssemblers;
   private final BoundaryRelationDecoder decoder;
-  private final boolean lowercaseWords;
-  private final boolean appendPeriod;
+  private final TextPreprocessing preprocessing;
   private final GLiNER4jTelemetry telemetry = new GLiNER4jTelemetry(
     "extract_relations"
   );
@@ -89,8 +88,7 @@ public final class Gliner2dot5RelationStrategy implements RelationStrategy {
     this.decoder = new BoundaryRelationDecoder(
       (float) config.archDouble("relation_temperature", 1.0)
     );
-    this.lowercaseWords = config.archBoolean("lowercase_words", true);
-    this.appendPeriod = config.archBoolean("append_period", true);
+    this.preprocessing = TextPreprocessing.whitespaceSplitter(config);
     this.microBatcher = runtimeConfig.isMicroBatchingEnabled()
       ? new MicroBatcher<>(
         runtimeConfig.getMicroBatchMaxSize(),
@@ -207,7 +205,7 @@ public final class Gliner2dot5RelationStrategy implements RelationStrategy {
     for (int i = 0; i < batchSize; i++) {
       var text = texts.get(i);
       if (text == null || text.isBlank()) continue;
-      var enc = new TextEncoder(text, lowercaseWords, appendPeriod);
+      var enc = preprocessing.encode(text);
       if (enc.getTextLen() == 0) continue;
       inputs[i] = assembler.assemble(enc);
       slots.add(i);
