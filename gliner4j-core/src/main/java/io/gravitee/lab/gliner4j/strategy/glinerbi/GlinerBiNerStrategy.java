@@ -154,15 +154,13 @@ public final class GlinerBiNerStrategy implements NerStrategy {
       return Map.of();
     }
 
-    // 1. Text input: [CLS] <<ENT>> x N <<SEP>> w1 ... [SEP]  (marker-only prompt, no type words)
+    // 1. Text input: [CLS] w1 ... wN [SEP]. gliner's BaseBiEncoderProcessor.tokenize_inputs feeds
+    // the words alone — no <<ENT>> markers and no <<SEP>> — because the label side is encoded
+    // separately by the label encoder.
     var idsList = new ArrayList<Long>();
     var wordsMaskList = new ArrayList<Long>();
     idsList.add(clsId);
     wordsMaskList.add(0L);
-    for (int n = 0; n < labels.size(); n++) {
-      GlinerPrompt.appendToken(tokenizer, entToken, idsList, wordsMaskList, 0L);
-    }
-    GlinerPrompt.appendToken(tokenizer, sepToken, idsList, wordsMaskList, 0L);
     for (int w = 0; w < textLen; w++) {
       GlinerPrompt.appendWord(
         tokenizer,

@@ -1,0 +1,7 @@
+io.gravitee.lab.gliner4j.llamacpp.GliclassDecoderKvArchitecture
+io.gravitee.lab.gliner4j.llamacpp.GlinerStreamingSpanArchitecture
+io.gravitee.lab.gliner4j.llamacpp.LlamaGliclassArchitecture
+io.gravitee.lab.gliner4j.llamacpp.LlamaGlinerUniArchitecture
+io.gravitee.lab.gliner4j.llamacpp.LlamaGliner2Architecture
+io.gravitee.lab.gliner4j.llamacpp.LlamaGliner2dot5Architecture
+io.gravitee.lab.gliner4j.llamacpp.LlamaGlinerBiArchitecture

@@ -26,7 +26,7 @@ import io.gravitee.lab.gliner4j.processor.BatchSpanPipeline;
 import io.gravitee.lab.gliner4j.processor.InputAssembler;
 import io.gravitee.lab.gliner4j.processor.PreprocessedInput;
 import io.gravitee.lab.gliner4j.processor.SchemaEncoder;
-import io.gravitee.lab.gliner4j.runtime.GLiNER4jNERRuntime;
+import io.gravitee.lab.gliner4j.runtime.Gliner2SpanRuntime;
 import io.gravitee.lab.gliner4j.runtime.MicroBatcher;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
@@ -55,7 +55,7 @@ public final class Gliner2NerStrategy
   extends AbstractNLP<
     EntityDefinition,
     Map<String, List<EntitySpan>>,
-    GLiNER4jNERRuntime
+    Gliner2SpanRuntime
   >
   implements NerStrategy {
 
@@ -72,7 +72,7 @@ public final class Gliner2NerStrategy
     GLiNER4jConfig config,
     RuntimeConfig runtimeConfig,
     DjlTokenizerWrapper tokenizer,
-    GLiNER4jNERRuntime runtime,
+    Gliner2SpanRuntime runtime,
     InputAssembler inputAssembler
   ) {
     super(
@@ -104,11 +104,23 @@ public final class Gliner2NerStrategy
     LoadContext ctx,
     List<EntityDefinition> entities
   ) {
-    var runtime = new GLiNER4jNERRuntime(
-      ctx.modelDir(),
-      ctx.variant(),
-      ctx.runtimeConfig()
+    return create(
+      ctx,
+      entities,
+      new io.gravitee.lab.gliner4j.runtime.GLiNER4jNERRuntime(
+        ctx.modelDir(),
+        ctx.variant(),
+        ctx.runtimeConfig()
+      )
     );
+  }
+
+  /** Same, over an already-built span runtime (e.g. the ggml one from {@code gliner4j-llamacpp}). */
+  public static Gliner2NerStrategy create(
+    LoadContext ctx,
+    List<EntityDefinition> entities,
+    Gliner2SpanRuntime runtime
+  ) {
     var schemaEncoder = entitySchemaEncoder(entities);
     var inputAssembler = new InputAssembler(ctx.tokenizer(), schemaEncoder);
 
@@ -240,11 +252,10 @@ public final class Gliner2NerStrategy
     try {
       for (var bucket : pipeline.buckets()) {
         try (var scoring = bucket.scoring()) {
-          int predCount = argmax(scoring.countLogits()[0]);
-          if (predCount == 0) {
-            continue;
-          }
           for (int j = 0; j < bucket.slots().length; j++) {
+            if (argmax(scoring.countLogitsFor(j)) == 0) {
+              continue;
+            }
             int si = bucket.slots()[j];
             int origIdx = batchIndices[si];
             var input = inputs[origIdx];

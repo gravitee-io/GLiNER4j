@@ -15,15 +15,19 @@
  */
 package io.gravitee.lab.gliner4j.arch;
 
+import io.gravitee.lab.gliner4j.GLiNER4jConfig;
 import io.gravitee.lab.gliner4j.arch.gliclass.GliclassArchitecture;
 import io.gravitee.lab.gliner4j.arch.gliner2.Gliner2Architecture;
+import io.gravitee.lab.gliner4j.arch.gliner2dot5.Gliner2dot5Architecture;
 import io.gravitee.lab.gliner4j.arch.glinerbi.GlinerBiArchitecture;
 import io.gravitee.lab.gliner4j.arch.glineruni.GlinerUniArchitecture;
-import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.ServiceLoader;
 
 /**
- * Registry resolving an {@link Architecture} to its {@link ModelArchitecture} implementation.
+ * Registry resolving an ({@link Architecture}, {@link Engine}) pair to its {@link ModelArchitecture}
+ * implementation.
  *
  * <p>Families are registered as they are implemented. Resolving a family that has no implementation
  * yet throws {@link UnsupportedOperationException} with a clear message, so loading a bundle whose
@@ -32,38 +36,72 @@ import java.util.Map;
  */
 public final class ModelArchitectures {
 
-  private static final Map<Architecture, ModelArchitecture> REGISTRY =
-    new EnumMap<>(Architecture.class);
+  /** Registry key: a family on an engine. */
+  public record Key(Architecture architecture, Engine engine) {
+    @Override
+    public String toString() {
+      return architecture.configValue() + "@" + engine.configValue();
+    }
+  }
+
+  private static final Map<Key, ModelArchitecture> REGISTRY =
+    new LinkedHashMap<>();
 
   static {
     register(new Gliner2Architecture());
+    register(new Gliner2dot5Architecture());
     register(new GliclassArchitecture());
     register(new GlinerUniArchitecture());
     register(new GlinerBiArchitecture());
+    // Families shipped by optional modules (e.g. gliner4j-llamacpp) register themselves through
+    // META-INF/services/io.gravitee.lab.gliner4j.arch.ModelArchitecture.
+    for (var extra : ServiceLoader.load(ModelArchitecture.class)) {
+      register(extra);
+    }
   }
 
   private ModelArchitectures() {}
 
   private static void register(ModelArchitecture architecture) {
-    REGISTRY.put(architecture.id(), architecture);
+    REGISTRY.put(
+      new Key(architecture.id(), architecture.engine()),
+      architecture
+    );
+  }
+
+  /** Resolves the implementation for the family and engine declared by {@code config}. */
+  public static ModelArchitecture forConfig(GLiNER4jConfig config) {
+    return forId(config.getArchitecture(), config.getEngine());
+  }
+
+  /** Resolves the ONNX Runtime implementation for {@code architecture}. */
+  public static ModelArchitecture forId(Architecture architecture) {
+    return forId(architecture, Engine.ONNX);
   }
 
   /**
-   * Resolves the implementation for {@code architecture}.
+   * Resolves the implementation for {@code architecture} on {@code engine}.
    *
    * @param architecture the family parsed from the bundle config
+   * @param engine the engine parsed from the bundle config
    * @return the registered implementation, never null
-   * @throws UnsupportedOperationException if no implementation is registered for the family
+   * @throws UnsupportedOperationException if no implementation is registered for the pair
    */
-  public static ModelArchitecture forId(Architecture architecture) {
-    var impl = REGISTRY.get(architecture);
+  public static ModelArchitecture forId(
+    Architecture architecture,
+    Engine engine
+  ) {
+    var impl = REGISTRY.get(new Key(architecture, engine));
     if (impl == null) {
       throw new UnsupportedOperationException(
         "Model family '" +
           architecture.configValue() +
-          "' is not yet supported by this version of GLiNER4j. " +
-          "Supported families: " +
-          REGISTRY.keySet().stream().map(Architecture::configValue).toList()
+          "' on engine '" +
+          engine.configValue() +
+          "' is not registered in this JVM. Every llamacpp implementation and the families " +
+          "gliclass-decoder-kv / gliner-streaming-span ship in the gliner4j-llamacpp module (Java 25), " +
+          "which must be on the classpath. Registered: " +
+          REGISTRY.keySet().stream().map(Key::toString).toList()
       );
     }
     return impl;

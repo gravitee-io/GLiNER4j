@@ -17,6 +17,7 @@ package io.gravitee.lab.gliner4j.processor;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Pattern;
 import lombok.Getter;
 
@@ -35,6 +36,21 @@ public class TextEncoder {
     "\\w+(?:[-_]\\w+)*|\\S"
   );
 
+  /**
+   * Port of the GLiNER2 {@code WhitespaceTokenSplitter} ({@code gliner2/processing/word_splitter.py}):
+   * URLs, emails and {@code @mentions} stay one word, and {@code \w} is Unicode like Python's
+   * {@code re}. The email/mention classes stay {@code [a-z…]} under Unicode case-folding, exactly as
+   * upstream, so {@code @café} splits into {@code @caf} + {@code é}.
+   */
+  public static final Pattern WHITESPACE_SPLITTER_PATTERN = Pattern.compile(
+    "(?:https?://\\S+|www\\.\\S+)" +
+      "|[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}" +
+      "|@[a-z0-9_]+" +
+      "|\\w+(?:[-_]\\w+)*" +
+      "|\\S",
+    Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CHARACTER_CLASS
+  );
+
   private final List<String> words;
   private final int[] wordStartChars;
   private final int[] wordEndChars;
@@ -50,6 +66,34 @@ public class TextEncoder {
    * @param text the input text to encode
    */
   public TextEncoder(String text) {
+    this(text, false, false);
+  }
+
+  /**
+   * Splits {@code text} into words with optional GLiNER2-processor parity options.
+   *
+   * @param text the input text
+   * @param lowercaseWords lower-case each word before subword tokenization (offsets still index
+   *                       the original text) — what fastino's {@code WhitespaceTokenSplitter} does
+   * @param appendPeriod append a final {@code "."} word when the text does not end in
+   *                     {@code . ! ?} — what fastino's collate step does; the extra word maps to
+   *                     the empty char range {@code [len, len)} so spans ending on it stay in bounds
+   */
+  public TextEncoder(
+    String text,
+    boolean lowercaseWords,
+    boolean appendPeriod
+  ) {
+    this(text, TOKEN_PATTERN, lowercaseWords, appendPeriod);
+  }
+
+  /** Same, splitting words with {@code pattern} instead of {@link #TOKEN_PATTERN}. */
+  public TextEncoder(
+    String text,
+    Pattern pattern,
+    boolean lowercaseWords,
+    boolean appendPeriod
+  ) {
     this.originalText = text;
 
     // Capacity estimate: ~1 token per 5 chars (typical English). Grows by doubling on overflow.
@@ -59,7 +103,7 @@ public class TextEncoder {
     var ends = new int[initCap];
     int n = 0;
 
-    var matcher = TOKEN_PATTERN.matcher(text);
+    var matcher = pattern.matcher(text);
     while (matcher.find()) {
       if (n == wordsArr.length) {
         int newCap = wordsArr.length << 1;
@@ -67,9 +111,27 @@ public class TextEncoder {
         starts = Arrays.copyOf(starts, newCap);
         ends = Arrays.copyOf(ends, newCap);
       }
-      wordsArr[n] = matcher.group();
+      var word = matcher.group();
+      wordsArr[n] = lowercaseWords ? word.toLowerCase(Locale.ROOT) : word;
       starts[n] = matcher.start();
       ends[n] = matcher.end();
+      n++;
+    }
+    if (
+      appendPeriod &&
+      n > 0 &&
+      !text.endsWith(".") &&
+      !text.endsWith("!") &&
+      !text.endsWith("?")
+    ) {
+      if (n == wordsArr.length) {
+        wordsArr = Arrays.copyOf(wordsArr, n + 1);
+        starts = Arrays.copyOf(starts, n + 1);
+        ends = Arrays.copyOf(ends, n + 1);
+      }
+      wordsArr[n] = ".";
+      starts[n] = text.length();
+      ends[n] = text.length();
       n++;
     }
 

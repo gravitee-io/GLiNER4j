@@ -17,6 +17,7 @@ package io.gravitee.lab.gliner4j.benchmark;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.gravitee.lab.gliner4j.GLiNER4jClassifier;
+import io.gravitee.lab.gliner4j.runtime.ExecutionProvider;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import java.io.IOException;
@@ -66,8 +67,17 @@ public class ClassificationBenchmark {
   @Param({ "gliclass" })
   private String profile;
 
+  /** ONNX: the {@code onnx*} sub-directory. llama.cpp: the GGUF quantization ({@code f16}, {@code q8_0}); other values use the bundle default. */
   @Param({ "onnx_quantized" })
   private String variant;
+
+  /** {@code onnx} (ONNX Runtime bundle at {@code modelDir}) or {@code llamacpp} (bundle at {@code llamacppModelDir}). */
+  @Param({ "onnx" })
+  private String engine;
+
+  /** {@code auto}, {@code cpu}, {@code cuda}, {@code openvino}; {@code auto} = Metal/CUDA for llama.cpp, best ORT EP for onnx. */
+  @Param({ "auto" })
+  private String executionProvider;
 
   @Param({ "tiny", "short", "medium", "long" })
   private String textLength;
@@ -94,7 +104,16 @@ public class ClassificationBenchmark {
         );
       }
       var json = MAPPER.readTree(in);
-      modelDir = json.get("modelDir").asText();
+      modelDir = "llamacpp".equals(engine)
+        ? json.path("llamacppModelDir").asText(null)
+        : json.get("modelDir").asText();
+      if (modelDir == null) {
+        throw new IllegalStateException(
+          "Profile " +
+            profile +
+            " has no llamacppModelDir (export it with task <family>:llamacpp)"
+        );
+      }
       for (var node : json.get("labels")) {
         allLabels.add(
           new ClassificationLabel(
@@ -129,9 +148,14 @@ public class ClassificationBenchmark {
       );
     }
 
-    // Execution provider is auto-detected from the native runtime on the classpath:
-    // a default build runs on CPU, a -Pcuda build picks CUDA, a -Popenvino build picks OpenVINO.
-    var runtimeConfig = RuntimeConfig.builder().build();
+    // ONNX: the EP must also be compiled in (-Pcuda / -Popenvino); llama.cpp: auto picks Metal/CUDA.
+    var runtimeConfig = RuntimeConfig.builder()
+      .executionProvider(
+        ExecutionProvider.valueOf(
+          executionProvider.toUpperCase(java.util.Locale.ROOT)
+        )
+      )
+      .build();
     classifier = GLiNER4jClassifier.load(
       Path.of(modelDir),
       labels,

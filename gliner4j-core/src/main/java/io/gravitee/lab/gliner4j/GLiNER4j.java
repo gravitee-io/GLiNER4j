@@ -27,7 +27,7 @@ import io.gravitee.lab.gliner4j.processor.MultiSchemaInputAssembler;
 import io.gravitee.lab.gliner4j.processor.SchemaUnit;
 import io.gravitee.lab.gliner4j.processor.UnitLayout;
 import io.gravitee.lab.gliner4j.runtime.BaseRuntime;
-import io.gravitee.lab.gliner4j.runtime.GLiNER4jNERRuntime;
+import io.gravitee.lab.gliner4j.runtime.Gliner2SpanRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
@@ -81,7 +81,7 @@ public class GLiNER4j implements AutoCloseable {
   private final GLiNER4jConfig config;
   private final RuntimeConfig runtimeConfig;
   private final DjlTokenizerWrapper tokenizer;
-  private final GLiNER4jNERRuntime runtime;
+  private final Gliner2SpanRuntime runtime;
   private final SpanDecoder spanDecoder;
   private final RelationDecoder relationDecoder;
 
@@ -89,7 +89,7 @@ public class GLiNER4j implements AutoCloseable {
     GLiNER4jConfig config,
     RuntimeConfig runtimeConfig,
     DjlTokenizerWrapper tokenizer,
-    GLiNER4jNERRuntime runtime
+    Gliner2SpanRuntime runtime
   ) {
     this.config = config;
     this.runtimeConfig = runtimeConfig;
@@ -122,11 +122,21 @@ public class GLiNER4j implements AutoCloseable {
       variant
     );
     var config = GLiNER4jConfig.load(modelDir);
-    ModelArchitectures.forId(config.getArchitecture()).requireSupported(
-      TaskType.RELATION
-    );
+    // The unified facade runs entities, relations and structures as units of one GLiNER2
+    // multi-unit prompt through the count-aware span graph — it needs the full GLiNER2 task set.
+    var architecture = ModelArchitectures.forConfig(config);
+    architecture.requireSupported(TaskType.RELATION);
+    architecture.requireSupported(TaskType.STRUCTURE);
     var tokenizer = new DjlTokenizerWrapper(modelDir);
-    var runtime = new GLiNER4jNERRuntime(modelDir, variant, runtimeConfig);
+    var runtime = architecture.newSpanRuntime(
+      new io.gravitee.lab.gliner4j.arch.LoadContext(
+        modelDir,
+        variant,
+        runtimeConfig,
+        config,
+        tokenizer
+      )
+    );
     log.info("GLiNER4j unified model loaded successfully");
     return new GLiNER4j(config, runtimeConfig, tokenizer, runtime);
   }
@@ -333,11 +343,10 @@ public class GLiNER4j implements AutoCloseable {
     try {
       for (var bucket : pipeline.buckets()) {
         try (var scoring = bucket.scoring()) {
-          int predCount = argmax(scoring.countLogits()[0]);
-          if (isEntities && predCount == 0) {
-            continue;
-          }
           for (int j = 0; j < bucket.slots().length; j++) {
+            if (isEntities && argmax(scoring.countLogitsFor(j)) == 0) {
+              continue;
+            }
             int si = bucket.slots()[j];
             int origIdx = batchIndices[si];
             var input = inputs[origIdx];
@@ -364,7 +373,7 @@ public class GLiNER4j implements AutoCloseable {
                 relationDecoder.decode(
                   layout.unit().parentLabel(),
                   layout.unit().childNames(),
-                  scoring.countLogits(),
+                  new float[][] { scoring.countLogitsFor(j) },
                   scoring.materializeSlot(j, textLen),
                   input.wordStartChars(),
                   input.wordEndChars(),

@@ -21,4 +21,7 @@ public enum Mode {
   SCHEMA,
   RELATIONS,
   EXTRACT,
+  ROUTE,
+  SESSION,
+  STREAM,
 }

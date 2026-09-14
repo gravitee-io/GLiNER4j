@@ -36,6 +36,8 @@ public final class Profile {
   private List<String> schemaSamples;
   private List<NamedDescription> relations;
   private List<String> relationSamples;
+  private RouterDef router;
+  private List<List<String>> stream;
 
   private Profile() {}
 
@@ -50,7 +52,9 @@ public final class Profile {
     @JsonProperty("structures") List<StructureDef> structures,
     @JsonProperty("schemaSamples") List<String> schemaSamples,
     @JsonProperty("relations") List<NamedDescription> relations,
-    @JsonProperty("relationSamples") List<String> relationSamples
+    @JsonProperty("relationSamples") List<String> relationSamples,
+    @JsonProperty("router") RouterDef router,
+    @JsonProperty("stream") List<List<String>> stream
   ) {
     this.displayName = displayName;
     this.modelDir = modelDir;
@@ -62,6 +66,8 @@ public final class Profile {
     this.schemaSamples = schemaSamples;
     this.relations = relations;
     this.relationSamples = relationSamples;
+    this.router = router;
+    this.stream = stream;
   }
 
   private Profile(Profile profile) {
@@ -75,7 +81,9 @@ public final class Profile {
       profile.structures,
       profile.schemaSamples,
       profile.relations,
-      profile.relationSamples
+      profile.relationSamples,
+      profile.router,
+      profile.stream
     );
   }
 
@@ -109,6 +117,23 @@ public final class Profile {
 
   public boolean hasRelations() {
     return relations != null && !relations.isEmpty();
+  }
+
+  public boolean hasRouter() {
+    return router != null && router.families() != null && !router.families().isEmpty();
+  }
+
+  public RouterDef router() {
+    return router;
+  }
+
+  /** Chunk sequences for the streaming-NER demo (gliner-streaming-span bundles). */
+  public boolean hasStream() {
+    return stream != null && !stream.isEmpty();
+  }
+
+  public List<List<String>> stream() {
+    return stream;
   }
 
   public String displayName() {
@@ -166,7 +191,9 @@ public final class Profile {
       Objects.equals(this.structures, that.structures) &&
       Objects.equals(this.schemaSamples, that.schemaSamples) &&
       Objects.equals(this.relations, that.relations) &&
-      Objects.equals(this.relationSamples, that.relationSamples)
+      Objects.equals(this.relationSamples, that.relationSamples) &&
+      Objects.equals(this.router, that.router) &&
+      Objects.equals(this.stream, that.stream)
     );
   }
 
@@ -182,7 +209,9 @@ public final class Profile {
       structures,
       schemaSamples,
       relations,
-      relationSamples
+      relationSamples,
+      router,
+      stream
     );
   }
 

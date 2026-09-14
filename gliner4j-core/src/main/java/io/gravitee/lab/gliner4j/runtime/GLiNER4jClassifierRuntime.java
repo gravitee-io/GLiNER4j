@@ -28,7 +28,9 @@ import lombok.extern.slf4j.Slf4j;
  * ({@code encoder.onnx} / {@code classifier_head.onnx}) are no longer loaded.
  */
 @Slf4j
-public non-sealed class GLiNER4jClassifierRuntime extends BaseRuntime {
+public non-sealed class GLiNER4jClassifierRuntime
+  extends BaseRuntime
+  implements Gliner2ClassifierRuntime {
 
   private OrtSession classifierFullSession;
   private final DirectBufferPool classifierInputBuffers = new DirectBufferPool(
@@ -116,6 +118,7 @@ public non-sealed class GLiNER4jClassifierRuntime extends BaseRuntime {
    * @param batchSize number of texts
    * @return per-text logits {@code [batchSize][numLabels]} (raw scores before sigmoid)
    */
+  @Override
   public float[][] runClassifierFullBatch(
     long[][] inputIds,
     long[][] attentionMask,

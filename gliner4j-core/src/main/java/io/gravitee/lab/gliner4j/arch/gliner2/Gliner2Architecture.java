@@ -21,10 +21,13 @@ import io.gravitee.lab.gliner4j.arch.ModelArchitecture;
 import io.gravitee.lab.gliner4j.arch.TaskType;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
+import io.gravitee.lab.gliner4j.schema.RelationDefinition;
 import io.gravitee.lab.gliner4j.strategy.ClassificationStrategy;
 import io.gravitee.lab.gliner4j.strategy.NerStrategy;
+import io.gravitee.lab.gliner4j.strategy.RelationStrategy;
 import io.gravitee.lab.gliner4j.strategy.gliner2.Gliner2ClassificationStrategy;
 import io.gravitee.lab.gliner4j.strategy.gliner2.Gliner2NerStrategy;
+import io.gravitee.lab.gliner4j.strategy.gliner2.Gliner2RelationStrategy;
 import java.util.List;
 
 /**
@@ -59,5 +62,24 @@ public final class Gliner2Architecture implements ModelArchitecture {
     List<ClassificationLabel> labels
   ) {
     return Gliner2ClassificationStrategy.create(ctx, labels);
+  }
+
+  @Override
+  public RelationStrategy newRelationStrategy(
+    LoadContext ctx,
+    List<RelationDefinition> relations
+  ) {
+    return Gliner2RelationStrategy.create(ctx, relations);
+  }
+
+  @Override
+  public io.gravitee.lab.gliner4j.runtime.Gliner2SpanRuntime newSpanRuntime(
+    LoadContext ctx
+  ) {
+    return new io.gravitee.lab.gliner4j.runtime.GLiNER4jNERRuntime(
+      ctx.modelDir(),
+      ctx.variant(),
+      ctx.runtimeConfig()
+    );
   }
 }

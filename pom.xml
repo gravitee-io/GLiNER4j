@@ -38,6 +38,7 @@
     <modules>
         <module>gliner4j-core</module>
         <module>gliner4j-demo</module>
+        <module>gliner4j-llamacpp</module>
         <module>gliner4j-benchmark</module>
     </modules>
 
@@ -129,10 +130,16 @@
                 <groupId>com.mycila</groupId>
                 <artifactId>license-maven-plugin</artifactId>
                 <configuration>
+                    <mapping>
+                        <CMakeLists.txt>SCRIPT_STYLE</CMakeLists.txt>
+                        <cu>SLASHSTAR_STYLE</cu>
+                        <cuh>SLASHSTAR_STYLE</cuh>
+                    </mapping>
                     <excludes>
                         <exclude>**/*.txt</exclude>
                         <exclude>**/*.json</exclude>
                         <exclude>models/**</exclude>
+                        <exclude>**/native/**</exclude>
                     </excludes>
                 </configuration>
             </plugin>

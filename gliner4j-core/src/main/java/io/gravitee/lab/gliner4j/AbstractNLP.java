@@ -20,6 +20,7 @@ import io.gravitee.lab.gliner4j.processor.InputAssembler;
 import io.gravitee.lab.gliner4j.processor.PreprocessedInput;
 import io.gravitee.lab.gliner4j.processor.SchemaEncoder;
 import io.gravitee.lab.gliner4j.processor.TextEncoder;
+import io.gravitee.lab.gliner4j.runtime.ArchitectureRuntime;
 import io.gravitee.lab.gliner4j.runtime.BaseRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
@@ -43,7 +44,7 @@ import lombok.extern.slf4j.Slf4j;
  * @param <RT> the concrete runtime; exposed to subclasses for task-head calls
  */
 @Slf4j
-public abstract class AbstractNLP<D, R, RT extends BaseRuntime>
+public abstract class AbstractNLP<D, R, RT extends ArchitectureRuntime>
   implements AutoCloseable {
 
   protected final GLiNER4jConfig config;
@@ -131,7 +132,7 @@ public abstract class AbstractNLP<D, R, RT extends BaseRuntime>
     }
 
     var input = inputAssembler.assemble(textEncoder);
-    var hiddenStates = runtime.runEncoder(
+    var hiddenStates = encoderRuntime().runEncoder(
       input.inputIds(),
       input.attentionMask()
     );
@@ -164,7 +165,7 @@ public abstract class AbstractNLP<D, R, RT extends BaseRuntime>
     }
 
     var input = overrideAssembler.assemble(textEncoder);
-    var hiddenStates = runtime.runEncoderFull(
+    var hiddenStates = encoderRuntime().runEncoderFull(
       input.inputIds(),
       input.attentionMask()
     );
@@ -176,6 +177,17 @@ public abstract class AbstractNLP<D, R, RT extends BaseRuntime>
   private void recordTelemetry(long startNanos, R result) {
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
     telemetry.record(durationMs, 1, resultSize(result));
+  }
+
+  /** The split-graph (encoder-only) path exists only on the ONNX runtimes. */
+  private BaseRuntime encoderRuntime() {
+    if (runtime instanceof BaseRuntime base) {
+      return base;
+    }
+    throw new UnsupportedOperationException(
+      "the split encoder path is not available on " +
+        runtime.getClass().getSimpleName()
+    );
   }
 
   // ---- lifecycle -----------------------------------------------------------

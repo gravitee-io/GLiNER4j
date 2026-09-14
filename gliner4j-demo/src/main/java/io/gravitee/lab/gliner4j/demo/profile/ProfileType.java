@@ -17,6 +17,11 @@ package io.gravitee.lab.gliner4j.demo.profile;
 
 public enum ProfileType {
   BASE("base.json"),
+  GLINER2DOT5("gliner2dot5.json"),
+  SCX_ROUTER("scx-router.json"),
+  STREAM_PII("stream-pii.json"),
+  GLINER2DOT5_SMALL("gliner2dot5-small.json"),
+  GLINER2DOT5_MULTI("gliner2dot5-multi.json"),
   PII("pii.json"),
   GLIGUARD("gliguard.json"),
   GLICLASS("gliclass.json"),
@@ -28,7 +33,16 @@ public enum ProfileType {
   GLINER_PII("gliner-pii.json"),
   GLINER_BI("gliner-bi.json"),
   GLINER_X("gliner-x.json"),
-  GLINER_MULTITASK("gliner-multitask.json");
+  GLINER_MULTITASK("gliner-multitask.json"),
+  // llama.cpp / ggml engine bundles (same profiles, engine=llamacpp bundle dirs)
+  BASE_LLAMACPP("base-llamacpp.json"),
+  PII_LLAMACPP("pii-llamacpp.json"),
+  GLIGUARD_LLAMACPP("gliguard-llamacpp.json"),
+  GLINER2DOT5_SMALL_LLAMACPP("gliner2dot5-small-llamacpp.json"),
+  GLICLASS_EDGE_LLAMACPP("gliclass-edge-llamacpp.json"),
+  GLINER_PII_LLAMACPP("gliner-pii-llamacpp.json"),
+  GLINER_BI_LLAMACPP("gliner-bi-llamacpp.json"),
+  GLINER_MULTITASK_LLAMACPP("gliner-multitask-llamacpp.json");
 
   public final String filename;
 

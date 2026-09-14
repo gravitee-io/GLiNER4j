@@ -19,6 +19,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.gravitee.lab.gliner4j.arch.Architecture;
+import io.gravitee.lab.gliner4j.arch.Engine;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Map;
@@ -42,6 +43,10 @@ public class GLiNER4jConfig {
   /** The GLiNER family this bundle belongs to. Absent in the config ⇒ {@link Architecture#GLINER2}. */
   @Builder.Default
   private final Architecture architecture = Architecture.GLINER2;
+
+  /** The inference engine this bundle's files target. Absent in the config ⇒ {@link Engine#ONNX}. */
+  @Builder.Default
+  private final Engine engine = Engine.ONNX;
 
   @Builder.Default
   private final float defaultThreshold = DEFAULT_THRESHOLD;
@@ -84,6 +89,12 @@ public class GLiNER4jConfig {
     return v instanceof Number n ? n.longValue() : def;
   }
 
+  /** Returns the {@code architecture_config} value for {@code key} as a double, or {@code def} if absent. */
+  public double archDouble(String key, double def) {
+    var v = architectureConfig.get(key);
+    return v instanceof Number n ? n.doubleValue() : def;
+  }
+
   /** Returns the {@code architecture_config} value for {@code key} as a boolean, or {@code def} if absent. */
   public boolean archBoolean(String key, boolean def) {
     var v = architectureConfig.get(key);
@@ -108,9 +119,11 @@ public class GLiNER4jConfig {
     try {
       var json = mapper.readValue(configFile.toFile(), JsonConfig.class);
       var architecture = Architecture.fromConfigValue(json.architecture);
+      var engine = Engine.fromConfigValue(json.engine);
       log.info(
-        "Loaded config: architecture={}, hiddenSize={}, maxWidth={}, maxCount={}, usesSpanIdx={}, tokenPooling={}",
+        "Loaded config: architecture={}, engine={}, hiddenSize={}, maxWidth={}, maxCount={}, usesSpanIdx={}, tokenPooling={}",
         architecture.configValue(),
+        engine.configValue(),
         json.hiddenSize,
         json.maxWidth,
         json.maxCount,
@@ -120,6 +133,7 @@ public class GLiNER4jConfig {
       return GLiNER4jConfig.builder()
         .modelPath(modelDir)
         .architecture(architecture)
+        .engine(engine)
         .hiddenSize(json.hiddenSize)
         .maxWidth(json.maxWidth)
         .maxCount(json.maxCount)
@@ -140,6 +154,9 @@ public class GLiNER4jConfig {
 
     @JsonProperty("architecture")
     String architecture = null;
+
+    @JsonProperty("engine")
+    String engine = null;
 
     @JsonProperty("hidden_size")
     int hiddenSize = 768;

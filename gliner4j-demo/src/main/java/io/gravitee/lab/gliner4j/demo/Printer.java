@@ -65,6 +65,27 @@ public class Printer {
   }
 
   public void interactiveBanner(boolean hasEntities, boolean hasLabels, boolean hasSchema, boolean hasRelations) {
+    interactiveBanner(hasEntities, hasLabels, hasSchema, hasRelations, false);
+  }
+
+  public void interactiveBanner(
+    boolean hasEntities,
+    boolean hasLabels,
+    boolean hasSchema,
+    boolean hasRelations,
+    boolean hasRouter
+  ) {
+    interactiveBanner(hasEntities, hasLabels, hasSchema, hasRelations, hasRouter, false);
+  }
+
+  public void interactiveBanner(
+    boolean hasEntities,
+    boolean hasLabels,
+    boolean hasSchema,
+    boolean hasRelations,
+    boolean hasRouter,
+    boolean hasStream
+  ) {
     System.out.println();
     System.out.println(dim + "  ─────────────────────────────────────────────────────────────" + reset);
     System.out.println();
@@ -74,6 +95,8 @@ public class Printer {
     if (hasLabels) commands.append("  /classify");
     if (hasSchema) commands.append("  /schema");
     if (hasRelations) commands.append("  /relations  /extract");
+    if (hasRouter) commands.append("  /route  /session  /reset");
+    if (hasStream) commands.append("  /stream  /reset");
     commands.append("  /help  /exit");
     System.out.println(dim + commands + reset);
     System.out.println();
@@ -83,7 +106,7 @@ public class Printer {
     System.out.println();
     System.out.println(bold + "  ┌─────────────────────────────────────────────────────────┐" + reset);
     System.out.printf((bold + "  │  GLiNER4j — %-44s│%n" + reset), displayName);
-    System.out.println(bold + "  │  Named Entity Recognition with ONNX Runtime             │" + reset);
+    System.out.println(bold + "  │  Named Entity Recognition — GLiNER4j                     │" + reset);
     System.out.println(bold + "  └─────────────────────────────────────────────────────────┘" + reset);
     System.out.println();
   }
@@ -196,7 +219,7 @@ public class Printer {
     System.out.println();
     System.out.println(bold + "  ┌─────────────────────────────────────────────────────────┐" + reset);
     System.out.println(bold + "  │        GLiNER4jClassifier — Classification Demo         │" + reset);
-    System.out.println(bold + "  │          Text Classification with ONNX Runtime          │" + reset);
+    System.out.println(bold + "  │          Text Classification — GLiNER4j                 │" + reset);
     System.out.println(bold + "  └─────────────────────────────────────────────────────────┘" + reset);
     System.out.println();
   }
@@ -205,9 +228,154 @@ public class Printer {
     System.out.println();
     System.out.println(bold + "  ┌─────────────────────────────────────────────────────────┐" + reset);
     System.out.println(bold + "  │      GLiNER4jRelationExtractor — Relations Demo         │" + reset);
-    System.out.println(bold + "  │         Relation Extraction with ONNX Runtime           │" + reset);
+    System.out.println(bold + "  │         Relation Extraction — GLiNER4j                  │" + reset);
     System.out.println(bold + "  └─────────────────────────────────────────────────────────┘" + reset);
     System.out.println();
+  }
+
+  void routerBanner(String displayName) {
+    System.out.println();
+    System.out.println(bold + "  ┌─────────────────────────────────────────────────────────┐" + reset);
+    System.out.printf((bold + "  │  %-55s│%n" + reset), displayName);
+    System.out.println(bold + "  │  LLM routing with llama.cpp + ggml (KV-cached sessions) │" + reset);
+    System.out.println(bold + "  └─────────────────────────────────────────────────────────┘" + reset);
+    System.out.println();
+  }
+
+  void sessionBanner(String family) {
+    System.out.println();
+    System.out.println(bold + "  ┌─────────────────────────────────────────────────────────┐" + reset);
+    System.out.println(bold + "  │  Streaming session — re-routed after every turn         │" + reset);
+    System.out.println(bold + "  │  only the new tokens are encoded (llama.cpp KV cache)   │" + reset);
+    System.out.println(bold + "  └─────────────────────────────────────────────────────────┘" + reset);
+    System.out.println(dim + "  Family: " + family + reset);
+  }
+
+  /** One family per line: colored family chip, then the top {@code topN} labels with bars. */
+  public void routerResult(
+    int index,
+    String text,
+    Map<String, List<ClassificationResult>> perFamily,
+    int topN,
+    double elapsedMs
+  ) {
+    System.out.println();
+    System.out.println("  " + dim + index + "." + reset + " " + text + elapsed(elapsedMs));
+    for (var entry : perFamily.entrySet()) {
+      var c = palette.colorsFor(entry.getKey());
+      var results = entry.getValue();
+      if (results.isEmpty()) {
+        System.out.printf("     %s %-11s%s  %sno label above threshold%s%n", c[0], entry.getKey(), reset, gray, reset);
+        continue;
+      }
+      var best = results.get(0);
+      System.out.printf(
+        "     %s %-11s%s  %s %s%.0f%%%s  %s%s%s",
+        c[0],
+        entry.getKey(),
+        reset,
+        confidenceBar(best.confidence()),
+        dim,
+        best.confidence() * 100,
+        reset,
+        bold,
+        best.label(),
+        reset
+      );
+      var others = new StringBuilder();
+      for (int i = 1; i < Math.min(topN, results.size()); i++) {
+        var r = results.get(i);
+        others.append(i == 1 ? "   " : ", ").append(r.label()).append(String.format(" %.0f%%", r.confidence() * 100));
+      }
+      if (others.length() > 0) System.out.print(gray + others + reset);
+      System.out.println();
+    }
+  }
+
+  /** One streaming turn: the appended text, cache size, latency and the family's top labels. */
+  public void sessionTurn(
+    int turn,
+    String appended,
+    int cachedTokens,
+    List<ClassificationResult> results,
+    double elapsedMs
+  ) {
+    System.out.println();
+    System.out.printf(
+      "  %s+%d%s %s%s  %s[%d tokens cached]%s%s%n",
+      dim,
+      turn,
+      reset,
+      appended.strip(),
+      elapsed(elapsedMs),
+      gray,
+      cachedTokens,
+      reset,
+      ""
+    );
+    for (int i = 0; i < Math.min(3, results.size()); i++) {
+      var r = results.get(i);
+      var c = palette.colorsFor(r.label());
+      System.out.printf(
+        "     %s%-36s%s %s %s%.0f%%%s%n",
+        c[1],
+        r.label(),
+        reset,
+        confidenceBar(r.confidence()),
+        dim,
+        r.confidence() * 100,
+        reset
+      );
+    }
+  }
+
+  void streamBanner() {
+    System.out.println();
+    System.out.println(bold + "  ┌─────────────────────────────────────────────────────────┐" + reset);
+    System.out.println(bold + "  │  Streaming NER — entities revised as text arrives       │" + reset);
+    System.out.println(bold + "  │  each chunk encodes only its new tokens (KV cache)      │" + reset);
+    System.out.println(bold + "  └─────────────────────────────────────────────────────────┘" + reset);
+  }
+
+  /** One streaming append: the chunk, cache size and latency, then the full snapshot over the text so far. */
+  public void streamTurn(
+    int turn,
+    String chunk,
+    int cachedTokens,
+    String textSoFar,
+    Map<String, List<EntitySpan>> snapshot,
+    double elapsedMs
+  ) {
+    System.out.println();
+    System.out.printf(
+      "  %s+%d%s %s%s  %s[%d tokens cached]%s%n",
+      dim,
+      turn,
+      reset,
+      chunk.strip(),
+      elapsed(elapsedMs),
+      gray,
+      cachedTokens,
+      reset
+    );
+    System.out.println("     " + highlight(textSoFar, snapshot));
+    var all = new ArrayList<EntitySpan>();
+    snapshot.values().forEach(all::addAll);
+    all.sort(java.util.Comparator.comparingInt(EntitySpan::start));
+    for (var span : all) {
+      var c = palette.colorsFor(span.type());
+      System.out.printf(
+        "       %s%-20s%s %-28s %s %s%.0f%%%s%n",
+        c[1],
+        span.type(),
+        reset,
+        "\"" + span.text() + "\"",
+        confidenceBar(span.confidence()),
+        dim,
+        span.confidence() * 100,
+        reset
+      );
+    }
   }
 
   void combinedBanner() {
@@ -217,6 +385,24 @@ public class Printer {
     System.out.println(bold + "  │       Entities + Relations in a single forward pass     │" + reset);
     System.out.println(bold + "  └─────────────────────────────────────────────────────────┘" + reset);
     System.out.println();
+  }
+
+  /** Inline-highlights every span of {@code results} inside {@code text} with its label colour. */
+  private String highlight(String text, Map<String, List<EntitySpan>> results) {
+    var spans = new ArrayList<EntitySpan>();
+    results.values().forEach(spans::addAll);
+    spans.sort(java.util.Comparator.comparingInt(EntitySpan::start));
+    var sb = new StringBuilder();
+    int pos = 0;
+    for (var span : spans) {
+      if (span.start() < pos) continue;
+      sb.append(text, pos, span.start());
+      var c = palette.colorsFor(span.type());
+      sb.append(c[0]).append(' ').append(text, span.start(), span.end()).append(' ').append(reset);
+      pos = span.end();
+    }
+    sb.append(text.substring(Math.min(pos, text.length())));
+    return sb.toString();
   }
 
   public void nerResult(int index, String text, Map<String, List<EntitySpan>> results, double elapsedMs) {
@@ -395,6 +581,27 @@ public class Printer {
   }
 
   public void interactiveHelp(boolean hasEntities, boolean hasLabels, boolean hasSchema, boolean hasRelations) {
+    interactiveHelp(hasEntities, hasLabels, hasSchema, hasRelations, false);
+  }
+
+  public void interactiveHelp(
+    boolean hasEntities,
+    boolean hasLabels,
+    boolean hasSchema,
+    boolean hasRelations,
+    boolean hasRouter
+  ) {
+    interactiveHelp(hasEntities, hasLabels, hasSchema, hasRelations, hasRouter, false);
+  }
+
+  public void interactiveHelp(
+    boolean hasEntities,
+    boolean hasLabels,
+    boolean hasSchema,
+    boolean hasRelations,
+    boolean hasRouter,
+    boolean hasStream
+  ) {
     System.out.println();
     System.out.println(dim + "  Available commands:" + reset);
     if (hasEntities) {
@@ -419,6 +626,27 @@ public class Printer {
           "    Switch to combined extraction mode (entities + relations)" +
           reset
       );
+    }
+    if (hasRouter) {
+      System.out.println(
+        "    " + bold + "/route" + reset + dim + "      Route each line across every label family" + reset
+      );
+      System.out.println(
+        "    " + bold + "/session" + reset + dim + "    Append each line to a streaming session and re-route it" + reset
+      );
+      System.out.println("    " + bold + "/reset" + reset + dim + "      Start a fresh streaming session" + reset);
+    }
+    if (hasStream) {
+      System.out.println(
+        "    " +
+          bold +
+          "/stream" +
+          reset +
+          dim +
+          "     Append each line to a streaming NER session and show the revised snapshot" +
+          reset
+      );
+      System.out.println("    " + bold + "/reset" + reset + dim + "      Start a fresh streaming session" + reset);
     }
     System.out.println("    " + bold + "/help" + reset + dim + "       Show this help" + reset);
     System.out.println("    " + bold + "/exit" + reset + dim + "       Quit the interactive session" + reset);

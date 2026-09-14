@@ -23,27 +23,32 @@ import java.util.List;
  * bi-encoder). Each word keeps its character offsets in the original text so spans can be mapped
  * back after decoding.
  *
+ * <p>Mirrors gliner's {@code WhitespaceTokenSplitter} ({@code words_splitter_type=whitespace}):
+ * the regex {@code \w+(?:[-_]\w+)*|\S}, i.e. words (with inner hyphens/underscores) and every other
+ * non-space character as its own token — so {@code "London,"} is the two words {@code London} and
+ * {@code ,}, exactly as the model saw them in training.
+ *
  * <p>APPROXIMATION: valid only for space-separated languages. CJK (Chinese/Japanese/Thai) is not
- * supported and punctuation boundaries may drift — see the {@code TODO(gliner-x)} notes in the
- * strategies. Matches the {@code words_splitter_type=whitespace} export path.
+ * supported — see the {@code TODO(gliner-x)} notes in the strategies.
  */
 public final class WhitespaceWordSplitter {
 
   /** A text word with its inclusive-start / exclusive-end character offsets in the source text. */
   public record Word(String text, int start, int end) {}
 
+  private static final java.util.regex.Pattern TOKEN =
+    java.util.regex.Pattern.compile(
+      "\\w+(?:[-_]\\w+)*|\\S",
+      java.util.regex.Pattern.UNICODE_CHARACTER_CLASS
+    );
+
   private WhitespaceWordSplitter() {}
 
   public static List<Word> split(String text) {
     var out = new ArrayList<Word>();
-    int i = 0;
-    int n = text.length();
-    while (i < n) {
-      while (i < n && Character.isWhitespace(text.charAt(i))) i++;
-      if (i >= n) break;
-      int start = i;
-      while (i < n && !Character.isWhitespace(text.charAt(i))) i++;
-      out.add(new Word(text.substring(start, i), start, i));
+    var m = TOKEN.matcher(text);
+    while (m.find()) {
+      out.add(new Word(m.group(), m.start(), m.end()));
     }
     return out;
   }

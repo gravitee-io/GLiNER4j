@@ -22,8 +22,8 @@ import io.gravitee.lab.gliner4j.processor.BatchPreprocessor;
 import io.gravitee.lab.gliner4j.processor.InputAssembler;
 import io.gravitee.lab.gliner4j.processor.PreprocessedInput;
 import io.gravitee.lab.gliner4j.processor.SchemaEncoder;
-import io.gravitee.lab.gliner4j.processor.TextEncoder;
-import io.gravitee.lab.gliner4j.runtime.GLiNER4jClassifierRuntime;
+import io.gravitee.lab.gliner4j.processor.TextPreprocessing;
+import io.gravitee.lab.gliner4j.runtime.Gliner2ClassifierRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
@@ -50,16 +50,19 @@ public final class Gliner2ClassificationStrategy
   extends AbstractNLP<
     ClassificationLabel,
     List<ClassificationResult>,
-    GLiNER4jClassifierRuntime
+    Gliner2ClassifierRuntime
   >
   implements ClassificationStrategy {
+
+  private final TextPreprocessing preprocessing;
 
   private Gliner2ClassificationStrategy(
     GLiNER4jConfig config,
     RuntimeConfig runtimeConfig,
     DjlTokenizerWrapper tokenizer,
-    GLiNER4jClassifierRuntime runtime,
-    InputAssembler inputAssembler
+    Gliner2ClassifierRuntime runtime,
+    InputAssembler inputAssembler,
+    TextPreprocessing preprocessing
   ) {
     super(
       config,
@@ -69,6 +72,7 @@ public final class Gliner2ClassificationStrategy
       inputAssembler,
       new GLiNER4jTelemetry("classify")
     );
+    this.preprocessing = preprocessing;
   }
 
   /**
@@ -82,11 +86,46 @@ public final class Gliner2ClassificationStrategy
     LoadContext ctx,
     List<ClassificationLabel> labels
   ) {
-    var runtime = new GLiNER4jClassifierRuntime(
-      ctx.modelDir(),
-      ctx.variant(),
-      ctx.runtimeConfig()
+    return create(ctx, labels, TextPreprocessing.DEFAULT);
+  }
+
+  /**
+   * Same, with a family's text conventions — GLiNER2.5 shares this {@code classifier_full}
+   * contract but not GLiNER2's word splitting.
+   */
+  public static Gliner2ClassificationStrategy create(
+    LoadContext ctx,
+    List<ClassificationLabel> labels,
+    TextPreprocessing preprocessing
+  ) {
+    return create(
+      ctx,
+      labels,
+      new io.gravitee.lab.gliner4j.runtime.GLiNER4jClassifierRuntime(
+        ctx.modelDir(),
+        ctx.variant(),
+        ctx.runtimeConfig()
+      ),
+      preprocessing
     );
+  }
+
+  /** Same, over an already-built classifier runtime (e.g. the ggml one from {@code gliner4j-llamacpp}). */
+  public static Gliner2ClassificationStrategy create(
+    LoadContext ctx,
+    List<ClassificationLabel> labels,
+    Gliner2ClassifierRuntime runtime
+  ) {
+    return create(ctx, labels, runtime, TextPreprocessing.DEFAULT);
+  }
+
+  /** Same, over an already-built classifier runtime and with a family's text conventions. */
+  public static Gliner2ClassificationStrategy create(
+    LoadContext ctx,
+    List<ClassificationLabel> labels,
+    Gliner2ClassifierRuntime runtime,
+    TextPreprocessing preprocessing
+  ) {
     var schemaEncoder = labelSchemaEncoder(labels);
     var inputAssembler = new InputAssembler(ctx.tokenizer(), schemaEncoder);
     return new Gliner2ClassificationStrategy(
@@ -94,7 +133,8 @@ public final class Gliner2ClassificationStrategy
       ctx.runtimeConfig(),
       ctx.tokenizer(),
       runtime,
-      inputAssembler
+      inputAssembler,
+      preprocessing
     );
   }
 
@@ -126,7 +166,11 @@ public final class Gliner2ClassificationStrategy
     int batchSize = texts.size();
 
     // 1. Preprocess and pack the contiguous batch (shared with other facades)
-    var preproc = BatchPreprocessor.preprocess(texts, inputAssembler);
+    var preproc = BatchPreprocessor.preprocess(
+      texts,
+      inputAssembler,
+      preprocessing
+    );
     int nonEmptyCount = preproc.nonEmptyCount();
 
     var results = new ArrayList<List<ClassificationResult>>(batchSize);
@@ -215,7 +259,7 @@ public final class Gliner2ClassificationStrategy
       telemetry.record(0.0, 1, 0);
       return List.of();
     }
-    var textEncoder = new TextEncoder(text);
+    var textEncoder = preprocessing.encode(text);
     if (textEncoder.getTextLen() == 0) {
       telemetry.record(0.0, 1, 0);
       return List.of();

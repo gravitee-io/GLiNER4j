@@ -22,7 +22,7 @@ import io.gravitee.lab.gliner4j.processor.BatchSpanPipeline;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaInput;
 import io.gravitee.lab.gliner4j.processor.MultiSchemaInputAssembler;
 import io.gravitee.lab.gliner4j.processor.UnitLayout;
-import io.gravitee.lab.gliner4j.runtime.GLiNER4jNERRuntime;
+import io.gravitee.lab.gliner4j.runtime.Gliner2SpanRuntime;
 import io.gravitee.lab.gliner4j.runtime.MicroBatcher;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
@@ -58,15 +58,13 @@ import lombok.extern.slf4j.Slf4j;
  * @param <R> the per-unit instance type (e.g. {@code RelationInstance}, {@code StructureInstance})
  */
 @Slf4j
-public abstract sealed class Extractor<D, R>
-  implements AutoCloseable
-  permits RelationExtractor, SchemaExtractor {
+public abstract class Extractor<D, R> implements AutoCloseable {
 
   protected final GLiNER4jConfig config;
   protected final RuntimeConfig runtimeConfig;
   protected final List<D> definitions;
   protected final DjlTokenizerWrapper tokenizer;
-  protected final GLiNER4jNERRuntime runtime;
+  protected final Gliner2SpanRuntime runtime;
   protected final MultiSchemaInputAssembler inputAssembler;
   protected final GLiNER4jTelemetry telemetry;
   private final AssemblerCache<
@@ -80,7 +78,7 @@ public abstract sealed class Extractor<D, R>
     RuntimeConfig runtimeConfig,
     List<D> definitions,
     DjlTokenizerWrapper tokenizer,
-    GLiNER4jNERRuntime runtime,
+    Gliner2SpanRuntime runtime,
     MultiSchemaInputAssembler inputAssembler,
     GLiNER4jTelemetry telemetry
   ) {
@@ -360,7 +358,7 @@ public abstract sealed class Extractor<D, R>
               decodeUnit(
                 def,
                 layout,
-                scoring.countLogits(),
+                new float[][] { scoring.countLogitsFor(j) },
                 spanScores,
                 input,
                 texts.get(origIdx),

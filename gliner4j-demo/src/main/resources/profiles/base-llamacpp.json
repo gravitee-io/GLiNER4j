@@ -1,0 +1,207 @@
+{
+  "displayName": "GLiNER2 Base (llama.cpp)",
+  "modelDir": "models/gliner2-base-llamacpp",
+  "entities": [
+    {
+      "name": "person",
+      "description": "Names of real individuals"
+    },
+    {
+      "name": "organization",
+      "description": ""
+    },
+    {
+      "name": "location",
+      "description": "Cities, countries, geographical places"
+    },
+    {
+      "name": "date",
+      "description": ""
+    },
+    {
+      "name": "event",
+      "description": "Named events, conferences, historical events"
+    },
+    {
+      "name": "product",
+      "description": ""
+    }
+  ],
+  "nerSamples": [
+    "Elon Musk unveiled the Tesla Cybertruck at the Los Angeles event in November 2019.",
+    "The United Nations Climate Change Conference was held in Paris.",
+    "Marie Curie won the Nobel Prize at the University of Paris in 1903.",
+    "Apple released the iPhone 15 at their Cupertino headquarters on September 12, 2023."
+  ],
+  "labels": [
+    {
+      "name": "positive",
+      "description": "Positive sentiment or opinion"
+    },
+    {
+      "name": "negative",
+      "description": "Negative sentiment or opinion"
+    },
+    {
+      "name": "neutral",
+      "description": "Neutral, factual statement"
+    },
+    {
+      "name": "business",
+      "description": "Business, finance, economics"
+    },
+    {
+      "name": "health",
+      "description": "Health, medicine, wellness"
+    },
+    {
+      "name": "technology",
+      "description": "Technology, software, hardware"
+    }
+  ],
+  "classifySamples": [
+    "This product is absolutely amazing, best purchase I've ever made!",
+    "The service was terrible and the staff was rude.",
+    "The quarterly earnings report shows a 15% increase in revenue.",
+    "New research suggests that regular exercise improves mental health."
+  ],
+  "structures": [
+    {
+      "name": "reservation",
+      "fields": [
+        {
+          "name": "restaurant",
+          "type": "STRING",
+          "description": "Restaurant name"
+        },
+        {
+          "name": "date",
+          "type": "STRING",
+          "description": "Reservation date"
+        },
+        {
+          "name": "time",
+          "type": "STRING",
+          "description": "Reservation time"
+        },
+        {
+          "name": "seating",
+          "type": "STRING",
+          "description": "Seating preference",
+          "choices": [
+            "indoor",
+            "outdoor",
+            "bar"
+          ]
+        },
+        {
+          "name": "dietary",
+          "type": "LIST",
+          "description": "Dietary restrictions",
+          "choices": [
+            "vegetarian",
+            "vegan",
+            "gluten-free",
+            "none"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "transaction",
+      "fields": [
+        {
+          "name": "date",
+          "type": "STRING",
+          "description": "Transaction date"
+        },
+        {
+          "name": "merchant",
+          "type": "STRING",
+          "description": "Merchant or vendor name"
+        },
+        {
+          "name": "amount",
+          "type": "STRING",
+          "description": "Amount charged"
+        },
+        {
+          "name": "category",
+          "type": "STRING",
+          "description": "Spending category",
+          "choices": [
+            "food",
+            "transport",
+            "shopping",
+            "utilities"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "patient",
+      "fields": [
+        {
+          "name": "name",
+          "type": "STRING",
+          "description": "Patient full name"
+        },
+        {
+          "name": "age",
+          "type": "STRING",
+          "description": "Patient age"
+        },
+        {
+          "name": "symptoms",
+          "type": "LIST",
+          "description": "Reported symptoms"
+        }
+      ]
+    },
+    {
+      "name": "prescription",
+      "fields": [
+        {
+          "name": "medication",
+          "type": "STRING",
+          "description": "Drug name"
+        },
+        {
+          "name": "dosage",
+          "type": "STRING",
+          "description": "Dosage amount"
+        },
+        {
+          "name": "frequency",
+          "type": "STRING",
+          "description": "How often to take"
+        }
+      ]
+    }
+  ],
+  "schemaSamples": [
+    "Reservation at Le Bernardin for 4 people on March 15th at 7:30 PM. We'd prefer outdoor seating. Two guests are vegetarian and one is gluten-free.",
+    "Recent transactions:\n- Jan 5: Starbucks $5.50 (food)\n- Jan 5: Uber $23.00 (transport)\n- Jan 6: Amazon $156.99 (shopping)",
+    "Patient: Sarah Johnson, 34, presented with chest pain and shortness of breath. Prescribed: Lisinopril 10mg daily, Metoprolol 25mg twice daily. Follow-up scheduled for next Tuesday."
+  ],
+  "relations": [
+    {
+      "name": "works_for",
+      "description": "Employment relationship where person works at organization"
+    },
+    {
+      "name": "lives_in",
+      "description": "Residence relationship where person lives at location"
+    },
+    {
+      "name": "acquired",
+      "description": "Acquisition relationship where one company acquires another"
+    }
+  ],
+  "relationSamples": [
+    "Sundar Pichai is the CEO of Google. Google acquired YouTube in 2006.",
+    "John works for Microsoft. Mary works for Google. Bob works for Apple.",
+    "Marie Curie lives in Paris and studies at the University of Paris.",
+    "Tim Cook reports to the Apple board of directors."
+  ]
+}

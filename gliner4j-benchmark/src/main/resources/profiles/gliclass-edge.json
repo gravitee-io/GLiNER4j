@@ -1,6 +1,7 @@
 {
   "displayName": "GLiClass edge (ettin-32m)",
   "modelDir": "models/gliclass-edge-onnx",
+  "llamacppModelDir": "models/gliclass-edge-llamacpp",
   "labels": [
     { "name": "technology" },
     { "name": "sports" },

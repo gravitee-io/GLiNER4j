@@ -23,6 +23,7 @@
 #     "onnxconverter-common>=1.14",
 #     "transformers>=4.48",
 #     "safetensors>=0.4",
+#     "sentencepiece>=0.2",
 #     "typer>=0.15",
 #     "numpy>=1.26",
 #     "rich>=13",
@@ -31,7 +32,7 @@
 #     "urllib3>=2.0",
 #     "requests>=2.31",
 #     "onnxscript>=0.1",
-#     "gliner2",
+#     "gliner2[local]>=2.0.0",
 #     "gliclass",
 #     "gliner",
 # ]
@@ -43,6 +44,8 @@ Subcommands (one per family):
               graphs plus the single-graph deployment artifacts ner_full / classifier_full.
   gliclass    GLiClass uni-encoder: encoder + score_head graphs.
   gliner-uni  Original GLiNER uni/bi-encoder: monolithic model.onnx via the gliner library.
+  gliner2dot5 GLiNER2.5 (boundary architecture): merged ner_full (encoder + boundary head +
+              shared candidate pool) and classifier_full graphs.
 
 Every family lays the bundle out the gliner4j way:
   {output_dir}/onnx/            Base FP32 graphs
@@ -56,11 +59,14 @@ Usage:
         --output-dir models/gliclass-modern-base-onnx
     uv run scripts/export_onnx.py gliner-uni --model-path knowledgator/gliner-multitask-large-v0.5 \
         --output-dir models/gliner-multitask-large-onnx
+    uv run scripts/export_onnx.py gliner2dot5 --model-path fastino/gliner2.5-base-v1 \
+        --output-dir models/gliner2dot5-base-onnx
 """
 
 from __future__ import annotations
 
 import json
+import math
 import shutil
 from enum import Enum
 from pathlib import Path
@@ -701,17 +707,25 @@ class ScoringHeadWrapper(nn.Module):
             count: Scalar int64 tensor — predicted count.
 
         Returns:
-            count_logits: Shape (1, 20).
+            count_logits: Shape (batch, 20).
             span_scores: Shape (batch, count, num_fields, text_len, max_width).
         """
-        # Count prediction
-        count_logits = self.count_pred(schema_emb_p.unsqueeze(0))  # (1, 20)
+        # Schema markers are contextual (bidirectional encoder), so every row uses its own
+        # [P] / field states: the count leg runs over batch × num_fields fields at once and
+        # each row's spans are scored against its own struct projection. 1-D / 2-D inputs
+        # (a schema shared by the batch) are broadcast.
+        if schema_emb_fields.dim() == 2:
+            schema_emb_fields = schema_emb_fields.unsqueeze(0).expand(span_rep.shape[0], -1, -1)
+        if schema_emb_p.dim() == 1:
+            schema_emb_p = schema_emb_p.unsqueeze(0).expand(span_rep.shape[0], -1)
+        B, M, D = schema_emb_fields.shape
+        count_logits = self.count_pred(schema_emb_p)  # (B, 20)
 
-        # Full GRU unroll to max_count
-        M, D = schema_emb_fields.shape
+        # Full GRU unroll to max_count over the B·M (row, field) pairs
+        fields = schema_emb_fields.reshape(B * M, D)
         full_idx = torch.arange(self.max_count, device=schema_emb_fields.device)
         pos_seq = self.pos_embedding(full_idx)  # (max_count, D)
-        pos_seq = pos_seq.unsqueeze(1).expand(self.max_count, M, D)  # (max_count, M, D)
+        pos_seq = pos_seq.unsqueeze(1).expand(self.max_count, B * M, D)  # (max_count, B·M, D)
 
         # Manual GRU unroll over max_count steps. Mathematically identical to
         # both PyTorch's nn.GRU (single layer) and gliner2's CompileSafeGRU;
@@ -719,7 +733,7 @@ class ScoringHeadWrapper(nn.Module):
         # exports as ONNX MatMul (+ Add), which quantize_dynamic converts
         # cleanly to MatMulInteger — unlike Gemm, whose decomposition during
         # quantization breaks operand shapes (see __init__ for the why).
-        h = schema_emb_fields  # (M, D)
+        h = fields  # (B·M, D)
         outputs = []
         for t in range(self.max_count):
             gi = pos_seq[t] @ self._weight_ih_t + self._bias_ih  # (M, 3D)
@@ -731,16 +745,16 @@ class ScoringHeadWrapper(nn.Module):
             n = torch.tanh(i_n + r * h_n)
             h = (1 - z) * n + z * h
             outputs.append(h)
-        output = torch.stack(outputs, dim=0)  # (max_count, M, D)
+        output = torch.stack(outputs, dim=0)  # (max_count, B·M, D)
 
         # Apply variant-specific projection
         if self.counting_layer == "count_lstm":
-            pc_broadcast = schema_emb_fields.unsqueeze(0).expand_as(output)
+            pc_broadcast = fields.unsqueeze(0).expand_as(output)
             projected = self.projector(
                 torch.cat([output, pc_broadcast], dim=-1)
             )  # (max_count, M, D)
         elif self.counting_layer == "count_lstm_v2":
-            pc_broadcast = schema_emb_fields.unsqueeze(0).expand_as(output)
+            pc_broadcast = fields.unsqueeze(0).expand_as(output)
             projected = self._downscaled_transformer(output + pc_broadcast)  # (max_count, M, D)
         elif self.counting_layer == "count_lstm_moe":
             projected = self._moe_project(output)  # (max_count, M, D)
@@ -749,11 +763,12 @@ class ScoringHeadWrapper(nn.Module):
             raise ValueError(msg)
 
         # Slice to actual count (dynamic tensor slice — ONNX supports this)
-        struct_proj = projected[:count]  # (count, M, D)
+        # (max_count, B·M, D) → (B, count, M, D)
+        struct_proj = projected.reshape(self.max_count, B, M, D).permute(1, 0, 2, 3)[:, :count]
 
         # Score via einsum + sigmoid, broadcasting over the text batch axis
         span_scores = torch.sigmoid(
-            torch.einsum("blkd,cpd->bcplk", span_rep, struct_proj)
+            torch.einsum("blkd,bcpd->bcplk", span_rep, struct_proj)
         )
 
         return count_logits, span_scores
@@ -897,11 +912,11 @@ class NerFullWrapper(nn.Module):
         tok = torch.gather(hidden, 1, gather_idx)  # [b, text_len, h]
         tok = tok * (word_positions >= 0).unsqueeze(-1).to(tok.dtype)
 
-        # schema markers from row 0 (schema prefix is identical across the batch)
-        row0 = hidden[0]  # [seq, h]
-        p_emb = row0[p_position.clamp(min=0)].squeeze(0)  # [h]
-        p_emb = p_emb * (p_position >= 0).to(p_emb.dtype).reshape(())
-        field_emb = row0[field_positions]  # [num_fields, h]
+        # schema markers per row: the prefix tokens are identical across the batch, but their
+        # states are contextual (bidirectional encoder), so each row gathers its own.
+        p_emb = hidden[:, p_position.clamp(min=0)].squeeze(1)  # [b, h]
+        p_emb = p_emb * (p_position >= 0).to(p_emb.dtype).reshape(1, 1)
+        field_emb = hidden[:, field_positions]  # [b, num_fields, h]
 
         span_rep = self.span_rep(tok, span_idx)  # [b, text_len, max_width, h]
         return self.scoring(span_rep, p_emb, field_emb, count)
@@ -1185,6 +1200,7 @@ def _g2_export_ner_full(
             "word_positions": {0: "batch", 1: "text_len"},
             "field_positions": {0: "num_fields"},
             "span_idx": {0: "batch", 1: "num_spans"},
+            "count_logits": {0: "batch"},
             "span_scores": {0: "batch", 1: "count", 2: "num_fields", 3: "text_len"},
         },
     )
@@ -1978,6 +1994,931 @@ def export_gliner_uni(
     _generate_variants(variants, out, onnx_dir, GLINER_UNI_MODEL_FILES, QuantType.QInt8)
 
     console.print(f"\n[bold]Bundle ready at {out} (onnx/model.onnx)[/bold]")
+
+
+# ===========================================================================
+# GLiNER2.5 (boundary architecture) — wrappers & export
+# ===========================================================================
+
+# The two graphs that make up a GLiNER2.5 bundle (base + every variant). Both are
+# self-contained merged graphs (encoder embedded) — the only files the runtime loads.
+GLINER2DOT5_MODEL_FILES = ("ner_full.onnx", "relation_full.onnx", "classifier_full.onnx")
+
+# gliner2.models.boundary.constants.MASK_LOGIT — the finite masking sentinel the boundary head
+# uses everywhere (fits fp16). Invalid candidates/queries carry this logit, so sigmoid ⇒ 0.
+BOUNDARY_MASK_LOGIT = -1.0e4
+
+
+def _gather_rows(states: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+    """Gather ``[B, N, D]`` at ``[B, K]`` -> ``[B, K, D]`` (indices clamped into range)."""
+    n = states.shape[1]
+    d = states.shape[-1]
+    return states.gather(1, indices.clamp(0, n - 1).unsqueeze(-1).expand(-1, -1, d))
+
+
+class BoundaryNerFullWrapper(nn.Module):
+    """Full single-graph GLiNER2.5 NER: encoder → gathers → boundary head → pooled pair logits.
+
+    Re-implements the *shared candidate pool* inference path of
+    ``gliner2.models.boundary`` (``BoundaryEncoder`` → ``BoundaryQueryHead`` →
+    ``DocumentCandidatePool`` → ``SharedPoolScorer``) with export-friendly ops only:
+
+    * the sliding-window attention is written out as matmul + masked softmax (no SDPA),
+    * the EOS scatter of ``shift_right_with_eos`` becomes a ``where`` on positions,
+    * top-k boundary selection pads the score rows so ``TopK(k)`` is always legal,
+    * the stable-sort key dedup of ``_deduplicate_pool`` becomes an ``[M, M]`` dominance
+      matrix (same key, better score or same score with a lower index) + one ``TopK``.
+
+    Every intermediate tensor has a static padded shape, so a single ``torch.onnx.export``
+    produces ``ner_full.onnx`` straight from the safetensors. Only the released checkpoints'
+    configuration is supported: ``candidate_pool="shared"``, no candidate/query attention
+    layers, mean-only span content pooling. Anything else raises at construction.
+
+    Inputs: ``input_ids``/``attention_mask`` ``[B, T]``; ``word_positions`` ``[B, L]`` (first
+    subword of each text word, ``-1`` = padding); ``query_positions`` ``[Q]`` (first subword of
+    each ``[E]`` marker — shared across the batch, the schema prefix is identical per row).
+    Outputs: ``pair_logits`` ``[B, Q, C]`` (invalid ⇒ ``MASK_LOGIT``), ``candidates``
+    ``[B, C, 2]`` half-open ``[start, end)`` word boundaries, ``null_logits`` ``[B, Q]``.
+    """
+
+    def __init__(self, model: nn.Module) -> None:
+        super().__init__()
+        settings = model.boundary_settings
+        head = model.boundary_head
+        if settings.candidate_pool != "shared":
+            raise ValueError(
+                f"gliner2dot5 export supports candidate_pool='shared' only, "
+                f"got {settings.candidate_pool!r}"
+            )
+        if settings.candidate_attention_layers or settings.query_attention_layers:
+            raise ValueError(
+                "gliner2dot5 export does not support candidate/query attention layers "
+                f"(got {settings.candidate_attention_layers}/{settings.query_attention_layers})"
+            )
+        pooler = head.shared_pool_scorer.content_pooler
+        if pooler is not None and pooler.use_soft_max_pool:
+            raise ValueError("gliner2dot5 export does not support content_soft_max_pool")
+
+        self.encoder = EncoderWrapper(model.encoder)
+        self.boundary_encoder = head.boundary_encoder
+        self.query_head = head.boundary_query_head
+        self.pool = head.shared_pool_builder
+        self.scorer = head.shared_pool_scorer
+        self.null_projection = head.null_projection
+        self.use_inside_evidence = head.use_inside_evidence
+        self.hidden_size = model.hidden_size
+
+    # ---- pipeline -----------------------------------------------------------
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        word_positions: torch.Tensor,  # int64 [batch, text_len], -1 = padded word
+        query_positions: torch.Tensor,  # int64 [num_queries]
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        hidden = self.encoder(input_ids, attention_mask)  # [B, T, H]
+        h = self.hidden_size
+
+        text_mask = word_positions >= 0  # [B, L]
+        wp = word_positions.clamp(min=0)
+        text_states = torch.gather(hidden, 1, wp.unsqueeze(-1).expand(-1, -1, h))
+        text_states = text_states * text_mask.unsqueeze(-1).to(text_states.dtype)
+        query_states = hidden[:, query_positions]  # [B, Q, H] — contextual, per row
+        text_lengths = text_mask.sum(dim=1)  # [B]
+
+        boundary_states, boundary_mask, positions = self._encode_boundaries(
+            text_states, text_mask, text_lengths
+        )
+        start_logits, end_logits, inside_prefix, inside_mean = self._marginals(
+            boundary_states, boundary_mask, text_states, text_mask, query_states
+        )
+        cand_s, cand_e, cand_valid, compat = self._build_pool(
+            boundary_states, boundary_mask, start_logits, end_logits
+        )
+        pair_logits = self._score(
+            boundary_states, query_states, cand_s, cand_e, cand_valid, compat,
+            start_logits, end_logits, inside_prefix, inside_mean,
+            text_lengths, text_states, text_mask,
+        )
+        candidates = torch.stack((cand_s, cand_e), dim=-1)  # [B, C, 2]
+        if self.null_projection is not None:
+            null_logits = self.null_projection(query_states).squeeze(-1)  # [B, Q]
+        else:
+            null_logits = torch.full_like(pair_logits[:, :, 0], BOUNDARY_MASK_LOGIT)
+        return pair_logits, candidates, null_logits
+
+    # ---- BoundaryEncoder ----------------------------------------------------
+
+    def _encode_boundaries(
+        self,
+        text_states: torch.Tensor,
+        text_mask: torch.Tensor,
+        text_lengths: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        enc = self.boundary_encoder
+        b, _, h = text_states.shape
+        dtype = text_states.dtype
+        bos = enc.bos_state.to(dtype).view(1, 1, h).expand(b, 1, h)
+        eos = enc.eos_state.to(dtype).view(1, 1, h)
+        left = torch.cat((bos, text_states), dim=1)  # [B, N, H]
+        right = torch.cat((text_states, eos.expand(b, 1, h)), dim=1)  # [B, N, H]
+        # positions 0..N-1, derived from a traced tensor so it stays dynamic in the graph
+        positions = torch.cumsum(torch.ones_like(left[0, :, 0], dtype=torch.long), 0) - 1
+        is_eos = (positions.unsqueeze(0) == text_lengths.unsqueeze(1)).unsqueeze(-1)
+        right = torch.where(is_eos, eos, right)
+
+        states = enc.output_projection(
+            torch.cat((enc.left_projection(left), enc.right_projection(right)), dim=-1)
+        )
+        states = enc.layer_norm(states)
+        mask = positions.unsqueeze(0) <= text_lengths.unsqueeze(1)  # [B, N]
+        for block in enc.attention_blocks:
+            states = self._attention(block, states, mask, positions)
+        for block in enc.refinement_blocks:
+            states = block(states)
+        states = states * mask.unsqueeze(-1).to(states.dtype)
+        return states, mask, positions
+
+    @staticmethod
+    def _attention(
+        block: nn.Module,
+        states: torch.Tensor,
+        mask: torch.Tensor,
+        positions: torch.Tensor,
+    ) -> torch.Tensor:
+        b, n, d = states.shape
+        heads, hd = block.num_heads, block.head_dim
+        qkv = block.qkv_projection(block.norm(states)).reshape(b, n, 3, heads, hd)
+        qkv = qkv.permute(2, 0, 3, 1, 4)  # [3, B, heads, N, hd]
+        query, key, value = qkv[0], qkv[1], qkv[2]
+        allowed = mask.reshape(b, 1, 1, n)
+        if block.window > 0:
+            local = (positions.view(n, 1) - positions.view(1, n)).abs() <= block.window
+            allowed = allowed & local.view(1, 1, n, n)
+        # Padding query rows still need one legal key to avoid NaNs.
+        diagonal = positions.view(n, 1) == positions.view(1, n)
+        allowed = allowed | diagonal.view(1, 1, n, n)
+        scores = torch.matmul(query, key.transpose(-1, -2)) / math.sqrt(hd)
+        scores = scores.masked_fill(~allowed, BOUNDARY_MASK_LOGIT)
+        weights = torch.softmax(scores, dim=-1)
+        attended = torch.matmul(weights, value).transpose(1, 2).reshape(b, n, d)
+        update = block.output_projection(attended)
+        return (states + update) * mask.unsqueeze(-1).to(states.dtype)
+
+    # ---- BoundaryQueryHead --------------------------------------------------
+
+    def _marginals(
+        self,
+        boundary_states: torch.Tensor,
+        boundary_mask: torch.Tensor,
+        text_states: torch.Tensor,
+        text_mask: torch.Tensor,
+        query_states: torch.Tensor,
+    ):
+        qh = self.query_head
+        scale = 1.0 / math.sqrt(qh.boundary_dim)
+        start_logits = torch.einsum(
+            "bld,bqd->bql",
+            qh.start_boundary_projection(boundary_states),
+            qh.start_query_projection(query_states),
+        ) * scale
+        end_logits = torch.einsum(
+            "bld,bqd->bql",
+            qh.end_boundary_projection(boundary_states),
+            qh.end_query_projection(query_states),
+        ) * scale
+        inside_logits = torch.einsum(
+            "bld,bqd->bql",
+            qh.inside_text_projection(text_states),
+            qh.inside_query_projection(query_states),
+        ) * scale
+
+        b_keep = boundary_mask.unsqueeze(1)  # [B, 1, N] — every query is valid
+        t_keep = text_mask.unsqueeze(1)  # [B, 1, L]
+        start_logits = start_logits.masked_fill(~b_keep, BOUNDARY_MASK_LOGIT)
+        end_logits = end_logits.masked_fill(~b_keep, BOUNDARY_MASK_LOGIT)
+        if not self.use_inside_evidence:
+            return start_logits, end_logits, None, None
+
+        inside32 = inside_logits.masked_fill(~t_keep, 0.0).float()
+        valid_count = t_keep.sum(-1, keepdim=True).clamp_min(1).float()  # [B, 1, 1]
+        inside_mean = inside32.sum(-1, keepdim=True) / valid_count  # [B, Q, 1]
+        centered = (inside32 - inside_mean) * t_keep.float()
+        zeros = torch.zeros_like(centered[..., :1])
+        inside_prefix = torch.cat((zeros, centered.cumsum(dim=-1)), dim=-1)  # [B, Q, N]
+        return start_logits, end_logits, inside_prefix, inside_mean
+
+    # ---- DocumentCandidatePool ----------------------------------------------
+
+    @staticmethod
+    def _top_boundaries(
+        scores: torch.Tensor, valid: torch.Tensor, k: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        masked = scores.masked_fill(~valid, BOUNDARY_MASK_LOGIT)
+        _, idx = torch.topk(masked, k, dim=-1)
+        v = valid.gather(-1, idx)
+        return torch.where(v, idx, torch.zeros_like(idx)), v
+
+    def _build_pool(
+        self,
+        boundary_states: torch.Tensor,
+        boundary_mask: torch.Tensor,
+        start_logits: torch.Tensor,
+        end_logits: torch.Tensor,
+    ):
+        pool = self.pool
+        b, n, d = boundary_states.shape
+        k = pool.pool_boundary_top_k
+        c = pool.pool_size
+
+        union_start = start_logits.amax(dim=1)  # [B, N]
+        union_end = end_logits.amax(dim=1)
+        # Pad the boundary axis by k masked slots so TopK(k) is legal for texts shorter than k.
+        pad_scores = torch.full_like(union_start[:, :1], BOUNDARY_MASK_LOGIT).expand(-1, k)
+        pad_valid = torch.zeros_like(pad_scores, dtype=torch.bool)
+        starts, starts_valid = self._top_boundaries(
+            torch.cat((union_start, pad_scores), 1), torch.cat((boundary_mask, pad_valid), 1), k
+        )
+        ends, ends_valid = self._top_boundaries(
+            torch.cat((union_end, pad_scores), 1), torch.cat((boundary_mask, pad_valid), 1), k
+        )
+
+        # Query-agnostic Cartesian pairing of the selected starts × ends.
+        pair_s = starts.unsqueeze(-1).expand(-1, k, k).reshape(b, k * k)
+        pair_e = ends.unsqueeze(1).expand(-1, k, k).reshape(b, k * k)
+        pair_valid = (
+            starts_valid.unsqueeze(-1)
+            & ends_valid.unsqueeze(1)
+            & (ends.unsqueeze(1) > starts.unsqueeze(-1))
+        ).reshape(b, k * k)
+
+        start_all = pool.start_projection(boundary_states)
+        end_all = pool.end_projection(boundary_states)
+        compat = (_gather_rows(start_all, pair_s) * _gather_rows(end_all, pair_e)).sum(-1)
+        compat = compat / math.sqrt(d)
+        union_pair_score = compat + union_start.gather(1, pair_s) + union_end.gather(1, pair_e)
+
+        # Per-query quota: each query reserves its strongest pairs in a priority band above
+        # every ordinary global score (rank bonus keeps the band ordered).
+        quota = min(pool.min_pool_per_query, k * k)
+        q = start_logits.shape[1]
+        s_idx = pair_s.unsqueeze(1).expand(-1, q, -1)
+        e_idx = pair_e.unsqueeze(1).expand(-1, q, -1)
+        per_query = (
+            start_logits.gather(2, s_idx) + end_logits.gather(2, e_idx) + compat.unsqueeze(1)
+        )
+        per_query = per_query.masked_fill(~pair_valid.unsqueeze(1), BOUNDARY_MASK_LOGIT)
+        _, ranked = torch.topk(per_query, quota, dim=-1)  # [B, Q, quota]
+        quota_s = s_idx.gather(-1, ranked).reshape(b, -1)
+        quota_e = e_idx.gather(-1, ranked).reshape(b, -1)
+        quota_valid = (
+            pair_valid.unsqueeze(1).expand(-1, q, -1).gather(-1, ranked).reshape(b, -1)
+        )
+        rank_bonus = torch.arange(quota, 0, -1, dtype=union_pair_score.dtype)
+        quota_scores = (
+            (-BOUNDARY_MASK_LOGIT * 0.5 + rank_bonus).view(1, 1, quota).expand(b, q, quota)
+        ).reshape(b, -1)
+
+        # Pad by pool_size masked slots so the final TopK(pool_size) is always legal.
+        pad_idx = torch.zeros_like(pair_s[:, :1]).expand(-1, c)
+        pad_sc = torch.full_like(union_pair_score[:, :1], BOUNDARY_MASK_LOGIT).expand(-1, c)
+        pad_ok = torch.zeros_like(pad_sc, dtype=torch.bool)
+        all_s = torch.cat((quota_s, pair_s, pad_idx), 1)
+        all_e = torch.cat((quota_e, pair_e, pad_idx), 1)
+        all_scores = torch.cat((quota_scores, union_pair_score, pad_sc), 1)
+        all_valid = torch.cat((quota_valid, pair_valid, pad_ok), 1)
+        all_scores = all_scores.masked_fill(~all_valid, BOUNDARY_MASK_LOGIT)
+
+        # Dedup: the same (start, end) may appear once per query quota and once globally. Keep
+        # the highest-scoring occurrence (ties → lowest index), i.e. what _deduplicate_pool's
+        # score-desc-stable → key-asc-stable → first-of-run sort chain retains.
+        keys = all_s * n + all_e  # [B, M]
+        order = torch.cumsum(torch.ones_like(keys[0]), 0)  # [M] (monotonic index)
+        same = keys.unsqueeze(2) == keys.unsqueeze(1)  # [B, M(i), M(j)]
+        s_i = all_scores.unsqueeze(2)
+        s_j = all_scores.unsqueeze(1)
+        j_beats_i = (s_j > s_i) | ((s_j == s_i) & (order.view(1, 1, -1) < order.view(1, -1, 1)))
+        dominated = (same & j_beats_i & all_valid.unsqueeze(1)).any(-1)  # [B, M]
+        keep = all_valid & ~dominated
+        final_scores = all_scores.masked_fill(~keep, BOUNDARY_MASK_LOGIT)
+        _, top = torch.topk(final_scores, c, dim=-1)  # [B, C]
+        sel_valid = keep.gather(1, top)
+        sel_s = torch.where(sel_valid, all_s.gather(1, top), torch.zeros_like(top))
+        sel_e = torch.where(sel_valid, all_e.gather(1, top), torch.zeros_like(top))
+
+        # Compatibility prior recomputed for the retained candidates (feeds the scorer).
+        sel_compat = (_gather_rows(start_all, sel_s) * _gather_rows(end_all, sel_e)).sum(-1)
+        sel_compat = sel_compat / math.sqrt(d)
+        sel_compat = torch.where(sel_valid, sel_compat, torch.zeros_like(sel_compat))
+        return sel_s, sel_e, sel_valid, sel_compat
+
+    # ---- SharedPoolScorer ---------------------------------------------------
+
+    def _score(
+        self,
+        boundary_states: torch.Tensor,
+        query_states: torch.Tensor,
+        starts: torch.Tensor,
+        ends: torch.Tensor,
+        valid: torch.Tensor,
+        compat: torch.Tensor,
+        start_logits: torch.Tensor,
+        end_logits: torch.Tensor,
+        inside_prefix: torch.Tensor | None,
+        inside_mean: torch.Tensor | None,
+        text_lengths: torch.Tensor,
+        text_states: torch.Tensor,
+        text_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        sc = self.scorer
+        start_rep = _gather_rows(sc.start_projection(boundary_states), starts)
+        end_rep = _gather_rows(sc.end_projection(boundary_states), ends)
+        dt = start_rep.dtype
+        length = (ends - starts).clamp_min(1).to(dt)
+        tl = text_lengths.unsqueeze(1).to(dt).clamp_min(1)
+        length_features = torch.stack(
+            (torch.log1p(length), length / tl, torch.rsqrt(length)), dim=-1
+        )
+        candidate = (
+            start_rep
+            + end_rep
+            + sc.length_projection(length_features)
+            + sc.prior_projection(compat.unsqueeze(-1).to(dt))
+        )
+        if sc.content_pooler is not None:
+            cp = sc.content_pooler
+            values = cp.value_projection(text_states) * text_mask.unsqueeze(-1).to(dt)
+            values32 = values.float()
+            zeros = torch.zeros_like(values32[:, :1])
+            mean_prefix = torch.cat((zeros, values32.cumsum(dim=1)), dim=1)  # [B, N, cd]
+            span_sum = _gather_rows(mean_prefix, ends) - _gather_rows(mean_prefix, starts)
+            pooled = span_sum / (ends - starts).clamp_min(1).unsqueeze(-1).float()
+            content = cp.layer_norm(pooled.to(dt))
+            candidate = candidate + sc.content_projection(content)
+        candidate = sc.candidate_norm(candidate) * valid.unsqueeze(-1).to(dt)
+
+        query = sc.query_projection(query_states)  # [B, Q, p]
+        score = torch.einsum("bcd,bqd->bcq", candidate, query) / math.sqrt(candidate.shape[-1])
+        gamma, beta = sc.film(query).chunk(2, dim=-1)
+        conditioned = candidate.unsqueeze(2) * (1.0 + gamma.unsqueeze(1)) + beta.unsqueeze(1)
+        score = score + sc.film_output(conditioned).squeeze(-1)  # [B, C, Q]
+
+        q = query_states.shape[1]
+        s_idx = starts.unsqueeze(1).expand(-1, q, -1)  # [B, Q, C]
+        e_idx = ends.unsqueeze(1).expand(-1, q, -1)
+        score = score + start_logits.gather(2, s_idx).transpose(1, 2)
+        score = score + end_logits.gather(2, e_idx).transpose(1, 2)
+        if inside_prefix is not None:
+            interval = inside_prefix.gather(2, e_idx) - inside_prefix.gather(2, s_idx)
+            interval = interval + inside_mean * (e_idx - s_idx).to(interval.dtype)
+            score = score + (
+                interval / torch.sqrt((e_idx - s_idx).clamp_min(1).float())
+            ).transpose(1, 2).to(score.dtype)
+        score = score.masked_fill(~valid.unsqueeze(-1), BOUNDARY_MASK_LOGIT)
+        return score.transpose(1, 2)  # [B, Q, C]
+
+
+class BoundaryRelationFullWrapper(BoundaryNerFullWrapper):
+    """Full single-graph GLiNER2.5 relation extraction.
+
+    Runs the NER pipeline of {@link BoundaryNerFullWrapper} over a prompt whose queries are
+    the ``[R] head`` / ``[R] tail`` markers of ``R`` relation types (``query_positions`` has
+    ``2R`` entries, head then tail per relation), then re-implements
+    ``TypedRelationPairGenerator.generate_batched`` + ``SparseRelationScorer`` with static
+    shapes: per relation, the top-``heads_per_relation`` head-typed and top-``tails_per_relation``
+    tail-typed pool candidates (argument threshold applied) are cross-paired, the top
+    ``pair_cap`` pairs by ``p_head·p_tail`` (self-pairs dropped) are scored by the relation MLP
+    plus the biaffine content term.
+
+    Outputs: ``relation_logits`` ``[B, R, P]`` (invalid ⇒ ``MASK_LOGIT``) and
+    ``relation_pairs`` ``[B, R, P, 4]`` = ``(head_start, head_end, tail_start, tail_end)``
+    half-open word boundaries.
+    """
+
+    def __init__(self, model: nn.Module) -> None:
+        super().__init__(model)
+        settings = model.boundary_settings
+        if not settings.enable_relations:
+            raise ValueError("checkpoint has enable_relations=False — no relation head to export")
+        if not settings.directional_relation_states:
+            raise ValueError("gliner2dot5 export supports directional_relation_states=True only")
+        self.relation_scorer = model.relation_scorer
+        gen = model.relation_pair_generator.settings
+        self.heads_per_relation = int(gen.heads_per_relation)
+        self.tails_per_relation = int(gen.tails_per_relation)
+        self.pair_cap = int(gen.pair_cap)
+        self.argument_threshold = float(gen.argument_threshold)
+        if self.pool.pool_size < max(self.heads_per_relation, self.tails_per_relation):
+            raise ValueError("pool_size must be >= heads/tails_per_relation")
+        if self.heads_per_relation * self.tails_per_relation < self.pair_cap:
+            raise ValueError("pair_cap must be <= heads_per_relation * tails_per_relation")
+
+    def forward(  # type: ignore[override]
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        word_positions: torch.Tensor,
+        query_positions: torch.Tensor,  # int64 [2R]: head_0, tail_0, head_1, tail_1, ...
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        hidden = self.encoder(input_ids, attention_mask)
+        h = self.hidden_size
+        text_mask = word_positions >= 0
+        wp = word_positions.clamp(min=0)
+        text_states = torch.gather(hidden, 1, wp.unsqueeze(-1).expand(-1, -1, h))
+        text_states = text_states * text_mask.unsqueeze(-1).to(text_states.dtype)
+        query_states = hidden[:, query_positions]  # [B, 2R, H]
+        text_lengths = text_mask.sum(dim=1)
+
+        boundary_states, boundary_mask, positions = self._encode_boundaries(
+            text_states, text_mask, text_lengths
+        )
+        start_logits, end_logits, inside_prefix, inside_mean = self._marginals(
+            boundary_states, boundary_mask, text_states, text_mask, query_states
+        )
+        cand_s, cand_e, cand_valid, compat = self._build_pool(
+            boundary_states, boundary_mask, start_logits, end_logits
+        )
+        pair_logits = self._score(
+            boundary_states, query_states, cand_s, cand_e, cand_valid, compat,
+            start_logits, end_logits, inside_prefix, inside_mean,
+            text_lengths, text_states, text_mask,
+        )  # [B, 2R, C]
+
+        # ---- typed, capped pair generation ------------------------------------------
+        probs = torch.sigmoid(pair_logits)
+        head_prob = probs[:, 0::2, :]  # [B, R, C]
+        tail_prob = probs[:, 1::2, :]
+        base_valid = cand_valid.unsqueeze(1)  # [B, 1, C]
+        hp, hs, he, hvalid = self._select_arguments(
+            head_prob, base_valid, cand_s, cand_e, self.heads_per_relation
+        )
+        tp, ts, te, tvalid = self._select_arguments(
+            tail_prob, base_valid, cand_s, cand_e, self.tails_per_relation
+        )
+        pair_score = hp.unsqueeze(-1) * tp.unsqueeze(-2)  # [B, R, Kh, Kt]
+        same_span = (hs.unsqueeze(-1) == ts.unsqueeze(-2)) & (he.unsqueeze(-1) == te.unsqueeze(-2))
+        pair_valid = hvalid.unsqueeze(-1) & tvalid.unsqueeze(-2) & ~same_span
+        kh, kt = self.heads_per_relation, self.tails_per_relation
+        flat_score = pair_score.reshape(pair_score.shape[0], pair_score.shape[1], kh * kt)
+        flat_valid = pair_valid.reshape(flat_score.shape)
+        flat_score = flat_score.masked_fill(~flat_valid, -1.0)
+        _, keep = torch.topk(flat_score, self.pair_cap, dim=-1)  # [B, R, P]
+        grid_h = torch.arange(kh).view(kh, 1).expand(kh, kt).reshape(kh * kt)
+        grid_t = torch.arange(kt).view(1, kt).expand(kh, kt).reshape(kh * kt)
+        hi = grid_h[keep]  # [B, R, P]
+        ti = grid_t[keep]
+        sel_valid = flat_valid.gather(-1, keep)
+        head_start = hs.gather(-1, hi)
+        head_end = he.gather(-1, hi)
+        tail_start = ts.gather(-1, ti)
+        tail_end = te.gather(-1, ti)
+
+        # ---- SparseRelationScorer -----------------------------------------------------
+        rel = torch.cat((query_states[:, 0::2, :], query_states[:, 1::2, :]), dim=-1)  # [B,R,2H]
+        b = text_states.shape[0]
+        r = rel.shape[1]
+        p = self.pair_cap
+        dt = text_states.dtype
+
+        def gather_words(idx: torch.Tensor) -> torch.Tensor:  # [B,R,P] -> [B,R,P,H]
+            return _gather_rows(text_states, idx.reshape(b, r * p)).reshape(b, r, p, h)
+
+        h_start = gather_words(head_start)
+        h_end = gather_words(head_end - 1)
+        t_start = gather_words(tail_start)
+        t_end = gather_words(tail_end - 1)
+        rel_x = rel.unsqueeze(2).expand(b, r, p, rel.shape[-1])
+        delta = (tail_start - head_start).to(dt)
+        order = torch.sign(delta).unsqueeze(-1)
+        length = text_lengths.clamp_min(1).to(dt).view(b, 1, 1, 1)
+        dist = delta.abs().unsqueeze(-1) / length
+        feats = torch.cat((h_start, h_end, t_start, t_end, rel_x, order, dist), dim=-1)
+        score = self.relation_scorer.mlp(feats).squeeze(-1)  # [B, R, P]
+
+        sc = self.relation_scorer
+        if sc.use_biaffine_content:
+            zeros = torch.zeros_like(text_states[:, :1].float())
+            prefix = torch.cat((zeros, text_states.float().cumsum(1)), dim=1).to(dt)  # [B,L+1,H]
+
+            def pool(start: torch.Tensor, end: torch.Tensor) -> torch.Tensor:
+                span_sum = (
+                    _gather_rows(prefix, end.reshape(b, r * p))
+                    - _gather_rows(prefix, start.reshape(b, r * p))
+                ).reshape(b, r, p, h)
+                width = (end - start).clamp_min(1).unsqueeze(-1).to(dt)
+                return span_sum / width
+
+            head_content = sc.head_content_projection(pool(head_start, head_end))
+            tail_content = sc.tail_content_projection(pool(tail_start, tail_end))
+            gate = torch.sigmoid(sc.relation_content_gate(rel_x))
+            biaffine = (head_content * gate * tail_content).sum(-1) / (h ** 0.5)
+            linear = sc.content_linear(torch.cat((head_content, tail_content, rel_x), -1)).squeeze(-1)
+            score = score + biaffine + linear
+
+        score = score.masked_fill(~sel_valid, BOUNDARY_MASK_LOGIT)
+        relation_pairs = torch.stack((head_start, head_end, tail_start, tail_end), dim=-1)
+        relation_pairs = torch.where(
+            sel_valid.unsqueeze(-1), relation_pairs, torch.zeros_like(relation_pairs)
+        )
+        return score, relation_pairs
+
+    def _select_arguments(
+        self,
+        prob: torch.Tensor,  # [B, R, C]
+        base_valid: torch.Tensor,  # [B, 1, C]
+        cand_s: torch.Tensor,  # [B, C]
+        cand_e: torch.Tensor,
+        k: int,
+    ):
+        valid = base_valid & (prob >= self.argument_threshold)
+        _, idx = torch.topk(prob.masked_fill(~valid, -1.0), k, dim=-1)  # [B, R, k]
+        sel_valid = valid.gather(-1, idx)
+        sel_prob = prob.gather(-1, idx)
+        r = idx.shape[1]
+        s = cand_s.unsqueeze(1).expand(-1, r, -1).gather(-1, idx)
+        e = cand_e.unsqueeze(1).expand(-1, r, -1).gather(-1, idx)
+        return sel_prob, s, e, sel_valid
+
+
+def _g25_export_relation_full(model: nn.Module, output_dir: Path, opset: int) -> Path:
+    """Export relation_full.onnx — NER pipeline + typed pair generation + relation scorer."""
+    wrapper = BoundaryRelationFullWrapper(model)
+    wrapper.eval()
+    _patch_deberta_for_onnx()
+    _disable_transformer_fast_path(wrapper)
+    seq_len, text_len = 40, 12
+    dummy = (
+        torch.ones(1, seq_len, dtype=torch.long),
+        torch.ones(1, seq_len, dtype=torch.long),
+        torch.arange(13, 13 + text_len, dtype=torch.long).unsqueeze(0),
+        torch.tensor([4, 6, 10, 12], dtype=torch.long),  # 2 relations × (head, tail)
+    )
+    path = output_dir / "relation_full.onnx"
+    torch.onnx.export(
+        wrapper,
+        dummy,
+        str(path),
+        opset_version=opset,
+        dynamo=False,
+        input_names=["input_ids", "attention_mask", "word_positions", "query_positions"],
+        output_names=["relation_logits", "relation_pairs"],
+        dynamic_axes={
+            "input_ids": {0: "batch", 1: "seq_len"},
+            "attention_mask": {0: "batch", 1: "seq_len"},
+            "word_positions": {0: "batch", 1: "text_len"},
+            "query_positions": {0: "num_queries"},
+            "relation_logits": {0: "batch", 1: "num_relations"},
+            "relation_pairs": {0: "batch", 1: "num_relations"},
+        },
+    )
+    console.print(
+        f"  [green]✓[/green] relation_full.onnx ({path.stat().st_size / 1e6:.1f} MB)"
+    )
+    return path
+
+
+def _g25_verify_relation_full(model: nn.Module, output_dir: Path) -> bool:
+    """PT-vs-ONNX check of relation_full: same proposed pairs, same relation logits."""
+    from gliner2.models.base import QueryLayout
+
+    text = "John works for Apple and lives in San Francisco. Mary works for Google."
+    relations = ["works_for", "lives_in"]
+    schema = model.create_schema().relations(relations)
+    schema_dicts, _ = model._build_schema_dicts_and_metadata([schema])
+    batch = model.processor.collate_fn_inference(
+        [(text, schema_dicts[0])], architecture="boundary"
+    )
+    with torch.no_grad():
+        core = model._encode_core(batch)
+        out = model.boundary_head(
+            core["text_states"], core["text_mask"], core["query_states"], core["query_mask"]
+        )
+        rel_specs = core["rel_specs"][0]
+        sample = model._single_sample_candidates(out.candidates, 0)
+        pairs = model.relation_pair_generator.generate(
+            sample, [QueryLayout(queries=())], [entry["spec"] for entry in rel_specs]
+        )
+        query_states = torch.stack([entry["query_state"] for entry in rel_specs]).unsqueeze(0)
+        pt_logits = model.relation_scorer(
+            core["text_states"][0:1], query_states, sample, pairs
+        )
+    pt = {}
+    for i in range(len(pairs)):
+        key = (
+            int(pairs.relation_index[i]), int(pairs.head_start[i]), int(pairs.head_end[i]),
+            int(pairs.tail_start[i]), int(pairs.tail_end[i]),
+        )
+        pt[key] = float(pt_logits[i])
+
+    word_positions = torch.where(
+        batch.text_word_mask, batch.text_word_indices, torch.full_like(batch.text_word_indices, -1)
+    )
+    sess = ort.InferenceSession(str(output_dir / "relation_full.onnx"))
+    logits, rel_pairs = sess.run(
+        None,
+        {
+            "input_ids": batch.input_ids.numpy(),
+            "attention_mask": batch.attention_mask.numpy(),
+            "word_positions": word_positions.numpy(),
+            "query_positions": batch.query_marker_indices[0].numpy(),
+        },
+    )
+    onnx_map = {}
+    for r in range(logits.shape[1]):
+        for pidx in range(logits.shape[2]):
+            if logits[0, r, pidx] > BOUNDARY_MASK_LOGIT / 2:
+                hs, he, ts, te = (int(v) for v in rel_pairs[0, r, pidx])
+                onnx_map[(r, hs, he, ts, te)] = float(logits[0, r, pidx])
+    same = set(pt) == set(onnx_map)
+    shared = set(pt) & set(onnx_map)
+    max_diff = max((abs(pt[k] - onnx_map[k]) for k in shared), default=float("inf"))
+    ok = same and max_diff < 1e-3
+    status = "[green]PASS[/green]" if ok else "[red]FAIL[/red]"
+    console.print(
+        f"  {status} relation_full: pairs {len(pt)} PT vs {len(onnx_map)} ONNX "
+        f"(identical={same}), logits max_diff={max_diff:.6f}"
+    )
+    return bool(ok)
+
+
+def _g25_export_ner_full(model: nn.Module, output_dir: Path, opset: int) -> Path:
+    """Export ner_full.onnx — encoder + gathers + boundary head + shared pool in one graph."""
+    wrapper = BoundaryNerFullWrapper(model)
+    wrapper.eval()
+    _patch_deberta_for_onnx()
+    _disable_transformer_fast_path(wrapper)
+
+    seq_len, text_len, num_queries = 40, 12, 3
+    dummy = (
+        torch.ones(1, seq_len, dtype=torch.long),  # input_ids
+        torch.ones(1, seq_len, dtype=torch.long),  # attention_mask
+        torch.arange(13, 13 + text_len, dtype=torch.long).unsqueeze(0),  # word_positions
+        torch.tensor([4, 6, 8], dtype=torch.long),  # query_positions
+    )
+    path = output_dir / "ner_full.onnx"
+    torch.onnx.export(
+        wrapper,
+        dummy,
+        str(path),
+        opset_version=opset,
+        dynamo=False,
+        input_names=["input_ids", "attention_mask", "word_positions", "query_positions"],
+        output_names=["pair_logits", "candidates", "null_logits"],
+        dynamic_axes={
+            "input_ids": {0: "batch", 1: "seq_len"},
+            "attention_mask": {0: "batch", 1: "seq_len"},
+            "word_positions": {0: "batch", 1: "text_len"},
+            "query_positions": {0: "num_queries"},
+            "pair_logits": {0: "batch", 1: "num_queries"},
+            "candidates": {0: "batch"},
+            "null_logits": {0: "batch", 1: "num_queries"},
+        },
+    )
+    if_nodes = _count_if_nodes(path)
+    if_note = (
+        ", [green]0 If nodes[/green]"
+        if if_nodes == 0
+        else f", [red]{if_nodes} If nodes remain (OpenVINO will reject)[/red]"
+    )
+    console.print(f"  [green]✓[/green] ner_full.onnx ({path.stat().st_size / 1e6:.1f} MB{if_note})")
+    return path
+
+
+def _g25_export_classifier_full(model: nn.Module, output_dir: Path, opset: int) -> Path:
+    """Export classifier_full.onnx — same encoder + [L]-marker gather + classifier MLP as GLiNER2."""
+    wrapper = ClassifierFullWrapper(EncoderWrapper(model.encoder), model.classifier)
+    wrapper.eval()
+    _patch_deberta_for_onnx()
+    _disable_transformer_fast_path(wrapper)
+    seq_len, num_labels = 40, 3
+    dummy = (
+        torch.ones(1, seq_len, dtype=torch.long),
+        torch.ones(1, seq_len, dtype=torch.long),
+        torch.arange(2, 2 + num_labels, dtype=torch.long),
+    )
+    path = output_dir / "classifier_full.onnx"
+    torch.onnx.export(
+        wrapper,
+        dummy,
+        str(path),
+        opset_version=opset,
+        dynamo=False,
+        input_names=["input_ids", "attention_mask", "label_positions"],
+        output_names=["logits"],
+        dynamic_axes={
+            "input_ids": {0: "batch", 1: "seq_len"},
+            "attention_mask": {0: "batch", 1: "seq_len"},
+            "label_positions": {0: "num_labels"},
+            "logits": {0: "batch_x_labels"},
+        },
+    )
+    console.print(f"  [green]✓[/green] classifier_full.onnx ({path.stat().st_size / 1e6:.1f} MB)")
+    return path
+
+
+def _g25_write_config(model: nn.Module, output_dir: Path) -> None:
+    """Write gliner4j_config.json for the gliner2dot5 family."""
+    settings = model.boundary_settings
+    tokenizer = model.processor.tokenizer
+    special_tokens = {"P": "[P]", "C": "[C]", "E": "[E]", "R": "[R]", "L": "[L]"}
+    special_token_ids = {
+        k: tokenizer.convert_tokens_to_ids(v) for k, v in special_tokens.items()
+    }
+    config = {
+        "architecture": "gliner2dot5",
+        "hidden_size": model.hidden_size,
+        "token_pooling": model.config.token_pooling,
+        "special_tokens": special_tokens,
+        "special_token_ids": special_token_ids,
+        "architecture_config": {
+            "backbone": model.config.model_name,
+            "max_len": int(model.config.max_len),
+            "boundary_dim": int(settings.boundary_dim),
+            "pool_size": int(settings.pool_size),
+            "pair_temperature": float(settings.pair_temperature),
+            "enable_abstention": bool(settings.enable_abstention),
+            "abstention_threshold": float(settings.abstention_threshold),
+            "overlap_policy": str(settings.overlap_policy),
+            "classification_temperature": float(settings.classification_temperature),
+            "relation_temperature": float(settings.relation_temperature),
+            "relation_pair_cap": int(settings.relation_pair_cap),
+            "relation_argument_proposal_threshold": float(
+                settings.relation_argument_proposal_threshold
+            ),
+            "lowercase_words": True,
+            "append_period": True,
+        },
+    }
+    (output_dir / "gliner4j_config.json").write_text(json.dumps(config, indent=2) + "\n")
+    console.print("  [green]✓[/green] gliner4j_config.json")
+
+
+def _g25_reference_batch(model: nn.Module, texts: list[str], labels: list[str]):
+    """Collate ``texts`` against an entity schema exactly like ``BoundaryExtractor.extract``."""
+    schema = model.create_schema().entities(labels)
+    schema_dicts, _ = model._build_schema_dicts_and_metadata([schema] * len(texts))
+    return model.processor.collate_fn_inference(
+        list(zip(texts, schema_dicts)), architecture="boundary"
+    )
+
+
+def _g25_verify_ner_full(model: nn.Module, output_dir: Path) -> bool:
+    """PT-vs-ONNX check of ner_full on a padded 2-text batch: same candidate pool, same logits."""
+    texts = [
+        "Barack Obama visited Berlin with Angela Merkel and met Google executives.",
+        "Marie Curie worked in Paris.",
+    ]
+    labels = ["person", "location", "organization"]
+    batch = _g25_reference_batch(model, texts, labels)
+    with torch.no_grad():
+        core = model._encode_core(batch)
+        out = model.boundary_head(
+            core["text_states"], core["text_mask"], core["query_states"], core["query_mask"]
+        )
+    cands = out.candidates
+    word_positions = torch.where(
+        batch.text_word_mask, batch.text_word_indices, torch.full_like(batch.text_word_indices, -1)
+    )
+    sess = ort.InferenceSession(str(output_dir / "ner_full.onnx"))
+    pair_logits, candidates, null_logits = sess.run(
+        None,
+        {
+            "input_ids": batch.input_ids.numpy(),
+            "attention_mask": batch.attention_mask.numpy(),
+            "word_positions": word_positions.numpy(),
+            "query_positions": batch.query_marker_indices[0].numpy(),
+        },
+    )
+    ok = True
+    for i in range(len(texts)):
+        pt = {}
+        for ci in range(cands.indices.shape[2]):
+            if bool(cands.valid_mask[i, 0, ci]):
+                key = (int(cands.indices[i, 0, ci, 0]), int(cands.indices[i, 0, ci, 1]))
+                pt[key] = cands.pair_logits[i, :, ci].numpy()
+        onnx_map = {}
+        for ci in range(candidates.shape[1]):
+            if pair_logits[i, 0, ci] > BOUNDARY_MASK_LOGIT / 2:
+                onnx_map[(int(candidates[i, ci, 0]), int(candidates[i, ci, 1]))] = pair_logits[i, :, ci]
+        same_pool = set(pt) == set(onnx_map)
+        shared = set(pt) & set(onnx_map)
+        max_diff = max(
+            (float(np.max(np.abs(pt[k] - onnx_map[k]))) for k in shared), default=float("inf")
+        )
+        null_diff = float(np.max(np.abs(out.null_logits[i].numpy() - null_logits[i])))
+        row_ok = same_pool and max_diff < 1e-3 and null_diff < 1e-3
+        ok &= row_ok
+        status = "[green]PASS[/green]" if row_ok else "[red]FAIL[/red]"
+        console.print(
+            f"  {status} ner_full text {i}: pool {len(pt)} PT vs {len(onnx_map)} ONNX "
+            f"(identical={same_pool}), pair_logits max_diff={max_diff:.6f}, "
+            f"null max_diff={null_diff:.6f}"
+        )
+    return bool(ok)
+
+
+def _g25_verify_classifier_full(model: nn.Module, output_dir: Path) -> bool:
+    """PT-vs-ONNX check of classifier_full on a synthetic [L]-marker layout."""
+    wrapper = ClassifierFullWrapper(EncoderWrapper(model.encoder), model.classifier).eval()
+    ids = torch.randint(5, 1000, (2, 24), dtype=torch.long)
+    mask = torch.ones(2, 24, dtype=torch.long)
+    label_positions = torch.tensor([3, 5, 7], dtype=torch.long)
+    with torch.no_grad():
+        pt = wrapper(ids, mask, label_positions).numpy()
+    sess = ort.InferenceSession(str(output_dir / "classifier_full.onnx"))
+    onnx_out = sess.run(
+        None,
+        {
+            "input_ids": ids.numpy(),
+            "attention_mask": mask.numpy(),
+            "label_positions": label_positions.numpy(),
+        },
+    )[0]
+    ok = bool(np.allclose(pt, onnx_out, atol=1e-3))
+    _print_verify("classifier_full logits", ok, pt, onnx_out)
+    return ok
+
+
+@app.command("gliner2dot5")
+def export_gliner2dot5(
+    model_path: Annotated[
+        str, typer.Option("--model-path", help="GLiNER2.5 (boundary) model dir or HF repo ID")
+    ],
+    output_dir: Annotated[
+        str, typer.Option("--output-dir", help="Output directory for ONNX models")
+    ],
+    opset: Annotated[int, typer.Option("--opset", help="ONNX opset version")] = 17,
+    verify: Annotated[
+        bool, typer.Option("--verify/--no-verify", help="Run PT-vs-ONNX verification after export")
+    ] = True,
+    variants: Annotated[
+        list[Variant] | None,
+        typer.Option("--variant", help="Additional variants to generate (fp16, quantized)"),
+    ] = None,
+) -> None:
+    """Export a GLiNER2.5 (boundary architecture) model to ONNX for gliner4j.
+
+    Produces three self-contained merged graphs — ner_full.onnx (encoder + boundary head +
+    shared candidate pool), relation_full.onnx (the same plus typed pair generation and the
+    relation scorer) and classifier_full.onnx (encoder + classifier MLP) — plus
+    gliner4j_config.json (architecture=gliner2dot5) and the tokenizer at the bundle root.
+    """
+    from gliner2 import AutoExtractor  # noqa: E402
+
+    out = Path(output_dir)
+    base_dir = out / "onnx"
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    console.print(f"\n[bold]Loading model from {model_path}...[/bold]")
+    model = AutoExtractor.from_pretrained(model_path)
+    model.eval()
+    if getattr(model, "architecture", None) != "boundary":
+        raise typer.BadParameter(
+            f"{model_path} is not a boundary (GLiNER2.5) checkpoint — use the `gliner2` command"
+        )
+    settings = model.boundary_settings
+    console.print(
+        f"  backbone={model.config.model_name}, hidden_size={model.hidden_size}, "
+        f"candidate_pool={settings.candidate_pool}, pool_size={settings.pool_size}, "
+        f"pool_boundary_top_k={settings.pool_boundary_top_k}, "
+        f"min_pool_per_query={settings.min_pool_per_query}"
+    )
+
+    console.print(f"\n[bold]Exporting ONNX models to {base_dir} (opset={opset})...[/bold]")
+    with torch.no_grad():
+        _g25_export_ner_full(model, base_dir, opset)
+        _g25_export_relation_full(model, base_dir, opset)
+        _g25_export_classifier_full(model, base_dir, opset)
+
+    console.print("\n[bold]Sanitizing tensor names for OpenVINO...[/bold]")
+    for name in GLINER2DOT5_MODEL_FILES:
+        renamed = _sanitize_onnx_names(base_dir / name)
+        console.print(f"  [green]✓[/green] {name} ({renamed} names rewritten)")
+
+    console.print("\n[bold]Writing config and tokenizer...[/bold]")
+    _g25_write_config(model, out)
+    model.processor.tokenizer.save_pretrained(str(out))
+    console.print("  [green]✓[/green] tokenizer files")
+
+    if verify:
+        console.print("\n[bold]Verifying ONNX graphs against PyTorch...[/bold]")
+        all_ok = _g25_verify_ner_full(model, base_dir)
+        all_ok &= _g25_verify_relation_full(model, base_dir)
+        all_ok &= _g25_verify_classifier_full(model, base_dir)
+        if all_ok:
+            console.print("\n[bold green]Verification passed![/bold green]")
+        else:
+            console.print("\n[bold red]Some verifications failed![/bold red]")
+            raise typer.Exit(code=1)
+
+    # QInt8 (signed, per-channel) — the accuracy-preserving choice for transformer weights.
+    from onnxruntime.quantization import QuantType
+
+    _generate_variants(variants, out, base_dir, GLINER2DOT5_MODEL_FILES, QuantType.QInt8)
+
+    console.print(f"\n[bold]Output structure in {out}:[/bold]")
+    _print_tree(out)
 
 
 if __name__ == "__main__":

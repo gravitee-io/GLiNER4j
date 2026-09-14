@@ -143,8 +143,8 @@ public final class GLiNER4jClassifier implements AutoCloseable {
       config,
       tokenizer
     );
-    var strategy = ModelArchitectures.forId(
-      config.getArchitecture()
+    var strategy = ModelArchitectures.forConfig(
+      config
     ).newClassificationStrategy(ctx, labels);
 
     log.info("GLiNER4jClassifier loaded successfully");

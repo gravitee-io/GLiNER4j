@@ -1,0 +1,101 @@
+{
+  "displayName": "SCX Router — GLiClass decoder-kv (Qwen3-0.6B)",
+  "modelDir": "models/scx-router-onnx",
+  "router": {
+    "families": [
+      {
+        "name": "model",
+        "singleLabel": false,
+        "labels": [
+          "coder",
+          "DeepSeek-V3.1",
+          "gemma-4-31B-it",
+          "gpt-oss-120b",
+          "Llama-4-Maverick-17B-128E-Instruct",
+          "MAGPiE",
+          "Meta-Llama-3.3-70B-Instruct",
+          "Qwen3-32B"
+        ]
+      },
+      {
+        "name": "task",
+        "singleLabel": true,
+        "labels": [
+          "analysis",
+          "classification",
+          "clustering",
+          "code",
+          "comparison",
+          "critique",
+          "decision support",
+          "evaluation",
+          "explanation",
+          "fact checking",
+          "forecasting",
+          "generation",
+          "information extraction",
+          "information retrieval",
+          "instruction following",
+          "math & reasoning",
+          "multi-turn",
+          "planning",
+          "problem solving",
+          "programming",
+          "qa",
+          "reasoning",
+          "recommendation",
+          "rewriting",
+          "summarization",
+          "translation",
+          "verification",
+          "visualization"
+        ]
+      },
+      {
+        "name": "reasoning",
+        "singleLabel": true,
+        "labels": [
+          "reasoning",
+          "nonreasoning"
+        ]
+      },
+      {
+        "name": "difficulty",
+        "singleLabel": true,
+        "labels": [
+          "very easy",
+          "easy",
+          "medium",
+          "hard",
+          "extra hard"
+        ]
+      },
+      {
+        "name": "length",
+        "singleLabel": true,
+        "labels": [
+          "1-64 output tokens",
+          "65-128 output tokens",
+          "129-256 output tokens",
+          "257-512 output tokens",
+          "513-1024 output tokens",
+          "1025-2048 output tokens",
+          "2049-4095 output tokens"
+        ]
+      }
+    ],
+    "samples": [
+      "Write a Python function that merges two sorted linked lists.",
+      "Compare these two vendor contracts and flag the riskier clauses.",
+      "What's a good one-line commit message for this typo fix?",
+      "Derive the closed-form solution for this second-order linear recurrence and prove convergence.",
+      "Translate the following product description into French and German."
+    ],
+    "session": [
+      "I need help refactoring some Rust code.",
+      " Specifically the borrow checker keeps rejecting this function.",
+      " fn parse(&mut self, buf: &[u8]) -> Result<Token, Error> { ... } -- here's the body, can you fix it and explain why it fails?"
+    ],
+    "sessionFamily": "model"
+  }
+}

@@ -1,6 +1,7 @@
 {
   "displayName": "GLiGuard LLM Guardrails (300M)",
   "modelDir": "models/gliguard-onnx",
+  "llamacppModelDir": "models/gliguard-llamacpp",
   "labels": [
     { "name": "safe", "description": "Benign, harmless content" },
     { "name": "unsafe", "description": "Harmful, dangerous, or policy-violating content" },

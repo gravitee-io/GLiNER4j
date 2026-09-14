@@ -24,15 +24,23 @@ import io.gravitee.lab.gliner4j.GLiNER4jClassifier;
 import io.gravitee.lab.gliner4j.GLiNER4jNER;
 import io.gravitee.lab.gliner4j.demo.profile.Profile;
 import io.gravitee.lab.gliner4j.demo.profile.ProfileType;
+import io.gravitee.lab.gliner4j.demo.profile.RouterDef;
+import io.gravitee.lab.gliner4j.demo.profile.RouterFamily;
 import io.gravitee.lab.gliner4j.extractor.RelationExtractor;
 import io.gravitee.lab.gliner4j.extractor.SchemaExtractor;
+import io.gravitee.lab.gliner4j.llamacpp.DecoderKvRouter;
+import io.gravitee.lab.gliner4j.llamacpp.DecoderKvSession;
+import io.gravitee.lab.gliner4j.llamacpp.StreamingSpanNer;
+import io.gravitee.lab.gliner4j.llamacpp.StreamingSpanSession;
 import io.gravitee.lab.gliner4j.runtime.ExecutionProvider;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
+import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.RelationDefinition;
 import io.gravitee.lab.gliner4j.schema.Schema;
 import io.gravitee.lab.gliner4j.schema.StructureDefinition;
+import io.gravitee.lab.gliner4j.utils.GlinerNerSupport;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.metrics.SdkMeterProvider;
 import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader;
@@ -45,7 +53,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <p>Args: {@code [profile] [variant] [executionProvider]}.
  *   - profile (default "base"): which model + vocabulary to load.
- *   - variant (default "onnx"): ONNX model folder (onnx | onnx_fp16 | onnx_quantized).
+ *   - variant (default "onnx"): ONNX model folder (onnx | onnx_fp16 | onnx_quantized); for
+ *     llama.cpp bundles the GGUF quantization (f16 | q8_0) where the bundle ships several.
  *   - executionProvider (default "auto"): ORT backend — auto | cpu | cuda | openvino | coreml.
  *     "auto" detects the best provider compiled into the native runtime.
  *
@@ -97,12 +106,12 @@ public class GLiNER4jDemo {
     var executionProvider = args.length > 2 ? ExecutionProvider.fromString(args[2]) : ExecutionProvider.AUTO;
     Profile profile = new Profile(profileName);
 
-    if (!profile.hasEntities() && !profile.hasLabels()) {
+    if (!profile.hasEntities() && !profile.hasLabels() && !profile.hasRouter()) {
       System.out.println(
         GRAY +
           "  Profile '" +
           profileName.name().toLowerCase() +
-          "' has no entities or labels — nothing to run." +
+          "' has no entities, labels or router — nothing to run." +
           RESET
       );
       return;
@@ -147,17 +156,38 @@ public class GLiNER4jDemo {
       .executionProvider(executionProvider)
       .build();
 
+    // The bundle's engine decides what "variant" and "ep" mean: ONNX Runtime uses the onnx*
+    // folder and its provider resolution; the llama.cpp/ggml engine uses the GGUF quantization
+    // (f16 / q8_0, else the bundle default) and offloads to Metal / CUDA under auto.
+    var bundleConfig = io.gravitee.lab.gliner4j.GLiNER4jConfig.load(modelDir);
+    boolean llamacpp = bundleConfig.getEngine() == io.gravitee.lab.gliner4j.arch.Engine.LLAMACPP;
+    String device = llamacpp
+      ? (switch (executionProvider) {
+          case CPU, OPENVINO -> "cpu";
+          case AUTO, CUDA -> "gpu (Metal/CUDA/Vulkan if available)";
+        })
+      : ExecutionProvider.resolve(executionProvider).name().toLowerCase();
+    // Only llama.cpp-native backbones (GLiClass ModernBERT, the Qwen3 families) ship several
+    // GGUF quantizations; the DeBERTa families are one model.gguf and ignore the variant.
+    String defaultGguf = bundleConfig.archString("backbone_gguf", null);
+    String variantShown = !llamacpp
+      ? variant
+      : defaultGguf == null
+        ? "gguf/model.gguf"
+        : (java.util.Set.of("f16", "q8_0").contains(variant) ? variant : defaultGguf);
     System.out.println();
     System.out.println(
       DIM +
         "  Loading model from " +
         modelDir +
-        " (variant=" +
-        variant +
+        " (engine=" +
+        bundleConfig.getEngine().configValue() +
+        ", variant=" +
+        variantShown +
         ", ep=" +
         executionProvider.name().toLowerCase() +
         " -> " +
-        ExecutionProvider.resolve(executionProvider).name().toLowerCase() +
+        device +
         ") ..." +
         RESET
     );
@@ -167,7 +197,44 @@ public class GLiNER4jDemo {
     SchemaExtractor schemaExtractor = null;
     RelationExtractor relationExtractor = null;
     GLiNER4j unified = null;
+    DecoderKvRouter router = null;
+    StreamingSpanNer streamer = null;
     try {
+      // Optional LLM-routing demo (GLiClass decoder-kv bundles on llama.cpp)
+      if (profile.hasRouter()) {
+        router = DecoderKvRouter.load(modelDir, variant, runtimeConfig);
+        var def = profile.router();
+        printer.routerBanner(profile.displayName());
+        System.out.println(DIM + "  Model: " + modelDir + RESET);
+        System.out.println(DIM + "  Families: " + def.families().size() + " label families" + RESET);
+        System.out.println();
+        printer.entity(def.families(), RouterFamily::name);
+
+        var samples = def.samples() == null ? List.<String>of() : def.samples();
+        for (int i = 0; i < samples.size(); i++) {
+          var text = samples.get(i);
+          long t0 = System.nanoTime();
+          var results = route(router, def, text);
+          printer.routerResult(i + 1, text, results, 3, elapsedMs(t0));
+        }
+
+        var turns = def.session() == null ? List.<String>of() : def.session();
+        if (!turns.isEmpty()) {
+          var family = def.sessionFamilyDef();
+          printer.sessionBanner(family.name());
+          try (var session = router.openSession("demo")) {
+            for (int i = 0; i < turns.size(); i++) {
+              long t0 = System.nanoTime();
+              session.append(turns.get(i));
+              var results = family.singleLabel()
+                ? session.classifySingleLabel(family.labels())
+                : session.classify(family.labels(), 0.0f);
+              printer.sessionTurn(i + 1, turns.get(i), session.cachedTokens(), results, elapsedMs(t0));
+            }
+          }
+        }
+      }
+
       // Optional NER demo (skipped for classification-only profiles)
       if (profile.hasEntities()) {
         gliner = GLiNER4jNER.load(modelDir, entities, variant, runtimeConfig);
@@ -220,7 +287,12 @@ public class GLiNER4jDemo {
       // Optional relation + combined extraction demos
       if (profile.hasRelations()) {
         relationExtractor = RelationExtractor.load(modelDir, relations, variant, runtimeConfig);
-        unified = GLiNER4j.load(modelDir, variant, runtimeConfig);
+        try {
+          unified = GLiNER4j.load(modelDir, variant, runtimeConfig);
+        } catch (UnsupportedOperationException e) {
+          // Families without the GLiNER2 unified (entities + relations + structures) graph.
+          System.out.println(GRAY + "  Combined extraction skipped: " + e.getMessage() + RESET);
+        }
 
         printer.relationBanner();
         System.out.println(DIM + "  Model: " + modelDir + RESET);
@@ -235,20 +307,62 @@ public class GLiNER4jDemo {
           printer.relationResult(i + 1, text, results, elapsedMs(t0));
         }
 
-        printer.combinedBanner();
-        System.out.println(DIM + "  Model: " + modelDir + RESET);
-        System.out.println();
-        var schema = Schema.builder().entities(entities).relations(relations).build();
-        for (int i = 0; i < relSamples.size(); i++) {
-          var text = relSamples.get(i);
-          long t0 = System.nanoTime();
-          var result = unified.extract(text, schema);
-          printer.combinedResult(i + 1, text, result, elapsedMs(t0));
+        if (unified != null) {
+          printer.combinedBanner();
+          System.out.println(DIM + "  Model: " + modelDir + RESET);
+          System.out.println();
+          var schema = Schema.builder().entities(entities).relations(relations).build();
+          for (int i = 0; i < relSamples.size(); i++) {
+            var text = relSamples.get(i);
+            long t0 = System.nanoTime();
+            var result = unified.extract(text, schema);
+            printer.combinedResult(i + 1, text, result, elapsedMs(t0));
+          }
         }
       }
 
-      runInteractive(profile, gliner, classifier, schemaExtractor, relationExtractor, unified, entities, relations);
+      // Optional streaming-NER demo (gliner-streaming-span bundles on llama.cpp)
+      if (profile.hasStream()) {
+        streamer = StreamingSpanNer.load(modelDir, variant, runtimeConfig);
+        var labelNames = entities.stream().map(EntityDefinition::name).toList();
+        printer.streamBanner();
+        int n = 1;
+        for (var chunks : profile.stream()) {
+          System.out.println();
+          System.out.println(DIM + "  Session " + n++ + RESET);
+          try (var session = streamer.openSession("demo", labelNames)) {
+            int turn = 1;
+            for (var chunk : chunks) {
+              long t0 = System.nanoTime();
+              var snapshot = session.append(chunk, 0.5f);
+              printer.streamTurn(
+                turn++,
+                chunk,
+                session.cachedTokens(),
+                session.text(),
+                GlinerNerSupport.groupByType(snapshot),
+                elapsedMs(t0)
+              );
+            }
+          }
+        }
+      }
+
+      runInteractive(
+        profile,
+        gliner,
+        classifier,
+        schemaExtractor,
+        relationExtractor,
+        unified,
+        router,
+        streamer,
+        entities,
+        relations
+      );
     } finally {
+      if (streamer != null) streamer.close();
+      if (router != null) router.close();
       if (gliner != null) gliner.close();
       if (classifier != null) classifier.close();
       if (schemaExtractor != null) schemaExtractor.close();
@@ -267,13 +381,29 @@ public class GLiNER4jDemo {
     SchemaExtractor schemaExtractor,
     RelationExtractor relationExtractor,
     GLiNER4j unified,
+    DecoderKvRouter router,
+    StreamingSpanNer streamer,
     List<EntityDefinition> entities,
     List<RelationDefinition> relations
   ) {
     var hasEntities = gliner != null;
-    printer.interactiveBanner(hasEntities, profile.hasLabels(), profile.hasSchema(), profile.hasRelations());
+    var hasRouter = router != null;
+    var hasStream = streamer != null;
+    var streamLabels = entities.stream().map(EntityDefinition::name).toList();
+    StreamingSpanSession stream = null;
+    printer.interactiveBanner(
+      hasEntities,
+      profile.hasLabels(),
+      profile.hasSchema(),
+      profile.hasRelations(),
+      hasRouter,
+      hasStream
+    );
     var counter = new AtomicInteger(1);
-    var mode = hasEntities ? NER : Mode.CLASSIFY;
+    var mode = hasEntities ? NER : hasRouter ? Mode.ROUTE : Mode.CLASSIFY;
+    RouterDef routerDef = hasRouter ? profile.router() : null;
+    DecoderKvSession session = null;
+    var turn = new AtomicInteger(1);
     Schema combinedSchema = profile.hasRelations()
       ? Schema.builder().entities(entities).relations(relations).build()
       : null;
@@ -327,13 +457,74 @@ public class GLiNER4jDemo {
             System.out.println(DIM + "  Switched to combined extraction mode." + RESET);
           }
           continue;
+        } else if (line.equalsIgnoreCase("/route")) {
+          if (!hasRouter) {
+            System.out.println(GRAY + "  This profile has no router — '/route' unavailable." + RESET);
+          } else {
+            mode = Mode.ROUTE;
+            System.out.println(DIM + "  Switched to routing mode (every line is routed on its own)." + RESET);
+          }
+          continue;
+        } else if (line.equalsIgnoreCase("/session")) {
+          if (!hasRouter) {
+            System.out.println(GRAY + "  This profile has no router — '/session' unavailable." + RESET);
+          } else {
+            mode = Mode.SESSION;
+            if (session == null) session = router.openSession("interactive");
+            System.out.println(
+              DIM + "  Switched to session mode: each line is appended to the conversation and re-routed." + RESET
+            );
+          }
+          continue;
+        } else if (line.equalsIgnoreCase("/reset")) {
+          if (session != null) {
+            session.close();
+            session = null;
+            turn.set(1);
+          }
+          if (mode == Mode.SESSION && router != null) session = router.openSession("interactive");
+          System.out.println(DIM + "  Session reset." + RESET);
+          continue;
         } else if (line.equalsIgnoreCase("/help")) {
-          printer.interactiveHelp(hasEntities, profile.hasLabels(), profile.hasSchema(), profile.hasRelations());
+          printer.interactiveHelp(
+            hasEntities,
+            profile.hasLabels(),
+            profile.hasSchema(),
+            profile.hasRelations(),
+            hasRouter
+          );
           continue;
         }
 
         long t0 = System.nanoTime();
         switch (mode) {
+          case ROUTE -> printer.routerResult(
+            counter.getAndIncrement(),
+            line,
+            route(router, routerDef, line),
+            3,
+            elapsedMs(t0)
+          );
+          case STREAM -> {
+            var chunk = (stream.words() == 0 ? "" : " ") + line;
+            var snapshot = stream.append(chunk, 0.5f);
+            printer.streamTurn(
+              turn.getAndIncrement(),
+              line,
+              stream.cachedTokens(),
+              stream.text(),
+              GlinerNerSupport.groupByType(snapshot),
+              elapsedMs(t0)
+            );
+          }
+          case SESSION -> {
+            var family = routerDef.sessionFamilyDef();
+            session.append((session.cachedTokens() == 0 ? "" : " ") + line);
+            var results = family.singleLabel()
+              ? session.classifySingleLabel(family.labels())
+              : session.classify(family.labels(), 0.0f);
+            printer.sessionTurn(turn.getAndIncrement(), line, session.cachedTokens(), results, elapsedMs(t0));
+          }
           case NER -> printer.nerResult(counter.getAndIncrement(), line, gliner.extract(line), elapsedMs(t0));
           case CLASSIFY -> printer.classificationResult(
             counter.getAndIncrement(),
@@ -361,7 +552,24 @@ public class GLiNER4jDemo {
           );
         }
       }
+    } finally {
+      if (session != null) session.close();
+      if (stream != null) stream.close();
     }
+  }
+
+  /** Scores {@code text} against every label family of the router profile, in profile order. */
+  private static Map<String, List<ClassificationResult>> route(DecoderKvRouter router, RouterDef def, String text) {
+    var out = new LinkedHashMap<String, List<ClassificationResult>>();
+    for (var family : def.families()) {
+      out.put(
+        family.name(),
+        family.singleLabel()
+          ? router.classifySingleLabel(text, family.labels())
+          : router.classify(text, family.labels(), 0.0f)
+      );
+    }
+    return out;
   }
 
   private static void printLegend(List<EntityDefinition> entities, Path modelDir) {

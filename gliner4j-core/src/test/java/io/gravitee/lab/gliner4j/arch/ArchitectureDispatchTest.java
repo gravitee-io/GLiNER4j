@@ -60,12 +60,47 @@ class ArchitectureDispatchTest {
   }
 
   @Test
+  void engineDefaultsToOnnxAndRejectsUnknownValues() {
+    assertThat(Engine.fromConfigValue(null)).isEqualTo(Engine.ONNX);
+    assertThat(Engine.fromConfigValue(" ONNX ")).isEqualTo(Engine.ONNX);
+    assertThat(Engine.fromConfigValue("llamacpp")).isEqualTo(Engine.LLAMACPP);
+    assertThat(Engine.fromConfigValue("llama.cpp")).isEqualTo(Engine.LLAMACPP);
+    assertThatThrownBy(() -> Engine.fromConfigValue("tensorrt"))
+      .isInstanceOf(IllegalArgumentException.class)
+      .hasMessageContaining("tensorrt");
+  }
+
+  @Test
+  void llamacppEngineWithoutModuleFailsWithClearMessage() {
+    // gliner4j-core alone registers only ONNX implementations.
+    assertThatThrownBy(() ->
+      ModelArchitectures.forId(Architecture.GLINER2, Engine.LLAMACPP)
+    )
+      .isInstanceOf(UnsupportedOperationException.class)
+      .hasMessageContaining("gliner2")
+      .hasMessageContaining("llamacpp")
+      .hasMessageContaining("gliner4j-llamacpp");
+  }
+
+  @Test
   void gliner2IsRegisteredAndSupportsEveryTask() {
     var arch = ModelArchitectures.forId(Architecture.GLINER2);
     assertThat(arch.id()).isEqualTo(Architecture.GLINER2);
     for (var task : TaskType.values()) {
       assertThat(arch.supports(task)).isTrue();
     }
+  }
+
+  @Test
+  void gliner2dot5IsRegisteredForNerClassificationAndRelations() {
+    assertThat(Architecture.fromConfigValue("gliner2dot5")).isEqualTo(
+      Architecture.GLINER2DOT5
+    );
+    var arch = ModelArchitectures.forId(Architecture.GLINER2DOT5);
+    assertThat(arch.supports(TaskType.NER)).isTrue();
+    assertThat(arch.supports(TaskType.CLASSIFICATION)).isTrue();
+    assertThat(arch.supports(TaskType.RELATION)).isTrue();
+    assertThat(arch.supports(TaskType.STRUCTURE)).isFalse();
   }
 
   @Test
@@ -76,6 +111,6 @@ class ArchitectureDispatchTest {
     )
       .isInstanceOf(UnsupportedOperationException.class)
       .hasMessageContaining("gliner-decoder")
-      .hasMessageContaining("not yet supported");
+      .hasMessageContaining("not registered");
   }
 }

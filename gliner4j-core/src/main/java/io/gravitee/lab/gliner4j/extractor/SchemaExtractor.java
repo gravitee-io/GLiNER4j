@@ -26,7 +26,7 @@ import io.gravitee.lab.gliner4j.processor.MultiSchemaInputAssembler;
 import io.gravitee.lab.gliner4j.processor.SchemaUnit;
 import io.gravitee.lab.gliner4j.processor.UnitLayout;
 import io.gravitee.lab.gliner4j.runtime.BaseRuntime;
-import io.gravitee.lab.gliner4j.runtime.GLiNER4jNERRuntime;
+import io.gravitee.lab.gliner4j.runtime.Gliner2SpanRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.StructureDefinition;
 import io.gravitee.lab.gliner4j.schema.StructureInstance;
@@ -70,7 +70,7 @@ public final class SchemaExtractor
     RuntimeConfig runtimeConfig,
     List<StructureDefinition> structures,
     DjlTokenizerWrapper tokenizer,
-    GLiNER4jNERRuntime runtime,
+    Gliner2SpanRuntime runtime,
     MultiSchemaInputAssembler inputAssembler
   ) {
     super(
@@ -111,11 +111,18 @@ public final class SchemaExtractor
     );
 
     var config = GLiNER4jConfig.load(modelDir);
-    ModelArchitectures.forId(config.getArchitecture()).requireSupported(
-      TaskType.STRUCTURE
-    );
+    var architecture = ModelArchitectures.forConfig(config);
+    architecture.requireSupported(TaskType.STRUCTURE);
     var tokenizer = new DjlTokenizerWrapper(modelDir);
-    var runtime = new GLiNER4jNERRuntime(modelDir, variant, runtimeConfig);
+    var runtime = architecture.newSpanRuntime(
+      new io.gravitee.lab.gliner4j.arch.LoadContext(
+        modelDir,
+        variant,
+        runtimeConfig,
+        config,
+        tokenizer
+      )
+    );
     var assembler = assemblerFor(tokenizer, structures);
 
     log.info("GLiNER4jSchemaExtractor loaded successfully");

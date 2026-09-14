@@ -62,6 +62,15 @@ public final class BatchPreprocessor {
     List<String> texts,
     InputAssembler assembler
   ) {
+    return preprocess(texts, assembler, TextPreprocessing.DEFAULT);
+  }
+
+  /** Same, splitting words with {@code preprocessing}. */
+  public static Result preprocess(
+    List<String> texts,
+    InputAssembler assembler,
+    TextPreprocessing preprocessing
+  ) {
     int batchSize = texts.size();
     var inputs = new PreprocessedInput[batchSize];
     int maxSeqLen = 0;
@@ -69,7 +78,7 @@ public final class BatchPreprocessor {
     for (int i = 0; i < batchSize; i++) {
       var text = texts.get(i);
       if (text == null || text.isBlank()) continue;
-      var enc = new TextEncoder(text);
+      var enc = preprocessing.encode(text);
       if (enc.getTextLen() == 0) continue;
       inputs[i] = assembler.assemble(enc);
       maxSeqLen = Math.max(maxSeqLen, inputs[i].inputIds().length);

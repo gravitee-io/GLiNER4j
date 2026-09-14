@@ -141,9 +141,10 @@ public final class GLiNER4jNER implements AutoCloseable {
       config,
       tokenizer
     );
-    var strategy = ModelArchitectures.forId(
-      config.getArchitecture()
-    ).newNerStrategy(ctx, entities);
+    var strategy = ModelArchitectures.forConfig(config).newNerStrategy(
+      ctx,
+      entities
+    );
 
     log.info("GLiNER4jNER model loaded successfully");
     return new GLiNER4jNER(config, strategy);
