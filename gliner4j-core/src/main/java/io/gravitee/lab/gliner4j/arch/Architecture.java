@@ -64,6 +64,17 @@ public enum Architecture {
   }
 
   /**
+   * The engine a bundle of this family runs on when its config has no {@code "engine"} key. The
+   * families that only exist on llama.cpp default to it, so their bundles need not declare it.
+   */
+  public Engine defaultEngine() {
+    return switch (this) {
+      case GLICLASS_DECODER_KV, GLINER_STREAMING_SPAN -> Engine.LLAMACPP;
+      default -> Engine.ONNX;
+    };
+  }
+
+  /**
    * Resolves the family from the config value. A {@code null}, blank, or unknown value defaults to
    * {@link #GLINER2} so that bundles exported before the {@code architecture} key existed keep
    * loading as GLiNER2.

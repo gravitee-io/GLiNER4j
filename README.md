@@ -205,9 +205,10 @@ try (var gliner = GLiNER4jNER.load(modelDir, entities, "onnx_quantized", config)
 > `scripts/download-native-libraries.sh` and installs it there. A stale `~/.llama.cpp` from an older
 > llamaj.cpp fails at context creation with `Unsupported ctx type` — rerun the task after a bump.
 
-A bundle declares its engine in `gliner4j_config.json` (`"engine": "onnx"`, the default, or
-`"llamacpp"`); the facades dispatch on (family, engine), so the Java code above is identical for
-both. llama.cpp bundles (module `gliner4j-llamacpp`, Java 25) keep the encoder as GGUF and the task
+A bundle declares its engine in `gliner4j_config.json` (`"engine": "onnx"` or `"llamacpp"`). Absent,
+it is the family's default: `llamacpp` for `gliclass-decoder-kv` and `gliner-streaming-span`, which
+exist only there, `onnx` for every other family. The facades dispatch on (family, engine), so the
+Java code above is identical for both. llama.cpp bundles (module `gliner4j-llamacpp`, Java 25) keep the encoder as GGUF and the task
 heads as small ggml graphs under `gguf/`; the variant argument selects the GGUF quantization
 (`"f16"`, `"q8_0"`, or anything else for the bundle default). `ExecutionProvider.AUTO`/`CUDA`
 offload to Metal/CUDA/Vulkan, `CPU` stays on the CPU. Every current family runs on both engines:

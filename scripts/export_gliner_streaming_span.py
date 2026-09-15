@@ -123,6 +123,7 @@ def _write_config(model, tokenizer, out_dir: Path, default_gguf: str) -> None:
     enc = model.model.token_rep_layer.decoder_layer.model.config
     config = {
         "architecture": "gliner-streaming-span",
+        "engine": "llamacpp",
         "hidden_size": cfg.hidden_size,
         "max_width": cfg.max_width,
         "architecture_config": {

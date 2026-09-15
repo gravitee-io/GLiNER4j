@@ -71,6 +71,18 @@ class ArchitectureDispatchTest {
   }
 
   @Test
+  void absentEngineDefaultsPerFamily() {
+    assertThat(Architecture.GLINER2.defaultEngine()).isEqualTo(Engine.ONNX);
+    assertThat(Architecture.GLICLASS.defaultEngine()).isEqualTo(Engine.ONNX);
+    assertThat(Architecture.GLICLASS_DECODER_KV.defaultEngine()).isEqualTo(
+      Engine.LLAMACPP
+    );
+    assertThat(Architecture.GLINER_STREAMING_SPAN.defaultEngine()).isEqualTo(
+      Engine.LLAMACPP
+    );
+  }
+
+  @Test
   void llamacppEngineWithoutModuleFailsWithClearMessage() {
     // gliner4j-core alone registers only ONNX implementations.
     assertThatThrownBy(() ->

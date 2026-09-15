@@ -345,6 +345,7 @@ def _write_config(model: nn.Module, tokenizer, out_dir: Path, default_gguf: str)
     enc = cfg.encoder_config
     config = {
         "architecture": "gliclass-decoder-kv",
+        "engine": "llamacpp",
         "hidden_size": cfg.hidden_size,
         "architecture_config": {
             "backbone_model_name": cfg.encoder_model_name,

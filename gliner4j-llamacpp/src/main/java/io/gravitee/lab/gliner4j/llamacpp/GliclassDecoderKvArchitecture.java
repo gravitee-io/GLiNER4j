@@ -16,6 +16,7 @@
 package io.gravitee.lab.gliner4j.llamacpp;
 
 import io.gravitee.lab.gliner4j.arch.Architecture;
+import io.gravitee.lab.gliner4j.arch.Engine;
 import io.gravitee.lab.gliner4j.arch.LoadContext;
 import io.gravitee.lab.gliner4j.arch.ModelArchitecture;
 import io.gravitee.lab.gliner4j.arch.TaskType;
@@ -32,6 +33,11 @@ public final class GliclassDecoderKvArchitecture implements ModelArchitecture {
   @Override
   public Architecture id() {
     return Architecture.GLICLASS_DECODER_KV;
+  }
+
+  @Override
+  public Engine engine() {
+    return Engine.LLAMACPP;
   }
 
   @Override
