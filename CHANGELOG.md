@@ -1,3 +1,10 @@
+## [1.1.1](https://github.com/gravitee-io/GLiNER4j/compare/1.1.0...1.1.1) (2026-09-15)
+
+
+### Bug Fixes
+
+* llama-only families register as llamacpp and default to it ([#35](https://github.com/gravitee-io/GLiNER4j/issues/35)) ([b5750bc](https://github.com/gravitee-io/GLiNER4j/commit/b5750bc94f698b2cd5097a3bd7f1e1a37d8e5ae2))
+
 # [1.1.0](https://github.com/gravitee-io/GLiNER4j/compare/1.0.0...1.1.0) (2026-09-14)
 
 
