@@ -19,7 +19,7 @@ import java.util.Locale;
 
 /**
  * The inference engine a bundle runs on. Selected by the top-level {@code "engine"} key of
- * {@code gliner4j_config.json}; absent means {@link #ONNX}.
+ * {@code gliner4j_config.json}; absent means the family's {@link Architecture#defaultEngine()}.
  *
  * <p>A model family may be implemented on more than one engine: the ONNX Runtime implementation
  * ships in {@code gliner4j-core}, the llama.cpp/ggml one in {@code gliner4j-llamacpp}. Unlike

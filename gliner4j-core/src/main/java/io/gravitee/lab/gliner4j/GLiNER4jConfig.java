@@ -44,7 +44,7 @@ public class GLiNER4jConfig {
   @Builder.Default
   private final Architecture architecture = Architecture.GLINER2;
 
-  /** The inference engine this bundle's files target. Absent in the config ⇒ {@link Engine#ONNX}. */
+  /** The inference engine this bundle's files target. Absent in the config ⇒ {@link Architecture#defaultEngine()}. */
   @Builder.Default
   private final Engine engine = Engine.ONNX;
 
@@ -119,7 +119,9 @@ public class GLiNER4jConfig {
     try {
       var json = mapper.readValue(configFile.toFile(), JsonConfig.class);
       var architecture = Architecture.fromConfigValue(json.architecture);
-      var engine = Engine.fromConfigValue(json.engine);
+      var engine = json.engine == null || json.engine.isBlank()
+        ? architecture.defaultEngine()
+        : Engine.fromConfigValue(json.engine);
       log.info(
         "Loaded config: architecture={}, engine={}, hiddenSize={}, maxWidth={}, maxCount={}, usesSpanIdx={}, tokenPooling={}",
         architecture.configValue(),

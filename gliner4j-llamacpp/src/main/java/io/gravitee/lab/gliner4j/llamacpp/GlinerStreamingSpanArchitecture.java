@@ -16,6 +16,7 @@
 package io.gravitee.lab.gliner4j.llamacpp;
 
 import io.gravitee.lab.gliner4j.arch.Architecture;
+import io.gravitee.lab.gliner4j.arch.Engine;
 import io.gravitee.lab.gliner4j.arch.LoadContext;
 import io.gravitee.lab.gliner4j.arch.ModelArchitecture;
 import io.gravitee.lab.gliner4j.arch.TaskType;
@@ -30,6 +31,11 @@ public final class GlinerStreamingSpanArchitecture
   @Override
   public Architecture id() {
     return Architecture.GLINER_STREAMING_SPAN;
+  }
+
+  @Override
+  public Engine engine() {
+    return Engine.LLAMACPP;
   }
 
   @Override
