@@ -21,6 +21,7 @@ import static io.gravitee.lab.gliner4j.demo.profile.ProfileType.BASE;
 import ai.onnxruntime.OrtSession;
 import io.gravitee.lab.gliner4j.GLiNER4j;
 import io.gravitee.lab.gliner4j.GLiNER4jClassifier;
+import io.gravitee.lab.gliner4j.GLiNER4jDecider;
 import io.gravitee.lab.gliner4j.GLiNER4jNER;
 import io.gravitee.lab.gliner4j.demo.profile.Profile;
 import io.gravitee.lab.gliner4j.demo.profile.ProfileType;
@@ -36,6 +37,7 @@ import io.gravitee.lab.gliner4j.runtime.ExecutionProvider;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
+import io.gravitee.lab.gliner4j.schema.DecisionQuestion;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.RelationDefinition;
 import io.gravitee.lab.gliner4j.schema.Schema;
@@ -79,25 +81,7 @@ public class GLiNER4jDemo {
   private static final String WHITE = "\033[97m";
   private static final String GRAY = "\033[90m";
 
-  // 12-color palette cycled by hash(label) — scales to any number of entity types.
-  private static final Palette PALETTE = new Palette(
-    new String[][] {
-      { "\033[48;5;63m\033[97m", "\033[38;5;63m" }, // purple
-      { "\033[48;5;37m\033[97m", "\033[38;5;37m" }, // teal
-      { "\033[48;5;208m\033[97m", "\033[38;5;208m" }, // orange
-      { "\033[48;5;170m\033[97m", "\033[38;5;170m" }, // pink
-      { "\033[48;5;33m\033[97m", "\033[38;5;33m" }, // blue
-      { "\033[48;5;35m\033[97m", "\033[38;5;35m" }, // green
-      { "\033[48;5;160m\033[97m", "\033[38;5;160m" }, // red
-      { "\033[48;5;142m\033[97m", "\033[38;5;142m" }, // olive
-      { "\033[48;5;129m\033[97m", "\033[38;5;129m" }, // violet
-      { "\033[48;5;24m\033[97m", "\033[38;5;24m" }, // deep blue
-      { "\033[48;5;94m\033[97m", "\033[38;5;94m" }, // brown
-      { "\033[48;5;100m\033[97m", "\033[38;5;100m" }, // dark olive
-    }
-  );
-
-  private static final Printer printer = new Printer(PALETTE, DIM, RESET, BOLD, GRAY);
+  private static final Printer printer = Printer.ansi();
 
   public static void main(String[] args) {
     var profileName = args.length > 0 ? ProfileType.valueOf(args[0].toUpperCase()) : BASE;
@@ -106,12 +90,12 @@ public class GLiNER4jDemo {
     var executionProvider = args.length > 2 ? ExecutionProvider.fromString(args[2]) : ExecutionProvider.AUTO;
     Profile profile = new Profile(profileName);
 
-    if (!profile.hasEntities() && !profile.hasLabels() && !profile.hasRouter()) {
+    if (!profile.hasEntities() && !profile.hasLabels() && !profile.hasRouter() && !profile.hasDecisions()) {
       System.out.println(
         GRAY +
           "  Profile '" +
           profileName.name().toLowerCase() +
-          "' has no entities, labels or router — nothing to run." +
+          "' has no entities, labels, decisions or router — nothing to run." +
           RESET
       );
       return;
@@ -194,6 +178,7 @@ public class GLiNER4jDemo {
 
     GLiNER4jNER gliner = null;
     GLiNER4jClassifier classifier = null;
+    GLiNER4jDecider decider = null;
     SchemaExtractor schemaExtractor = null;
     RelationExtractor relationExtractor = null;
     GLiNER4j unified = null;
@@ -264,6 +249,24 @@ public class GLiNER4jDemo {
           long t0 = System.nanoTime();
           var results = classifier.classify(text);
           printer.classificationResult(i + 1, text, results, elapsedMs(t0));
+        }
+      }
+
+      // Optional typed-decisions demo (decision-tuned GLiNER2 bundles such as GLiNER2.5-Decide)
+      if (profile.hasDecisions()) {
+        decider = GLiNER4jDecider.load(modelDir, variant, runtimeConfig);
+        printer.decisionBanner();
+        System.out.println(DIM + "  Model: " + modelDir + RESET);
+        System.out.println();
+        var questions = profile.decisions().toQuestions();
+        printer.entity(questions, DecisionQuestion::id);
+
+        var samples = profile.decisions().samples() == null ? List.<String>of() : profile.decisions().samples();
+        for (int i = 0; i < samples.size(); i++) {
+          var text = samples.get(i);
+          long t0 = System.nanoTime();
+          var answers = decider.decide(text, questions);
+          printer.decisionResult(i + 1, text, questions, answers, elapsedMs(t0));
         }
       }
 
@@ -352,6 +355,7 @@ public class GLiNER4jDemo {
         profile,
         gliner,
         classifier,
+        decider,
         schemaExtractor,
         relationExtractor,
         unified,
@@ -365,6 +369,7 @@ public class GLiNER4jDemo {
       if (router != null) router.close();
       if (gliner != null) gliner.close();
       if (classifier != null) classifier.close();
+      if (decider != null) decider.close();
       if (schemaExtractor != null) schemaExtractor.close();
       if (relationExtractor != null) relationExtractor.close();
       if (unified != null) unified.close();
@@ -378,6 +383,7 @@ public class GLiNER4jDemo {
     Profile profile,
     GLiNER4jNER gliner,
     GLiNER4jClassifier classifier,
+    GLiNER4jDecider decider,
     SchemaExtractor schemaExtractor,
     RelationExtractor relationExtractor,
     GLiNER4j unified,
@@ -400,7 +406,14 @@ public class GLiNER4jDemo {
       hasStream
     );
     var counter = new AtomicInteger(1);
-    var mode = hasEntities ? NER : hasRouter ? Mode.ROUTE : Mode.CLASSIFY;
+    var mode = hasEntities
+      ? NER
+      : hasRouter
+        ? Mode.ROUTE
+        : classifier == null && decider != null
+          ? Mode.DECIDE
+          : Mode.CLASSIFY;
+    var decisionQuestions = decider != null ? profile.decisions().toQuestions() : List.<DecisionQuestion>of();
     RouterDef routerDef = hasRouter ? profile.router() : null;
     DecoderKvSession session = null;
     var turn = new AtomicInteger(1);
@@ -431,6 +444,14 @@ public class GLiNER4jDemo {
           } else {
             mode = Mode.CLASSIFY;
             System.out.println(DIM + "  Switched to classification mode." + RESET);
+          }
+          continue;
+        } else if (line.equalsIgnoreCase("/decide")) {
+          if (decider == null) {
+            System.out.println(GRAY + "  This profile has no decision questions — '/decide' unavailable." + RESET);
+          } else {
+            mode = Mode.DECIDE;
+            System.out.println(DIM + "  Switched to decision mode." + RESET);
           }
           continue;
         } else if (line.equalsIgnoreCase("/schema")) {
@@ -530,6 +551,13 @@ public class GLiNER4jDemo {
             counter.getAndIncrement(),
             line,
             classifier.classify(line),
+            elapsedMs(t0)
+          );
+          case DECIDE -> printer.decisionResult(
+            counter.getAndIncrement(),
+            line,
+            decisionQuestions,
+            decider.decide(line, decisionQuestions),
             elapsedMs(t0)
           );
           case SCHEMA -> printer.schemaResult(

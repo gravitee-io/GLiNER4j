@@ -91,6 +91,9 @@ def gliner2(
     quant: list[str] = typer.Option(
         [], "--quant", help="also write gguf/model-<quant>.gguf with block-quantised encoder matrices (q8_0, q5_0, q4_0)"
     ),
+    word_splitter: str = typer.Option(
+        None, help="'whitespace' = classify with the gliner2 2.x text conventions (lower-cased words, trailing period), e.g. GLiNER2.5-Decide"
+    ),
 ):
     """GLiNER2 → one model.gguf (DeBERTa encoder + span/count/classifier heads) bundle."""
     from gliner2 import GLiNER2
@@ -172,6 +175,8 @@ def gliner2(
             "max_len": int(encoder.config.max_position_embeddings),
         },
     }
+    if word_splitter:
+        config["architecture_config"]["word_splitter"] = word_splitter
     (output_dir / "gliner4j_config.json").write_text(json.dumps(config, indent=2) + "\n")
     tokenizer.save_pretrained(str(output_dir))
 

@@ -14,7 +14,7 @@ automatically from the model bundle, so the same Java façades drive every model
 
 | Family | `architecture` | Tasks | Topology | Backbones | Example models |
 |---|---|---|---|---|---|
-| **GLiNER2** (fastino) | `gliner2` *(default)* | NER · classification · relation · structure | uni-encoder + count-aware scoring | DeBERTa-v3 | `fastino/gliner2-base-v1`, PII, GLiGuard |
+| **GLiNER2** (fastino) | `gliner2` *(default)* | NER · classification · relation · structure · typed decisions | uni-encoder + count-aware scoring | DeBERTa-v3 | `fastino/gliner2-base-v1`, PII, GLiGuard, `fastino/GLiNER2.5-Decide` (llama.cpp only) |
 | **GLiNER2.5** (fastino) | `gliner2dot5` | NER · classification · relation | uni-encoder + span-free boundary head (start/end/inside marginals, shared candidate pool, pooled reranker) | DeBERTa-v3, mDeBERTa-v3 | `fastino/gliner2.5-base-v1`, `gliner2.5-small-v1`, `gliner2.5-multi-v1` |
 | **GLiClass** | `gliclass` | zero-shot classification | uni-encoder + score head (`simple`/`mlp`) | ModernBERT, DeBERTa / mDeBERTa, ettin | `knowledgator/gliclass-modern-base-v3.0`, `gliclass-x-base` (multilingual), `gliclass-edge-v3.0` |
 | **GLiNER streaming-span** (`gliner4j-llamacpp`; Java 25, required by full-reactor builds) | `gliner-streaming-span` | NER · streaming NER with rolling revision | causal decoder on **llama.cpp** (KV cache per session) + DeBERTa labels encoder and `markerV2` span head as **ggml graphs** | Qwen3-0.6B | `knowledgator/gliner-stream-pii-v1.0` |
@@ -28,10 +28,12 @@ facade change per family.
 
 ## Features
 
-- **Multi-family**, auto-dispatched: GLiNER2, GLiNER2.5, GLiClass, original-GLiNER uni- and bi-encoder NER,
+- **Multi-family**, auto-dispatched: GLiNER2 (incl. GLiNER2.5-Decide), GLiNER2.5, GLiClass, original-GLiNER uni- and bi-encoder NER,
   and the GLiClass decoder-kv router (Qwen3 on llama.cpp via [llamaj.cpp](https://github.com/gravitee-io/llamaj.cpp)).
 - **Tasks**: named-entity recognition, zero-shot text classification, relation extraction,
-  structured/JSON extraction (relation: GLiNER2 & GLiNER2.5; structure: GLiNER2 today).
+  structured/JSON extraction (relation: GLiNER2 & GLiNER2.5; structure: GLiNER2 today), and typed
+  decisions — choice / score / yes-no with per-option probabilities — with
+  [GLiNER2.5-Decide](https://huggingface.co/fastino/GLiNER2.5-Decide) (`GLiNER4jDecider`, llama.cpp engine).
 - **Entity descriptions** and **per-call overrides** for dynamic vocabularies.
 - **Batch processing** with a single batched encoder call and parallel per-text scoring.
 - **Precision variants**: FP32, FP16, INT8 (signed `QInt8` dynamic quantization).
@@ -107,6 +109,63 @@ try (var clf = GLiNER4jClassifier.load(Path.of("models/gliclass-modern-base-onnx
     List<ClassificationResult> r = clf.classify("Apple unveiled its new M4 chip.", 0.5f);
 }
 ```
+
+### Typed decisions — `GLiNER4jDecider`
+
+System One-shaped questions about a text — a `Choice` between options, an ordinal `Score` over
+levels, a yes/no `Noul` — each answered with one probability per option (softmax). Built for
+`fastino/GLiNER2.5-Decide` (llama.cpp engine, `task decide:llamacpp`): each question is sent as its
+own task with the question id as the task name and the instructions as its prompt, as upstream
+`classify_text` does. Works on any GLiNER2 / GLiNER2.5 bundle.
+
+```java
+try (var decider = GLiNER4jDecider.load(Path.of("models/decide-llamacpp"))) {
+    Map<String, Decision> answers = decider.decide(
+        "This is the third time I have explained the same missing refund. Stop the bot and get me a person.",
+        List.of(
+            new DecisionQuestion.Choice("intent", "", List.of(
+                new ClassificationLabel("refund_request"), new ClassificationLabel("order_status"))),
+            new DecisionQuestion.Score("urgency", "How urgent is this?", List.of("low", "normal", "high")),
+            new DecisionQuestion.Noul("handoff", "Does the customer ask for a human agent?")));
+    answers.get("intent").choice();            // "refund_request"
+    answers.get("urgency").score();            // expected level, 0..2
+    answers.get("handoff").probabilityTrue();  // ≈ 1.0
+}
+```
+
+`task demo:decide` runs [`DecideExample`](gliner4j-demo/src/main/java/io/gravitee/lab/gliner4j/demo/DecideExample.java)
+(four questions over a few support tickets, downloading and exporting the bundle on first run). It
+prints every option's probability, the most likely in bold, and draws each `Score` as a green → red
+gauge filled up to the expected level:
+
+```
+  2. Someone changed the password on my account last night and moved money out of it.  (56.4 ms)
+
+     intent         account_security
+       billing_issue          █···················   7.1%
+       account_security       █████████████████···  83.4%
+       order_status           █···················   3.8%
+       cancel_subscription    █···················   5.8%
+
+     urgency        ▕██████████████▌░░░░░░░░░▏ high 44% · expected level 1.18 / 2
+       low                    █████···············  25.9%
+       normal                 ██████··············  30.4%
+       high                   █████████···········  43.7%
+
+     risk           ▕█████████████████▌░░░░░░▏ critical 40% · expected level 2.84 / 4
+       none                   ██··················   8.2%
+       low                    ██··················   8.8%
+       medium                 ███·················  13.7%
+       high                   ██████··············  29.2%
+       critical               ████████············  40.2%
+
+     handoff        no (p(yes) 0.29)
+       yes                    ██████··············  28.8%
+       no                     ██████████████······  71.2%
+```
+
+The model scores each level as its own label, without a notion of order, so `Score` answers are
+often spread out; read the expected level together with the probabilities.
 
 ### Streaming NER — `StreamingSpanNer` (gliner4j-llamacpp)
 
@@ -201,7 +260,7 @@ try (var gliner = GLiNER4jNER.load(modelDir, entities, "onnx_quantized", config)
 
 > **Native libraries.** Since llamaj.cpp 2.7 the llama.cpp/ggml dylibs are not inside the jar: the
 > loader uses `~/.llama.cpp` (or the directory in `LLAMA_CPP_LIB_PATH`). `task llamacpp:natives`
-> downloads the matching llama.cpp release (v0.4.0 for llamaj.cpp 2.8.0) with llamaj.cpp's
+> downloads the matching llama.cpp release (v0.6.0 for llamaj.cpp 2.9.1) with llamaj.cpp's
 > `scripts/download-native-libraries.sh` and installs it there. A stale `~/.llama.cpp` from an older
 > llamaj.cpp fails at context creation with `Unsupported ctx type` — rerun the task after a bump.
 
@@ -219,6 +278,7 @@ offload to Metal/CUDA/Vulkan, `CPU` stays on the CPU. Every current family runs 
 | GLiNER uni-encoder (markerV0, token_level) | `task gliner-pii:llamacpp`, `task gliner-multitask:llamacpp` | gliner4j's DeBERTa-v3 ggml graph | ggml graph (biLSTM unrolled) |
 | GLiNER bi-encoder | `task gliner-bi:llamacpp` | DeBERTa ggml graph + label encoder on llama.cpp | ggml graph |
 | GLiNER2 (base, PII, gliguard) | `task base:llamacpp` / `pii:llamacpp` / `gliguard:llamacpp` | DeBERTa ggml graph | ggml graphs (GRU count head, count transformer) |
+| GLiNER2.5-Decide (llama.cpp only) | `task decide:llamacpp` | DeBERTa-v3-large ggml graph | ggml graphs (classifier) |
 | GLiNER2.5 | `task gliner2dot5-small:llamacpp` | DeBERTa ggml graph | ggml graphs + host candidate pool |
 | GLiClass decoder-kv, streaming span | `task scx-router` / `task stream-pii` | Qwen3 on llama.cpp | ggml graphs |
 
@@ -230,7 +290,7 @@ on the same texts (scores within 0.03) in `gliner4j-llamacpp`'s integration test
 ```bash
 task llamacpp:all               # every models/*-llamacpp bundle (needs the *-hf checkouts + a llama.cpp checkout: LLAMA_CPP_DIR)
 task benchmark:engines          # ONNX Runtime vs llama.cpp, CPU and Metal/CUDA
-task demo:base:llamacpp         # any demo profile has a llama.cpp twin (base, pii, gliguard, gliner2dot5-small, gliclass-edge, gliner-pii, gliner-bi, gliner-multitask)
+task demo:base:llamacpp         # any demo profile has a llama.cpp twin (base, pii, gliguard, decide, gliner2dot5-small, gliclass-edge, gliner-pii, gliner-bi, gliner-multitask)
 ```
 
 ## Models & tasks
@@ -246,6 +306,8 @@ Tasks are grouped by family. Every export builds **FP32 + FP16 + INT8** variants
 | `task pii` | Export `fastino/gliner2-privacy-filter-PII-multi` (42 PII entity types) |
 | `task gliguard` | Export `fastino/gliguard-LLMGuardrails-300M` (LLM safety classification) |
 | `task demo:base` / `:pii` / `:gliguard` | Run the corresponding demo |
+| `task decide:llamacpp` | Export `fastino/GLiNER2.5-Decide` (typed decisions, deberta-v3-large) for the llama.cpp engine only — no ONNX bundle |
+| `task demo:decide` | Run `DecideExample` (`GLiNER4jDecider`, every option probability + risk gauge) on llama.cpp; the profile demo is `task demo:llamacpp PROFILE=decide` |
 
 ### GLiClass — zero-shot classification
 
@@ -492,7 +554,7 @@ stated on their HuggingFace model cards.
 - `DEBERTA-V3-LICENSE.txt` — MIT, Microsoft Corporation
   ([microsoft/DeBERTa](https://github.com/microsoft/DeBERTa)).
 - `LLAMA_CPP-LICENSE.txt` — MIT, the ggml authors
-  ([ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) `v0.4.0`, build `b10818`).
+  ([ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) `v0.6.0`, build `b11429`).
 
 ## Adding a model family
 

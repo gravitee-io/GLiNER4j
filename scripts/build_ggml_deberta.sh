@@ -20,7 +20,7 @@
 # gliner4j-llamacpp runtime picks it up (or point -Dgliner4j.ggml.plugin=<path> at it).
 #
 # Requirements: cmake >= 3.24, the CUDA toolkit (nvcc), and a llama.cpp checkout at the tag
-# llamaj.cpp pins (v0.4.0 for llamaj.cpp 2.8.0) already built with
+# llamaj.cpp pins (v0.6.0 for llamaj.cpp 2.9.1) already built with
 #   cmake -B build -DBUILD_SHARED_LIBS=ON -DGGML_BACKEND_DL=ON -DGGML_CUDA=ON && cmake --build build
 # The plugin bakes ggml's backend API version: rebuild it whenever the llama.cpp pin changes.
 set -euo pipefail

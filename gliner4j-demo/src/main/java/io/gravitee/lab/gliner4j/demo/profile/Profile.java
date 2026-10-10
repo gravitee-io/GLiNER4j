@@ -38,6 +38,7 @@ public final class Profile {
   private List<String> relationSamples;
   private RouterDef router;
   private List<List<String>> stream;
+  private DecisionsDef decisions;
 
   private Profile() {}
 
@@ -54,7 +55,8 @@ public final class Profile {
     @JsonProperty("relations") List<NamedDescription> relations,
     @JsonProperty("relationSamples") List<String> relationSamples,
     @JsonProperty("router") RouterDef router,
-    @JsonProperty("stream") List<List<String>> stream
+    @JsonProperty("stream") List<List<String>> stream,
+    @JsonProperty("decisions") DecisionsDef decisions
   ) {
     this.displayName = displayName;
     this.modelDir = modelDir;
@@ -68,6 +70,7 @@ public final class Profile {
     this.relationSamples = relationSamples;
     this.router = router;
     this.stream = stream;
+    this.decisions = decisions;
   }
 
   private Profile(Profile profile) {
@@ -83,7 +86,8 @@ public final class Profile {
       profile.relations,
       profile.relationSamples,
       profile.router,
-      profile.stream
+      profile.stream,
+      profile.decisions
     );
   }
 
@@ -130,6 +134,15 @@ public final class Profile {
   /** Chunk sequences for the streaming-NER demo (gliner-streaming-span bundles). */
   public boolean hasStream() {
     return stream != null && !stream.isEmpty();
+  }
+
+  /** Typed System One questions (decision-tuned GLiNER2 bundles). */
+  public boolean hasDecisions() {
+    return decisions != null && decisions.questions() != null && !decisions.questions().isEmpty();
+  }
+
+  public DecisionsDef decisions() {
+    return decisions;
   }
 
   public List<List<String>> stream() {
@@ -193,7 +206,8 @@ public final class Profile {
       Objects.equals(this.relations, that.relations) &&
       Objects.equals(this.relationSamples, that.relationSamples) &&
       Objects.equals(this.router, that.router) &&
-      Objects.equals(this.stream, that.stream)
+      Objects.equals(this.stream, that.stream) &&
+      Objects.equals(this.decisions, that.decisions)
     );
   }
 
@@ -211,7 +225,8 @@ public final class Profile {
       relations,
       relationSamples,
       router,
-      stream
+      stream,
+      decisions
     );
   }
 

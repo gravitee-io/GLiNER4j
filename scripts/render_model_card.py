@@ -328,6 +328,14 @@ CLS_USAGE = """var labels = List.of(new ClassificationLabel("technology"), new C
 try (var clf = GLiNER4jClassifier.load(Path.of("models/$bundle"), labels)) {
   System.out.println(clf.classify("The new GPU doubles ray-tracing throughput."));
 }"""
+DECIDE_USAGE = """var questions = List.of(
+  new DecisionQuestion.Choice("intent", "", List.of(new ClassificationLabel("refund_request"), new ClassificationLabel("order_status"))),
+  new DecisionQuestion.Noul("handoff", "Does the customer ask for a human agent?"));
+try (var decider = GLiNER4jDecider.load(Path.of("models/$bundle"))) {
+  decider.decide("Stop the bot and get me a person, I want my refund.", questions)
+    .forEach((id, decision) -> System.out.println(id + " → " + decision.choice() + " " + decision.probabilities()));
+}"""
+
 DEBERTA_ARCH = """The DeBERTa-v3 backbone has no llama.cpp architecture, so `gliner4j-llamacpp` runs it as its own
 ggml compute graph (word embeddings + LayerNorm, disentangled attention with log-bucketed relative
 positions and `share_att_key`, GELU feed-forward), followed by the family's task heads as further ggml
@@ -387,6 +395,11 @@ GGML_VARIANTS = {
         "GLiNER2 span model tuned for prompt-injection / jailbreak / PII guardrails.",
         "| Task | Facade |\n|---|---|\n| Guardrail entity spans | `GLiNER4jNER` |\n| Guardrail classification | `GLiNER4jClassifier` |",
         DEBERTA_ARCH, NER_USAGE, "gliguard-llamacpp", extra_tags="  - guardrails\n  - prompt-injection\n  - gliner2"),
+    "ggml-decide": _ggml(
+        "GLiNER2.5-Decide (decisions, GLiNER2 / deberta-v3-large)", "fastino/GLiNER2.5-Decide", "gliner2",
+        "GLiNER2 span model tuned for operational decisions (intent, routing, sentiment, severity, yes/no, ordinal scores), with the gliner2 2.x text conventions (`word_splitter: whitespace`).",
+        "| Task | Facade |\n|---|---|\n| Typed decisions (choice / score / yes-no) | `GLiNER4jDecider` |\n| Text classification | `GLiNER4jClassifier` |",
+        DEBERTA_ARCH, DECIDE_USAGE, "decide-llamacpp", extra_tags="  - text-classification\n  - decisions\n  - gliner2", pipeline_tag="text-classification"),
     "ggml-gliner2dot5-small": _ggml(
         "GLiNER2.5 small (deberta-v3-xsmall)", "fastino/gliner2.5-small-v1", "gliner2dot5",
         "GLiNER2.5 boundary architecture — boundary encoder, start/end/inside marginals, shared candidate pool (host-side selection), FiLM pool scorer, relation scorer and classifier as ggml graphs.",
