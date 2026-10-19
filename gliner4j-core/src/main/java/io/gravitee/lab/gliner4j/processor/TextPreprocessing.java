@@ -51,6 +51,21 @@ public record TextPreprocessing(
     );
   }
 
+  /**
+   * A GLiNER2 bundle's classification text conventions: {@link #DEFAULT}, unless the bundle opts
+   * into the gliner2 2.x processor with {@code "word_splitter": "whitespace"} (checkpoints trained
+   * with it, such as GLiNER2.5-Decide).
+   *
+   * <p>Classification only: the GLiNER2 NER and relation strategies keep {@link #DEFAULT}, since
+   * the only bundle that sets the key is a decision classifier. Wire it there before exporting an
+   * extraction checkpoint with it.
+   */
+  public static TextPreprocessing gliner2(GLiNER4jConfig config) {
+    return "whitespace".equals(config.archString("word_splitter", null))
+      ? whitespaceSplitter(config)
+      : DEFAULT;
+  }
+
   public TextEncoder encode(String text) {
     return new TextEncoder(text, pattern, lowercaseWords, appendPeriod);
   }

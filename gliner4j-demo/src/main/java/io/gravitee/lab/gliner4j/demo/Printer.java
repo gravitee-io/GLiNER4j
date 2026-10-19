@@ -16,6 +16,8 @@
 package io.gravitee.lab.gliner4j.demo;
 
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
+import io.gravitee.lab.gliner4j.schema.Decision;
+import io.gravitee.lab.gliner4j.schema.DecisionQuestion;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
 import io.gravitee.lab.gliner4j.schema.ExtractionResult;
 import io.gravitee.lab.gliner4j.schema.RelationInstance;
@@ -43,6 +45,11 @@ public class Printer {
     this.reset = reset;
     this.bold = bold;
     this.gray = gray;
+  }
+
+  /** The terminal printer the demos share: {@link Palette#DEFAULT} and plain ANSI styles. */
+  public static Printer ansi() {
+    return new Printer(Palette.DEFAULT, "\033[2m", "\033[0m", "\033[1m", "\033[90m");
   }
 
   public <T> void entity(List<T> entities, Function<T, String> toString) {
@@ -222,6 +229,109 @@ public class Printer {
     System.out.println(bold + "  │          Text Classification — GLiNER4j                 │" + reset);
     System.out.println(bold + "  └─────────────────────────────────────────────────────────┘" + reset);
     System.out.println();
+  }
+
+  void decisionBanner() {
+    System.out.println();
+    System.out.println(bold + "  ┌─────────────────────────────────────────────────────────┐" + reset);
+    System.out.println(bold + "  │          GLiNER4jDecider — Typed Decisions Demo         │" + reset);
+    System.out.println(bold + "  │        Choice / Score / Yes-No — System One shape       │" + reset);
+    System.out.println(bold + "  └─────────────────────────────────────────────────────────┘" + reset);
+    System.out.println();
+  }
+
+  /**
+   * Per question: a headline (the most likely option — for a score after a green → red gauge of the
+   * expected level; yes / no) followed by the probability of every option, the most likely in bold.
+   */
+  public void decisionResult(
+    int index,
+    String text,
+    List<DecisionQuestion> questions,
+    Map<String, Decision> answers,
+    double elapsedMs
+  ) {
+    System.out.println();
+    System.out.println("  " + dim + index + "." + reset + " " + text + elapsed(elapsedMs));
+    for (var question : questions) {
+      var answer = answers.get(question.id());
+      if (answer == null) continue;
+      var c = palette.colorsFor(question.id());
+      var headline = switch (question) {
+        case DecisionQuestion.Choice q -> bold + answer.choice() + reset;
+        case DecisionQuestion.Score q -> String.format(
+          "%s %s%s%s %s%.0f%% · expected level %.2f / %d%s",
+          riskGauge(answer.score(), q.levels()),
+          bold,
+          answer.choice(),
+          reset,
+          dim,
+          answer.confidence() * 100,
+          answer.score(),
+          q.levels().size() - 1,
+          reset
+        );
+        case DecisionQuestion.Noul q -> String.format(
+          "%s%s%s %s(p(yes) %.2f)%s",
+          bold,
+          answer.probabilityTrue() >= 0.5f ? DecisionQuestion.Noul.YES : DecisionQuestion.Noul.NO,
+          reset,
+          dim,
+          answer.probabilityTrue(),
+          reset
+        );
+      };
+      System.out.println();
+      System.out.printf("     %s%-14s%s %s%n", c[1], question.id(), reset, headline);
+      var top = answer.choice();
+      answer
+        .probabilities()
+        .forEach((option, p) ->
+          System.out.printf(
+            "       %s%-22s%s %s %s%5.1f%%%s%n",
+            option.equals(top) ? bold : dim,
+            option,
+            reset,
+            probabilityBar(p, option.equals(top), c[1]),
+            dim,
+            p * 100,
+            reset
+          )
+        );
+    }
+  }
+
+  /** A 20-cell bar; the winning option takes the question's color, the others stay gray. */
+  private String probabilityBar(float p, boolean top, String color) {
+    int filled = Math.round(p * 20);
+    var sb = new StringBuilder();
+    sb.append(top ? color : gray).append("█".repeat(filled)).append(reset);
+    sb.append(gray).append("·".repeat(20 - filled)).append(reset);
+    return sb.toString();
+  }
+
+  // Green → yellow → red, one 256-color step per gauge segment.
+  private static final int[] RISK_GRADIENT = { 46, 82, 118, 154, 190, 226, 220, 214, 208, 202, 196, 160 };
+
+  /**
+   * The expected level on a green → red gauge from the lowest to the highest level, e.g.
+   * {@code ▕████████▌░░░░░░▏}; the fill stops at {@code score / (levels - 1)}.
+   */
+  private String riskGauge(float score, List<String> levels) {
+    int width = 24;
+    float fraction = levels.size() < 2 ? 0f : Math.clamp(score / (levels.size() - 1), 0f, 1f);
+    var sb = new StringBuilder(gray + "▕" + reset);
+    for (int i = 0; i < width; i++) {
+      int color = RISK_GRADIENT[(i * RISK_GRADIENT.length) / width];
+      if ((i + 1) / (float) width <= fraction + 1e-6f) {
+        sb.append("\033[38;5;").append(color).append("m█").append(reset);
+      } else if (i / (float) width < fraction) {
+        sb.append("\033[38;5;").append(color).append("m▌").append(reset);
+      } else {
+        sb.append(gray).append("░").append(reset);
+      }
+    }
+    return sb.append(gray).append("▏").append(reset).toString();
   }
 
   void relationBanner() {

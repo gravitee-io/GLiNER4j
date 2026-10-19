@@ -18,6 +18,7 @@ package io.gravitee.lab.gliner4j.strategy.gliner2;
 import io.gravitee.lab.gliner4j.AbstractNLP;
 import io.gravitee.lab.gliner4j.GLiNER4jConfig;
 import io.gravitee.lab.gliner4j.arch.LoadContext;
+import io.gravitee.lab.gliner4j.processor.AssemblerCache;
 import io.gravitee.lab.gliner4j.processor.BatchPreprocessor;
 import io.gravitee.lab.gliner4j.processor.InputAssembler;
 import io.gravitee.lab.gliner4j.processor.PreprocessedInput;
@@ -55,6 +56,10 @@ public final class Gliner2ClassificationStrategy
   implements ClassificationStrategy {
 
   private final TextPreprocessing preprocessing;
+  private final AssemblerCache<TaskKey, InputAssembler> taskAssemblers;
+
+  /** Cache key of a task-conditioned prompt: the {@code [P]} text and its labels. */
+  private record TaskKey(String task, List<ClassificationLabel> labels) {}
 
   private Gliner2ClassificationStrategy(
     GLiNER4jConfig config,
@@ -73,6 +78,14 @@ public final class Gliner2ClassificationStrategy
       new GLiNER4jTelemetry("classify")
     );
     this.preprocessing = preprocessing;
+    this.taskAssemblers = new AssemblerCache<>(
+      runtimeConfig.effectiveOverrideCacheSize(),
+      key ->
+        new InputAssembler(
+          tokenizer,
+          labelSchemaEncoder(key.task(), key.labels())
+        )
+    );
   }
 
   /**
@@ -86,7 +99,7 @@ public final class Gliner2ClassificationStrategy
     LoadContext ctx,
     List<ClassificationLabel> labels
   ) {
-    return create(ctx, labels, TextPreprocessing.DEFAULT);
+    return create(ctx, labels, TextPreprocessing.gliner2(ctx.config()));
   }
 
   /**
@@ -116,7 +129,12 @@ public final class Gliner2ClassificationStrategy
     List<ClassificationLabel> labels,
     Gliner2ClassifierRuntime runtime
   ) {
-    return create(ctx, labels, runtime, TextPreprocessing.DEFAULT);
+    return create(
+      ctx,
+      labels,
+      runtime,
+      TextPreprocessing.gliner2(ctx.config())
+    );
   }
 
   /** Same, over an already-built classifier runtime and with a family's text conventions. */
@@ -210,6 +228,49 @@ public final class Gliner2ClassificationStrategy
     long totalLabels = results.stream().mapToLong(List::size).sum();
     telemetry.record(durationMs, batchSize, totalLabels);
     return results;
+  }
+
+  /**
+   * Raw per-label logits for one task-conditioned prompt, the way upstream {@code classify_text}
+   * builds it: {@code task} is the {@code [P]} prompt text (the task name, or
+   * {@code "name: instructions"}) where the plain {@link #classify} path sends {@code "classify"}.
+   * Callers pick the activation (softmax for single-label, sigmoid for multi-label).
+   * The whole text goes in one pass: unlike gliner2 2.x ({@code classification/long_text.py}),
+   * there is no long-text chunking, so keep states within the encoder's context.
+   *
+   * @param text the input text
+   * @param task the {@code [P]} prompt text
+   * @param labels the labels, in output order
+   * @return one logit per label, or an empty array for blank text
+   */
+  public float[] scoreTask(
+    String text,
+    String task,
+    List<ClassificationLabel> labels
+  ) {
+    long startNanos = System.nanoTime();
+    if (text == null || text.isBlank()) {
+      telemetry.record(0.0, 1, 0);
+      return new float[0];
+    }
+    var textEncoder = preprocessing.encode(text);
+    if (textEncoder.getTextLen() == 0) {
+      telemetry.record(0.0, 1, 0);
+      return new float[0];
+    }
+    var input = taskAssemblers
+      .get(new TaskKey(task, labels))
+      .assemble(textEncoder);
+    var logits = runtime.runClassifierFullBatch(
+      new long[][] { input.inputIds() },
+      new long[][] { input.attentionMask() },
+      input.inputIds().length,
+      labelPositions(input),
+      1
+    )[0];
+    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
+    telemetry.record(durationMs, 1, logits.length);
+    return logits;
   }
 
   // ---- AbstractNLP hooks ---------------------------------------------------
@@ -312,8 +373,15 @@ public final class Gliner2ClassificationStrategy
   private static SchemaEncoder labelSchemaEncoder(
     List<ClassificationLabel> labels
   ) {
+    return labelSchemaEncoder("classify", labels);
+  }
+
+  static SchemaEncoder labelSchemaEncoder(
+    String task,
+    List<ClassificationLabel> labels
+  ) {
     return new SchemaEncoder(
-      "classify",
+      task,
       "[L]",
       labels.stream().map(ClassificationLabel::name).toList(),
       labels.stream().map(ClassificationLabel::description).toList()

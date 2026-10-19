@@ -38,6 +38,7 @@ public enum ProfileType {
   BASE_LLAMACPP("base-llamacpp.json"),
   PII_LLAMACPP("pii-llamacpp.json"),
   GLIGUARD_LLAMACPP("gliguard-llamacpp.json"),
+  DECIDE_LLAMACPP("decide-llamacpp.json"),
   GLINER2DOT5_SMALL_LLAMACPP("gliner2dot5-small-llamacpp.json"),
   GLICLASS_EDGE_LLAMACPP("gliclass-edge-llamacpp.json"),
   GLINER_PII_LLAMACPP("gliner-pii-llamacpp.json"),

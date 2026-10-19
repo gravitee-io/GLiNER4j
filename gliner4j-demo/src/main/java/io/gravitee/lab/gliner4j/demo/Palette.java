@@ -19,6 +19,24 @@ import static java.lang.Math.floorMod;
 
 public class Palette {
 
+  /** 12-color palette cycled by hash(label) — scales to any number of entity types. */
+  public static final Palette DEFAULT = new Palette(
+    new String[][] {
+      { "\033[48;5;63m\033[97m", "\033[38;5;63m" }, // purple
+      { "\033[48;5;37m\033[97m", "\033[38;5;37m" }, // teal
+      { "\033[48;5;208m\033[97m", "\033[38;5;208m" }, // orange
+      { "\033[48;5;170m\033[97m", "\033[38;5;170m" }, // pink
+      { "\033[48;5;33m\033[97m", "\033[38;5;33m" }, // blue
+      { "\033[48;5;35m\033[97m", "\033[38;5;35m" }, // green
+      { "\033[48;5;160m\033[97m", "\033[38;5;160m" }, // red
+      { "\033[48;5;142m\033[97m", "\033[38;5;142m" }, // olive
+      { "\033[48;5;129m\033[97m", "\033[38;5;129m" }, // violet
+      { "\033[48;5;24m\033[97m", "\033[38;5;24m" }, // deep blue
+      { "\033[48;5;94m\033[97m", "\033[38;5;94m" }, // brown
+      { "\033[48;5;100m\033[97m", "\033[38;5;100m" }, // dark olive
+    }
+  );
+
   private final String[][] palette;
 
   public Palette(String[][] palette) {

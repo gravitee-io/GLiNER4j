@@ -38,7 +38,7 @@
         <maven.compiler.release>25</maven.compiler.release>
         <!-- JaCoCo 0.8.12 cannot instrument Java 25 class files (major 69). -->
         <jacoco.skip>true</jacoco.skip>
-        <llamaj.cpp.version>2.8.0</llamaj.cpp.version>
+        <llamaj.cpp.version>2.10.0</llamaj.cpp.version>
     </properties>
 
     <dependencies>

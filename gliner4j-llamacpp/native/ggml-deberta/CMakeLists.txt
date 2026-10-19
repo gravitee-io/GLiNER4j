@@ -16,7 +16,7 @@
 
 # ggml backend plugin with the fused DeBERTa attention op (see ggml-deberta.h).
 #
-# Built out of tree against a llama.cpp checkout at the tag llamaj.cpp pins (v0.4.0 for 2.8.0):
+# Built out of tree against a llama.cpp checkout at the tag llamaj.cpp pins (v0.6.0 for 2.9.1):
 #   cmake -S . -B build -DLLAMA_CPP_DIR=~/dev/llama.cpp -DCMAKE_CUDA_ARCHITECTURES=75
 #   cmake --build build
 # The checkout must have been built with -DBUILD_SHARED_LIBS=ON -DGGML_BACKEND_DL=ON (llamaj's

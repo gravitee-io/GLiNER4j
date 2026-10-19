@@ -36,6 +36,11 @@ vars:
   GLIGUARD_ONNX_OUTPUT_DIR: "models/gliguard-onnx"
   GLIGUARD_LLAMACPP_OUTPUT_DIR: "models/gliguard-llamacpp"
 
+  # GLiNER2.5-Decide (fastino/GLiNER2.5-Decide — GLiNER2 span classifier, deberta-v3-large; llama.cpp engine only)
+  DECIDE_HF_MODEL: "fastino/GLiNER2.5-Decide"
+  DECIDE_HF_LOCAL_DIR: "models/decide-hf"
+  DECIDE_LLAMACPP_OUTPUT_DIR: "models/decide-llamacpp"
+
   # GLiNER2.5 models (fastino boundary architecture — span-free NER + classification)
   GLINER2DOT5_HF_MODEL: "fastino/gliner2.5-base-v1" # deberta-v3-base, English
   GLINER2DOT5_ONNX_OUTPUT_DIR: "models/gliner2dot5-base-onnx"
@@ -50,7 +55,7 @@ vars:
   SCX_ROUTER_HF_MODEL: "scx-admin/scx-router-v0.1"
   SCX_ROUTER_HF_LOCAL_DIR: "models/scx-router-hf"
   SCX_ROUTER_OUTPUT_DIR: "models/scx-router-onnx"
-  LLAMA_CPP_DIR: '{{.LLAMA_CPP_DIR | default "../llama.cpp"}}' # checkout at llamaj.cpp's pinned llama.cpp tag (2.8.0 → v0.4.0 = b10818)
+  LLAMA_CPP_DIR: '{{.LLAMA_CPP_DIR | default "../llama.cpp"}}' # checkout at llamaj.cpp's pinned llama.cpp tag (2.9.1 → v0.6.0 = b11429)
 
   # GLiNER streaming-span PII (knowledgator/gliner-stream-pii-v1.0 — Qwen3-0.6B on llama.cpp + ggml span head)
   STREAM_PII_HF_MODEL: "knowledgator/gliner-stream-pii-v1.0"
@@ -324,7 +329,7 @@ tasks:
       - mvn exec:java -pl gliner4j-demo {{.MVN_FLAGS | default ""}} -Dexec.args="base {{.VARIANT}} {{.EP}}" 2>/dev/null
 
   demo:llamacpp:
-    desc: 'Run a demo profile on its llama.cpp / ggml bundle (PROFILE=base|pii|gliguard|gliner2dot5-small|gliclass-edge|gliner-pii|gliner-bi|gliner-multitask; VARIANT=f16|q8_0; EP=auto|cpu)'
+    desc: 'Run a demo profile on its llama.cpp / ggml bundle (PROFILE=base|pii|gliguard|decide|gliner2dot5-small|gliclass-edge|gliner-pii|gliner-bi|gliner-multitask; VARIANT=f16|q8_0; EP=auto|cpu)'
     deps:
       - check:maven
     vars:
@@ -765,6 +770,20 @@ tasks:
       - uv run scripts/render_model_card.py ggml-gliguard {{.GLIGUARD_LLAMACPP_OUTPUT_DIR}}/README.md
       - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.GLIGUARD_LLAMACPP_OUTPUT_DIR}} . --delete "*" --commit-message "Upload gliguard ggml bundle (engine=llamacpp) + model card"
 
+  hf-upload:decide:llamacpp:
+    desc: "Mirror the GLiNER2.5-Decide llama.cpp/ggml bundle (models/decide-llamacpp) to HuggingFace Hub (HF_REPO=<org>/<repo>; deletes remote files not present locally)"
+    requires:
+      vars:
+        - HF_REPO
+    deps:
+      - check:uv
+    preconditions:
+      - sh: test -f {{.DECIDE_LLAMACPP_OUTPUT_DIR}}/gguf/model.gguf
+        msg: "ggml bundle {{.DECIDE_LLAMACPP_OUTPUT_DIR}} not found. Run: task decide:llamacpp"
+    cmds:
+      - uv run scripts/render_model_card.py ggml-decide {{.DECIDE_LLAMACPP_OUTPUT_DIR}}/README.md
+      - uvx --from huggingface-hub hf upload {{.HF_REPO}} {{.DECIDE_LLAMACPP_OUTPUT_DIR}} . --delete "*" --commit-message "Upload GLiNER2.5-Decide ggml bundle (engine=llamacpp) + model card"
+
   hf-upload:gliner2dot5-small:llamacpp:
     desc: "Mirror the gliner2dot5-small llama.cpp/ggml bundle (models/gliner2dot5-small-llamacpp) to HuggingFace Hub (HF_REPO=<org>/<repo>; deletes remote files not present locally)"
     requires:
@@ -867,6 +886,45 @@ tasks:
       - "{{.GLIGUARD_LLAMACPP_OUTPUT_DIR}}/gguf/model.gguf"
       - "{{.GLIGUARD_LLAMACPP_OUTPUT_DIR}}/gliner4j_config.json"
 
+  model:download:decide:
+    desc: Download the GLiNER2.5-Decide model from HuggingFace
+    deps:
+      - check:uv
+    cmds:
+      - uvx --from huggingface-hub hf download {{.DECIDE_HF_MODEL}} --local-dir {{.DECIDE_HF_LOCAL_DIR}}
+    status:
+      - test -f {{.DECIDE_HF_LOCAL_DIR}}/model.safetensors
+      - test -f {{.DECIDE_HF_LOCAL_DIR}}/config.json
+
+  decide:llamacpp:
+    desc: Export fastino/GLiNER2.5-Decide for the ggml engine (DeBERTa-v3-large encoder + GLiNER2 heads in one model.gguf, plus model-q8_0/q4_0.gguf variants; gliner2 2.x text conventions). Downloads the model on first run.
+    deps:
+      - check:uv
+    cmds:
+      - task: model:download:decide
+      - uv run scripts/export_llamacpp_gliner2.py gliner2 --model-path {{.DECIDE_HF_LOCAL_DIR}} --output-dir {{.DECIDE_LLAMACPP_OUTPUT_DIR}} --word-splitter whitespace {{.EXPORT_ARGS | default "--quant q8_0 --quant q4_0"}}
+    sources:
+      - scripts/export_llamacpp_gliner2.py
+      - scripts/export_llamacpp.py
+    generates:
+      - "{{.DECIDE_LLAMACPP_OUTPUT_DIR}}/gguf/model.gguf"
+      - "{{.DECIDE_LLAMACPP_OUTPUT_DIR}}/gliner4j_config.json"
+
+  demo:decide:
+    desc: 'Run the GLiNER2.5-Decide example (DecideExample.java: all option probabilities + risk gauge) on llama.cpp; downloads + exports models/decide-llamacpp on first run'
+    deps:
+      - check:maven
+    cmds:
+      - task: decide:llamacpp
+      - mvn -q exec:java -pl gliner4j-demo -Ddemo.mainClass=io.gravitee.lab.gliner4j.demo.DecideExample 2>/dev/null
+
+  model:clean:decide:
+    desc: Remove downloaded and exported GLiNER2.5-Decide files
+    prompt: This will delete all GLiNER2.5-Decide model files. Continue?
+    cmds:
+      - rm -rf {{.DECIDE_HF_LOCAL_DIR}}
+      - rm -rf {{.DECIDE_LLAMACPP_OUTPUT_DIR}}
+
   model:download:gliner2dot5-small:
     desc: Download the GLiNER2.5 small model from HuggingFace
     deps:
@@ -919,9 +977,9 @@ tasks:
       - "{{.GLINER_MULTITASK_LLAMACPP_OUTPUT_DIR}}/gliner4j_config.json"
 
   llamacpp:natives:
-    desc: 'Install the llama.cpp native libraries llamaj.cpp 2.8.0 expects into ~/.llama.cpp (they are no longer inside the jar; backend plugins such as libggml-deberta go to ~/.llama.cpp/plugins, see llamacpp:deberta-plugin). Override LLAMA_CPP_NATIVE_VERSION, LLAMAJ_CPP_DIR'
+    desc: 'Install the llama.cpp native libraries llamaj.cpp 2.9.1 expects into ~/.llama.cpp (they are no longer inside the jar; backend plugins such as libggml-deberta go to ~/.llama.cpp/plugins, see llamacpp:deberta-plugin). Override LLAMA_CPP_NATIVE_VERSION, LLAMAJ_CPP_DIR'
     vars:
-      LLAMA_CPP_NATIVE_VERSION: '{{.LLAMA_CPP_NATIVE_VERSION | default "v0.4.0"}}'
+      LLAMA_CPP_NATIVE_VERSION: '{{.LLAMA_CPP_NATIVE_VERSION | default "v0.6.0"}}'
       LLAMAJ_CPP_DIR: '{{.LLAMAJ_CPP_DIR | default "../llamaj.cpp"}}'
       OS: '{{if eq OS "darwin"}}macosx{{else}}linux{{end}}'
       PLATFORM: '{{if eq ARCH "arm64"}}aarch64{{else}}x86_64{{end}}'
@@ -950,6 +1008,7 @@ tasks:
       - task: pii:llamacpp
       - task: gliguard:llamacpp
       - task: gliner2dot5-small:llamacpp
+      - task: decide:llamacpp
 
   model:clean:llamacpp:
     desc: Remove every llama.cpp / ggml engine bundle (models/*-llamacpp)

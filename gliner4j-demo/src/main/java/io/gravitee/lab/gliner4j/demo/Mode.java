@@ -24,4 +24,5 @@ public enum Mode {
   ROUTE,
   SESSION,
   STREAM,
+  DECIDE,
 }
