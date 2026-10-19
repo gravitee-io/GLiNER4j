@@ -44,7 +44,7 @@ import org.junit.jupiter.params.provider.MethodSource;
  */
 @EnabledIf("modelDirExists")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class LlamaDeciderIntegrationTest {
+class LlamaGliner2DecideIntegrationTest {
 
   private static final Path MODEL_DIR = Path.of("../models/decide-llamacpp");
 

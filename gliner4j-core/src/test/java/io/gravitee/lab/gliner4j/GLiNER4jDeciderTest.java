@@ -110,4 +110,19 @@ class GLiNER4jDeciderTest {
     assertThat(decision.score()).isCloseTo(1.3f, within(1e-6f));
     assertThat(decision.probabilityTrue()).isZero();
   }
+
+  @Test
+  void softmax_sumsToOneAndSurvivesLargeLogits() {
+    var probabilities = GLiNER4jDecider.softmax(
+      new float[] { 1000f, 1000f, 999f }
+    );
+    float sum = 0f;
+    for (float p : probabilities) {
+      assertThat(p).isFinite();
+      sum += p;
+    }
+    assertThat(sum).isCloseTo(1f, within(1e-6f));
+    assertThat(probabilities[0]).isEqualTo(probabilities[1]);
+    assertThat(probabilities[0]).isGreaterThan(probabilities[2]);
+  }
 }

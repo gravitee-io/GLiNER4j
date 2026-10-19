@@ -235,6 +235,8 @@ public final class Gliner2ClassificationStrategy
    * builds it: {@code task} is the {@code [P]} prompt text (the task name, or
    * {@code "name: instructions"}) where the plain {@link #classify} path sends {@code "classify"}.
    * Callers pick the activation (softmax for single-label, sigmoid for multi-label).
+   * The whole text goes in one pass: unlike gliner2 2.x ({@code classification/long_text.py}),
+   * there is no long-text chunking, so keep states within the encoder's context.
    *
    * @param text the input text
    * @param task the {@code [P]} prompt text
@@ -246,23 +248,29 @@ public final class Gliner2ClassificationStrategy
     String task,
     List<ClassificationLabel> labels
   ) {
+    long startNanos = System.nanoTime();
     if (text == null || text.isBlank()) {
+      telemetry.record(0.0, 1, 0);
       return new float[0];
     }
     var textEncoder = preprocessing.encode(text);
     if (textEncoder.getTextLen() == 0) {
+      telemetry.record(0.0, 1, 0);
       return new float[0];
     }
     var input = taskAssemblers
       .get(new TaskKey(task, labels))
       .assemble(textEncoder);
-    return runtime.runClassifierFullBatch(
+    var logits = runtime.runClassifierFullBatch(
       new long[][] { input.inputIds() },
       new long[][] { input.attentionMask() },
       input.inputIds().length,
       labelPositions(input),
       1
     )[0];
+    double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
+    telemetry.record(durationMs, 1, logits.length);
+    return logits;
   }
 
   // ---- AbstractNLP hooks ---------------------------------------------------
@@ -368,7 +376,7 @@ public final class Gliner2ClassificationStrategy
     return labelSchemaEncoder("classify", labels);
   }
 
-  private static SchemaEncoder labelSchemaEncoder(
+  static SchemaEncoder labelSchemaEncoder(
     String task,
     List<ClassificationLabel> labels
   ) {

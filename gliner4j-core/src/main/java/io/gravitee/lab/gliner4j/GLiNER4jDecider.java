@@ -36,8 +36,10 @@ import lombok.extern.slf4j.Slf4j;
  * <p>Built for decision-tuned GLiNER2 checkpoints such as {@code fastino/GLiNER2.5-Decide}, which
  * are trained with the task name (and an optional prompt) in the {@code [P]} slot: each question
  * is sent as its own task, {@code "id"} or {@code "id: instructions"}, with its options as labels,
- * and the label logits go through a softmax. Any GLiNER2 or GLiNER2.5 bundle works, on either
- * engine.
+ * and the label logits go through a softmax. Any GLiNER2 or GLiNER2.5 classification bundle loads;
+ * GLiNER2.5-Decide itself is exported for llama.cpp only ({@code task decide:llamacpp}), with
+ * {@code "word_splitter": "whitespace"} so its text matches training. A Decide bundle exported
+ * without that key still loads, but with the default text conventions and degraded probabilities.
  *
  * <p>Usage:
  * <pre>{@code
@@ -168,7 +170,7 @@ public final class GLiNER4jDecider implements AutoCloseable {
       : question.id() + ": " + instructions;
   }
 
-  private static float[] softmax(float[] logits) {
+  static float[] softmax(float[] logits) {
     float max = Float.NEGATIVE_INFINITY;
     for (float l : logits) {
       max = Math.max(max, l);
