@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/gravitee-io/GLiNER4j/compare/1.1.1...1.2.0) (2026-10-19)
+
+
+### Features
+
+* gliner2.5-decide - ([#38](https://github.com/gravitee-io/GLiNER4j/issues/38)) ([f0950e3](https://github.com/gravitee-io/GLiNER4j/commit/f0950e3a26bd71da84f117c9ba01d45fbfaa9a55))
+
 ## [1.1.1](https://github.com/gravitee-io/GLiNER4j/compare/1.1.0...1.1.1) (2026-09-15)
 
 
