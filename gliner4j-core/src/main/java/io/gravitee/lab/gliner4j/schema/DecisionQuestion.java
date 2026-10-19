@@ -15,7 +15,9 @@
  */
 package io.gravitee.lab.gliner4j.schema;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * A typed question asked about a state, in the System One shape: a {@link Choice} between
@@ -38,21 +40,37 @@ public sealed interface DecisionQuestion {
   /**
    * Picks one option.
    *
-   * @param options the options; a description, when present, is part of the prompt
+   * @param options the options, at least two with distinct names; a description, when present,
+   *     is part of the prompt
    */
   record Choice(
     String id,
     String instructions,
     List<ClassificationLabel> options
-  ) implements DecisionQuestion {}
+  ) implements DecisionQuestion {
+    public Choice {
+      requireId(id);
+      Objects.requireNonNull(options, "options");
+      requireDistinct(
+        id,
+        options.stream().map(ClassificationLabel::name).toList()
+      );
+    }
+  }
 
   /**
    * Picks a level on an ordinal scale; the answer's {@link Decision#score()} is the expected level.
    *
-   * @param levels the levels, lowest first
+   * @param levels the levels, lowest first, at least two and distinct
    */
   record Score(String id, String instructions, List<String> levels) implements
     DecisionQuestion {
+    public Score {
+      requireId(id);
+      Objects.requireNonNull(levels, "levels");
+      requireDistinct(id, levels);
+    }
+
     @Override
     public List<ClassificationLabel> options() {
       return levels.stream().map(ClassificationLabel::new).toList();
@@ -74,6 +92,10 @@ public sealed interface DecisionQuestion {
     public static final String YES = "yes";
     public static final String NO = "no";
 
+    public Noul {
+      requireId(id);
+    }
+
     public Noul(String id, String instructions) {
       this(id, instructions, "", "");
     }
@@ -84,6 +106,34 @@ public sealed interface DecisionQuestion {
         new ClassificationLabel(YES, whenTrue == null ? "" : whenTrue),
         new ClassificationLabel(NO, whenFalse == null ? "" : whenFalse)
       );
+    }
+  }
+
+  private static void requireId(String id) {
+    if (id == null || id.isBlank()) {
+      throw new IllegalArgumentException("question id must not be blank");
+    }
+  }
+
+  /** Options key the answer's probabilities, so a repeated name would overwrite another's mass. */
+  private static void requireDistinct(String id, List<String> names) {
+    if (names.size() < 2) {
+      throw new IllegalArgumentException(
+        "question '" + id + "' needs at least two options, got " + names.size()
+      );
+    }
+    var seen = new HashSet<String>();
+    for (var name : names) {
+      if (name == null || name.isBlank()) {
+        throw new IllegalArgumentException(
+          "question '" + id + "' has a blank option"
+        );
+      }
+      if (!seen.add(name)) {
+        throw new IllegalArgumentException(
+          "question '" + id + "' repeats option '" + name + "'"
+        );
+      }
     }
   }
 }
