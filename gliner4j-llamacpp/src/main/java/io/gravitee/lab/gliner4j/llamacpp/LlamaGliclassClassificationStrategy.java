@@ -19,6 +19,7 @@ import io.gravitee.lab.gliner4j.GLiNER4jConfig;
 import io.gravitee.lab.gliner4j.arch.LoadContext;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
+import io.gravitee.lab.gliner4j.schema.ClassificationOutput;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.strategy.ClassificationStrategy;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
@@ -39,6 +40,13 @@ import org.slf4j.LoggerFactory;
  * ({@link GgmlGliclassHead}), sigmoid + threshold. Same prompt and decode as the ONNX
  * {@code GliclassClassificationStrategy}; batches fan out on virtual threads so the encoder
  * dispatcher packs them into shared {@code llama_encode} calls.
+ *
+ * <p>{@link ClassificationOutput#inputTokens()}: the length of the text's encoder sequence, the
+ * tokenizer's encoding (special tokens included) of {@code <<LABEL>>l1<<LABEL>>l2...<<SEP>>text}
+ * (text first when {@code prompt_first=false}). Packing several texts into one
+ * {@code llama_encode} call adds no padding, and nothing is cached across calls, so a batch
+ * element equals the single-text count. A null or blank text or an empty label list encodes
+ * nothing and reports {@code 0}.
  */
 public final class LlamaGliclassClassificationStrategy
   implements ClassificationStrategy {
@@ -165,7 +173,7 @@ public final class LlamaGliclassClassificationStrategy
 
   @Override
   public List<ClassificationResult> classify(String text, float threshold) {
-    return classifyWith(text, labels, threshold);
+    return classifyWith(text, labels, threshold).results();
   }
 
   @Override
@@ -174,11 +182,38 @@ public final class LlamaGliclassClassificationStrategy
     List<ClassificationLabel> overrideLabels,
     float threshold
   ) {
-    return classifyWith(text, overrideLabels, threshold);
+    return classifyWith(text, overrideLabels, threshold).results();
   }
 
   @Override
   public List<List<ClassificationResult>> classifyBatch(
+    List<String> texts,
+    float threshold
+  ) {
+    var outputs = classifyBatchWithUsage(texts, threshold);
+    var out = new ArrayList<List<ClassificationResult>>(outputs.size());
+    for (var output : outputs) {
+      out.add(output.results());
+    }
+    return out;
+  }
+
+  @Override
+  public ClassificationOutput classifyWithUsage(String text, float threshold) {
+    return classifyWith(text, labels, threshold);
+  }
+
+  @Override
+  public ClassificationOutput classifyWithUsage(
+    String text,
+    List<ClassificationLabel> overrideLabels,
+    float threshold
+  ) {
+    return classifyWith(text, overrideLabels, threshold);
+  }
+
+  @Override
+  public List<ClassificationOutput> classifyBatchWithUsage(
     List<String> texts,
     float threshold
   ) {
@@ -190,9 +225,7 @@ public final class LlamaGliclassClassificationStrategy
     }
     // Concurrent submissions coalesce in the encoder dispatcher into shared llama_encode calls.
     try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
-      var futures = new ArrayList<
-        CompletableFuture<List<ClassificationResult>>
-      >();
+      var futures = new ArrayList<CompletableFuture<ClassificationOutput>>();
       for (var text : texts) {
         futures.add(
           CompletableFuture.supplyAsync(
@@ -201,7 +234,7 @@ public final class LlamaGliclassClassificationStrategy
           )
         );
       }
-      var out = new ArrayList<List<ClassificationResult>>(texts.size());
+      var out = new ArrayList<ClassificationOutput>(texts.size());
       for (var f : futures) {
         out.add(f.join());
       }
@@ -209,7 +242,7 @@ public final class LlamaGliclassClassificationStrategy
     }
   }
 
-  private List<ClassificationResult> classifyWith(
+  private ClassificationOutput classifyWith(
     String text,
     List<ClassificationLabel> activeLabels,
     float threshold
@@ -217,7 +250,7 @@ public final class LlamaGliclassClassificationStrategy
     long startNanos = System.nanoTime();
     if (text == null || text.isBlank() || activeLabels.isEmpty()) {
       telemetry.record(0.0, 1, 0);
-      return List.of();
+      return ClassificationOutput.empty();
     }
     var sb = new StringBuilder();
     for (var label : activeLabels) {
@@ -237,7 +270,8 @@ public final class LlamaGliclassClassificationStrategy
     }
     if (classPositions.isEmpty()) {
       telemetry.record(0.0, 1, 0);
-      return List.of();
+      // The encoder already read the sequence.
+      return new ClassificationOutput(List.of(), ids.length);
     }
     if (classPositions.size() != activeLabels.size()) {
       log.warn(
@@ -269,7 +303,7 @@ public final class LlamaGliclassClassificationStrategy
       1,
       results.size()
     );
-    return results;
+    return new ClassificationOutput(results, ids.length);
   }
 
   @Override

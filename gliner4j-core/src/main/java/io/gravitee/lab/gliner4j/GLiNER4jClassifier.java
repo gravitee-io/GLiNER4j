@@ -20,6 +20,7 @@ import io.gravitee.lab.gliner4j.arch.ModelArchitectures;
 import io.gravitee.lab.gliner4j.runtime.BaseRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
+import io.gravitee.lab.gliner4j.schema.ClassificationOutput;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.strategy.ClassificationStrategy;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
@@ -230,6 +231,103 @@ public final class GLiNER4jClassifier implements AutoCloseable {
       return List.of();
     }
     return strategy.classifyBatch(texts, threshold);
+  }
+
+  /**
+   * Classifies text using the default threshold, also reporting the tokens the model read.
+   *
+   * @param text the input text to classify
+   * @return the results of {@link #classify(String)} and the input token count
+   * @see ClassificationStrategy#classifyWithUsage(String, float) for the exact token count definition
+   */
+  public ClassificationOutput classifyWithUsage(String text) {
+    return strategy.classifyWithUsage(text, config.getDefaultThreshold());
+  }
+
+  /**
+   * Classifies text with a custom threshold, also reporting the tokens the model read.
+   *
+   * @param text the input text to classify
+   * @param threshold minimum confidence score (0..1) for label inclusion
+   * @return the results of {@link #classify(String, float)} and the input token count
+   * @see ClassificationStrategy#classifyWithUsage(String, float) for the exact token count definition
+   */
+  public ClassificationOutput classifyWithUsage(String text, float threshold) {
+    return strategy.classifyWithUsage(text, threshold);
+  }
+
+  /**
+   * Classifies text using per-call labels and the default threshold, also reporting the tokens
+   * the model read.
+   *
+   * @param text the input text to classify
+   * @param labels the classification labels (overrides load-time labels)
+   * @return the results of {@link #classify(String, List)} and the input token count
+   * @see ClassificationStrategy#classifyWithUsage(String, float) for the exact token count definition
+   */
+  public ClassificationOutput classifyWithUsage(
+    String text,
+    List<ClassificationLabel> labels
+  ) {
+    return strategy.classifyWithUsage(
+      text,
+      labels,
+      config.getDefaultThreshold()
+    );
+  }
+
+  /**
+   * Classifies text using per-call labels and a custom threshold, also reporting the tokens the
+   * model read.
+   *
+   * @param text the input text to classify
+   * @param labels the classification labels (overrides load-time labels)
+   * @param threshold minimum confidence score (0..1) for label inclusion
+   * @return the results of {@link #classify(String, List, float)} and the input token count
+   * @see ClassificationStrategy#classifyWithUsage(String, float) for the exact token count definition
+   */
+  public ClassificationOutput classifyWithUsage(
+    String text,
+    List<ClassificationLabel> labels,
+    float threshold
+  ) {
+    return strategy.classifyWithUsage(text, labels, threshold);
+  }
+
+  /**
+   * Classifies multiple texts in batch using the default threshold, also reporting the tokens
+   * the model read per text.
+   *
+   * @param texts the input texts to classify
+   * @return one output per input text (same order); empty list for a null input
+   * @see ClassificationStrategy#classifyBatchWithUsage(List, float) for the exact token count definition
+   */
+  public List<ClassificationOutput> classifyBatchWithUsage(List<String> texts) {
+    if (texts == null) {
+      return List.of();
+    }
+    return strategy.classifyBatchWithUsage(texts, config.getDefaultThreshold());
+  }
+
+  /**
+   * Classifies multiple texts in batch with a custom threshold, also reporting the tokens the
+   * model read per text. Each output's count is what
+   * {@link #classifyWithUsage(String, float)} reports for that text alone; batch padding is not
+   * counted.
+   *
+   * @param texts the input texts to classify
+   * @param threshold minimum confidence score (0..1) for label inclusion
+   * @return one output per input text (same order); empty list for a null input
+   * @see ClassificationStrategy#classifyBatchWithUsage(List, float) for the exact token count definition
+   */
+  public List<ClassificationOutput> classifyBatchWithUsage(
+    List<String> texts,
+    float threshold
+  ) {
+    if (texts == null) {
+      return List.of();
+    }
+    return strategy.classifyBatchWithUsage(texts, threshold);
   }
 
   @Override

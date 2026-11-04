@@ -20,6 +20,7 @@ import io.gravitee.lab.gliner4j.arch.LoadContext;
 import io.gravitee.lab.gliner4j.postprocess.SpanDecoder;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
+import io.gravitee.lab.gliner4j.schema.NerOutput;
 import io.gravitee.lab.gliner4j.strategy.NerStrategy;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
@@ -36,6 +37,15 @@ import org.slf4j.LoggerFactory;
  * Original-GLiNER uni-encoder NER on the llama.cpp/ggml engine. Same prompt
  * ({@code [CLS] <<ENT>> t1 … <<SEP>> w1 … [SEP]}), words mask and decode as the ONNX
  * {@code GlinerUniNerStrategy}; the forward pass is {@link GgmlGlinerUniModel}.
+ *
+ * <p>{@link NerOutput#inputTokens()}: the length of the single text row fed to the encoder
+ * (uni-encoder {@code [CLS] <<ENT>> t1 ... <<SEP>> word subtokens [SEP]}, bi-encoder
+ * {@code [CLS] word subtokens [SEP]}; never padded, truncated or windowed). For a bi-encoder the
+ * label encoder's unpadded {@code [CLS] label [SEP]} rows are added only for the labels whose
+ * embedding this call actually encoded: label embeddings are cached per label name for the life
+ * of the strategy, so a label already in the cache (encoded by an earlier call, or by a
+ * concurrent call that won the race) adds nothing. In a batch, each label is therefore counted
+ * at most once, on the first text that encodes it.
  */
 public final class LlamaGlinerUniNerStrategy implements NerStrategy {
 
@@ -148,7 +158,7 @@ public final class LlamaGlinerUniNerStrategy implements NerStrategy {
 
   @Override
   public Map<String, List<EntitySpan>> extract(String text, float threshold) {
-    return extractWith(text, entities, threshold);
+    return extractWith(text, entities, threshold).spans();
   }
 
   @Override
@@ -157,7 +167,7 @@ public final class LlamaGlinerUniNerStrategy implements NerStrategy {
     List<EntityDefinition> overrideEntities,
     float threshold
   ) {
-    return extractWith(text, overrideEntities, threshold);
+    return extractWith(text, overrideEntities, threshold).spans();
   }
 
   @Override
@@ -170,12 +180,41 @@ public final class LlamaGlinerUniNerStrategy implements NerStrategy {
     }
     var out = new ArrayList<Map<String, List<EntitySpan>>>(texts.size());
     for (var text : texts) {
+      out.add(extractWith(text, entities, threshold).spans());
+    }
+    return out;
+  }
+
+  @Override
+  public NerOutput extractWithUsage(String text, float threshold) {
+    return extractWith(text, entities, threshold);
+  }
+
+  @Override
+  public NerOutput extractWithUsage(
+    String text,
+    List<EntityDefinition> overrideEntities,
+    float threshold
+  ) {
+    return extractWith(text, overrideEntities, threshold);
+  }
+
+  @Override
+  public List<NerOutput> extractBatchWithUsage(
+    List<String> texts,
+    float threshold
+  ) {
+    if (texts == null) {
+      return List.of();
+    }
+    var out = new ArrayList<NerOutput>(texts.size());
+    for (var text : texts) {
       out.add(extractWith(text, entities, threshold));
     }
     return out;
   }
 
-  private Map<String, List<EntitySpan>> extractWith(
+  private NerOutput extractWith(
     String text,
     List<EntityDefinition> labels,
     float threshold
@@ -183,13 +222,13 @@ public final class LlamaGlinerUniNerStrategy implements NerStrategy {
     long startNanos = System.nanoTime();
     if (text == null || text.isBlank() || labels.isEmpty()) {
       telemetry.record(0.0, 1, 0);
-      return Map.of();
+      return NerOutput.empty();
     }
     var words = WhitespaceWordSplitter.split(text);
     int textLen = words.size();
     if (textLen == 0) {
       telemetry.record(0.0, 1, 0);
-      return Map.of();
+      return NerOutput.empty();
     }
     var idsList = new ArrayList<Long>();
     var maskList = new ArrayList<Long>();
@@ -247,6 +286,8 @@ public final class LlamaGlinerUniNerStrategy implements NerStrategy {
     for (int k = 0; k < c; k++) prompts[k] = promptPositions.get(k);
     var activeLabels = labels.subList(0, c);
 
+    // The text row is fed unpadded; label-encoder rows are added on a cache miss below.
+    int inputTokens = ids.length;
     List<EntitySpan> spans;
     if (model.isTokenLevel()) {
       var logits = model.scoreTokens(ids, wordPositions, prompts);
@@ -262,9 +303,12 @@ public final class LlamaGlinerUniNerStrategy implements NerStrategy {
       );
     } else if (labelEncoder != null) {
       var embeddings = new float[labels.size()][];
+      var encodedLabelTokens = new int[1];
       for (int k = 0; k < labels.size(); k++) embeddings[k] = labelEmbedding(
-        labels.get(k).name()
+        labels.get(k).name(),
+        encodedLabelTokens
       );
+      inputTokens += encodedLabelTokens[0];
       var logits = model.score(ids, wordPositions, null, embeddings, maxWidth);
       spans = GlinerNerSupport.decodeMarkerV0(
         spanDecoder,
@@ -292,13 +336,19 @@ public final class LlamaGlinerUniNerStrategy implements NerStrategy {
       1,
       spans.size()
     );
-    return GlinerNerSupport.groupByType(spans);
+    return new NerOutput(GlinerNerSupport.groupByType(spans), inputTokens);
   }
 
-  /** Bi-encoder label representation: mean of the label encoder's token states over {@code [CLS] label [SEP]}. */
-  private float[] labelEmbedding(String name) {
+  /**
+   * Bi-encoder label representation: mean of the label encoder's token states over
+   * {@code [CLS] label [SEP]}. Adds the encoded row's length to {@code encodedTokens[0]} only on a
+   * cache miss, i.e. when this call actually runs the label encoder.
+   */
+  private float[] labelEmbedding(String name, int[] encodedTokens) {
     return labelCache.computeIfAbsent(name, n -> {
-      var rows = labelEncoder.encode(labelTokenizer.encodeWithSpecialTokens(n));
+      var labelIds = labelTokenizer.encodeWithSpecialTokens(n);
+      encodedTokens[0] += labelIds.length;
+      var rows = labelEncoder.encode(labelIds);
       var out = new float[rows[0].length];
       for (var row : rows)
         for (int d = 0; d < out.length; d++) out[d] += row[d];
