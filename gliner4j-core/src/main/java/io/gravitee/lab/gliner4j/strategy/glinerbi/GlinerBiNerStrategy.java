@@ -19,6 +19,7 @@ import io.gravitee.lab.gliner4j.GLiNER4jConfig;
 import io.gravitee.lab.gliner4j.arch.LoadContext;
 import io.gravitee.lab.gliner4j.postprocess.SpanDecoder;
 import io.gravitee.lab.gliner4j.runtime.GlinerBiNerRuntime;
+import io.gravitee.lab.gliner4j.runtime.GlinerBiSpanRuntime;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
 import io.gravitee.lab.gliner4j.schema.NerOutput;
@@ -51,7 +52,7 @@ public final class GlinerBiNerStrategy implements NerStrategy {
   private final GLiNER4jConfig config;
   private final DjlTokenizerWrapper tokenizer;
   private final DjlTokenizerWrapper labelTokenizer;
-  private final GlinerBiNerRuntime runtime;
+  private final GlinerBiSpanRuntime runtime;
   private final List<EntityDefinition> entities;
   private final SpanDecoder spanDecoder = new SpanDecoder();
   private final GLiNER4jTelemetry telemetry = new GLiNER4jTelemetry("extract");
@@ -66,7 +67,7 @@ public final class GlinerBiNerStrategy implements NerStrategy {
     GLiNER4jConfig config,
     DjlTokenizerWrapper tokenizer,
     DjlTokenizerWrapper labelTokenizer,
-    GlinerBiNerRuntime runtime,
+    GlinerBiSpanRuntime runtime,
     List<EntityDefinition> entities
   ) {
     this.config = config;
@@ -95,6 +96,19 @@ public final class GlinerBiNerStrategy implements NerStrategy {
     var labelTokenizer = new DjlTokenizerWrapper(
       ctx.modelDir().resolve("labels_tokenizer")
     );
+    return create(ctx, entities, runtime, labelTokenizer);
+  }
+
+  /**
+   * Same, over an already-built span runtime and label-encoder tokenizer (e.g. a fake runtime in
+   * unit tests). The strategy takes ownership of both and closes them.
+   */
+  public static GlinerBiNerStrategy create(
+    LoadContext ctx,
+    List<EntityDefinition> entities,
+    GlinerBiSpanRuntime runtime,
+    DjlTokenizerWrapper labelTokenizer
+  ) {
     return new GlinerBiNerStrategy(
       ctx.config(),
       ctx.tokenizer(),

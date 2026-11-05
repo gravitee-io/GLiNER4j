@@ -25,6 +25,7 @@ import io.gravitee.lab.gliner4j.runtime.FlatBatchScoringResult;
 import io.gravitee.lab.gliner4j.runtime.Gliner2ClassifierRuntime;
 import io.gravitee.lab.gliner4j.runtime.Gliner2SpanRuntime;
 import io.gravitee.lab.gliner4j.runtime.Gliner2dot5NerRuntime;
+import io.gravitee.lab.gliner4j.runtime.GlinerBiSpanRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
 import io.gravitee.lab.gliner4j.schema.ClassificationOutput;
@@ -33,6 +34,7 @@ import io.gravitee.lab.gliner4j.schema.NerOutput;
 import io.gravitee.lab.gliner4j.strategy.gliner2.Gliner2ClassificationStrategy;
 import io.gravitee.lab.gliner4j.strategy.gliner2.Gliner2NerStrategy;
 import io.gravitee.lab.gliner4j.strategy.gliner2dot5.Gliner2dot5NerStrategy;
+import io.gravitee.lab.gliner4j.strategy.glinerbi.GlinerBiNerStrategy;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
 import java.net.URISyntaxException;
 import java.nio.file.Path;
@@ -43,9 +45,9 @@ import java.util.Objects;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins {@code inputTokens} of the GLiNER2-family strategies without a model: a word-level test
- * tokenizer (one id per word, punctuation split off) and fake runtimes that record the rows they
- * are fed. Each count must equal both the hand-computed prompt length and the non-padding length
+ * Pins {@code inputTokens} of the GLiNER2-family and GLiNER bi-encoder strategies without a model:
+ * a word-level test tokenizer (one id per word, punctuation split off; the label-encoder variant
+ * wraps each label in {@code [CLS] ... [SEP]}) and fake runtimes that record the rows they are fed. Each count must equal both the hand-computed prompt length and the non-padding length
  * of the row the runtime actually received.
  */
 class TokenUsageStrategyTest {
@@ -300,6 +302,90 @@ class TokenUsageStrategyTest {
     }
   }
 
+  // ---- GLiNER bi-encoder NER ----------------------------------------------
+
+  // [CLS] John lives in Paris [SEP] = 6; label rows [CLS] person [SEP] + [CLS] location [SEP] = 6.
+  private static final int BI_TEXT_ROW = 6;
+  private static final int BI_LABEL_ROWS = 6;
+
+  @Test
+  void glinerBiNer_countsTextRowAndUnpaddedLabelRows() {
+    var runtime = new RecordingBiRuntime();
+    try (var strategy = glinerBi(runtime)) {
+      var out = strategy.extractWithUsage(TEXT, 0.5f);
+
+      assertThat(out.inputTokens()).isEqualTo(BI_TEXT_ROW + BI_LABEL_ROWS);
+      assertThat(runtime.textRows).containsExactly(BI_TEXT_ROW);
+      assertThat(runtime.labelRows).containsExactly(BI_LABEL_ROWS);
+      assertThat(out.spans()).isEqualTo(strategy.extract(TEXT, 0.5f));
+
+      // Labels of unequal length are padded to the longest: [CLS] person name [SEP] = 4 and
+      // [CLS] location [SEP] = 3 go out as a 2 x 4 matrix, but only the 7 real tokens count.
+      var override = strategy.extractWithUsage(
+        TEXT,
+        List.of(
+          new EntityDefinition("person name"),
+          new EntityDefinition("location")
+        ),
+        0.5f
+      );
+      assertThat(
+        runtime.labelWidths.get(runtime.labelWidths.size() - 1)
+      ).isEqualTo(4);
+      assertThat(override.inputTokens()).isEqualTo(BI_TEXT_ROW + 7);
+      assertThat(runtime.labelRows.get(runtime.labelRows.size() - 1)).isEqualTo(
+        7
+      );
+    }
+  }
+
+  @Test
+  void glinerBiNer_batchCountsEveryLabelRowForEveryText() {
+    var runtime = new RecordingBiRuntime();
+    try (var strategy = glinerBi(runtime)) {
+      var texts = Arrays.asList(TEXT, "", null, "Paris.");
+      var batch = strategy.extractBatchWithUsage(texts, 0.5f);
+
+      // No label cache: the label encoder reads every label for every text it runs on.
+      // "Paris." splits into two words: [CLS] Paris . [SEP] = 4.
+      assertThat(batch)
+        .extracting(NerOutput::inputTokens)
+        .containsExactly(BI_TEXT_ROW + BI_LABEL_ROWS, 0, 0, 4 + BI_LABEL_ROWS);
+      assertThat(runtime.labelRows).containsExactly(
+        BI_LABEL_ROWS,
+        BI_LABEL_ROWS
+      );
+      for (int i = 0; i < texts.size(); i++) {
+        assertThat(batch.get(i)).isEqualTo(
+          strategy.extractWithUsage(texts.get(i), 0.5f)
+        );
+      }
+      assertThat(batch.stream().map(NerOutput::spans).toList()).isEqualTo(
+        strategy.extractBatch(texts, 0.5f)
+      );
+    }
+  }
+
+  @Test
+  void glinerBiNer_noEntityTypesSkipsTheModel() {
+    var runtime = new RecordingBiRuntime();
+    try (var strategy = glinerBi(runtime)) {
+      assertThat(strategy.extractWithUsage(TEXT, List.of(), 0.5f)).isEqualTo(
+        NerOutput.empty()
+      );
+      assertThat(runtime.textRows).isEmpty();
+    }
+  }
+
+  private static GlinerBiNerStrategy glinerBi(RecordingBiRuntime runtime) {
+    return GlinerBiNerStrategy.create(
+      ctx(RuntimeConfig.defaults(), Architecture.GLINER_BI),
+      ENTITIES,
+      runtime,
+      new DjlTokenizerWrapper(resourceDir("/tiny-label-tokenizer"))
+    );
+  }
+
   // ---- fixtures ------------------------------------------------------------
 
   private static LoadContext ctx(
@@ -322,10 +408,14 @@ class TokenUsageStrategyTest {
   }
 
   private static Path tokenizerDir() {
+    return resourceDir("/tiny-tokenizer");
+  }
+
+  private static Path resourceDir(String name) {
     try {
       return Path.of(
         Objects.requireNonNull(
-          TokenUsageStrategyTest.class.getResource("/tiny-tokenizer")
+          TokenUsageStrategyTest.class.getResource(name)
         ).toURI()
       );
     } catch (URISyntaxException e) {
@@ -405,6 +495,44 @@ class TokenUsageStrategyTest {
         queries,
         0
       );
+    }
+
+    @Override
+    public void close() {}
+  }
+
+  /** Records the text row and the label rows' real (non-padding) token counts of every run. */
+  private static final class RecordingBiRuntime implements GlinerBiSpanRuntime {
+
+    final List<Integer> textRows = new ArrayList<>();
+    final List<Integer> labelRows = new ArrayList<>();
+    final List<Integer> labelWidths = new ArrayList<>();
+
+    @Override
+    public float[][][] run(
+      long[] inputIds,
+      long[] wordsMask,
+      int textLen,
+      long[][] spanIdx,
+      boolean[] spanMask,
+      long[][] labelsInputIds,
+      long[][] labelsAttentionMask
+    ) {
+      textRows.add(inputIds.length);
+      int real = 0;
+      for (var row : labelsAttentionMask) {
+        real += (int) Arrays.stream(row).sum();
+      }
+      labelRows.add(real);
+      labelWidths.add(labelsInputIds[0].length);
+      int width = spanIdx.length / textLen;
+      var logits = new float[textLen][width][labelsInputIds.length];
+      for (var start : logits) {
+        for (var row : start) {
+          Arrays.fill(row, -10f); // sigmoid ~0: no span passes the threshold
+        }
+      }
+      return logits;
     }
 
     @Override
