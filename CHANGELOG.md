@@ -1,3 +1,10 @@
+# [1.3.0](https://github.com/gravitee-io/GLiNER4j/compare/1.2.0...1.3.0) (2026-11-05)
+
+
+### Features
+
+* token usage ([#39](https://github.com/gravitee-io/GLiNER4j/issues/39)) ([19d8932](https://github.com/gravitee-io/GLiNER4j/commit/19d89322ba0eaf9cf3799933618cd6aebe6b26c5))
+
 # [1.2.0](https://github.com/gravitee-io/GLiNER4j/compare/1.1.1...1.2.0) (2026-10-19)
 
 
