@@ -36,6 +36,8 @@ facade change per family.
   [GLiNER2.5-Decide](https://huggingface.co/fastino/GLiNER2.5-Decide) (`GLiNER4jDecider`, llama.cpp engine).
 - **Entity descriptions** and **per-call overrides** for dynamic vocabularies.
 - **Batch processing** with a single batched encoder call and parallel per-text scoring.
+- **Token usage** per text (`extractWithUsage` / `classifyWithUsage`) for metering and quotas — see
+  [Token usage](#token-usage--withusage).
 - **Precision variants**: FP32, FP16, INT8 (signed `QInt8` dynamic quantization).
 - **Execution providers**: CPU (default), CUDA, OpenVINO, CoreML — see
   [Execution providers](#execution-providers). DeBERTa bundles are exported `If`-node-free and with
@@ -109,6 +111,45 @@ try (var clf = GLiNER4jClassifier.load(Path.of("models/gliclass-modern-base-onnx
     List<ClassificationResult> r = clf.classify("Apple unveiled its new M4 chip.", 0.5f);
 }
 ```
+
+### Token usage — `...WithUsage`
+
+Every `extract` / `classify` overload has a `...WithUsage` twin. It returns the same spans or
+labels plus `inputTokens`, the number of tokens the model read for that text. You can use it for
+metering, quotas and cost attribution.
+
+```java
+NerOutput out = gliner.extractWithUsage("John works at Google.");
+out.spans();        // same as extract(...)
+out.inputTokens();  // special + entity-prompt (schema) + text tokens
+
+List<NerOutput> batch = gliner.extractBatchWithUsage(List.of("…", "", "…"));
+// one count per text, batch padding excluded; blank / null texts report 0
+
+ClassificationOutput c = clf.classifyWithUsage("Apple unveiled its new M4 chip.", 0.5f);
+c.results();        // same as classify(...)
+c.inputTokens();
+```
+
+The count covers the full row fed to the model, schema/label prompt included, even when its
+tokenization is cached across calls. Texts are never truncated or windowed, and a batch element
+reports what the same text reports alone. The token layout for each architecture is documented on
+`NerStrategy#extractWithUsage` and `ClassificationStrategy#classifyWithUsage`.
+
+**Label cache (llama.cpp bi-encoder):** `gliner-bi` on the llama.cpp engine caches label
+embeddings for the life of the `GLiNER4jNER` instance, so the count only includes label-encoder
+rows the call actually encodes:
+
+```java
+var texts = List.of("John works at Google.", "Marie Curie lived in Paris.");
+ner.extractBatchWithUsage(texts); // cold: [text1 + every label row, text2]
+ner.extractBatchWithUsage(texts); // warm: [text1, text2]
+```
+
+On a cold cache, the first text of a batch that runs the model carries every label row. On a warm
+cache, no text carries label rows, and a per-call entity type that is new to the cache adds its
+row to the first text that uses it. The ONNX `gliner-bi` engine re-encodes labels on every call
+and counts them for every text.
 
 ### Typed decisions — `GLiNER4jDecider`
 

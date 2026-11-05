@@ -136,6 +136,14 @@ public interface NerStrategy extends AutoCloseable {
    * text. Each element's count equals what {@link #extractWithUsage(String, float)} reports for
    * that text alone: padding added to align rows in a batch is never counted.
    *
+   * <p>Exception: a strategy that caches label-encoder output across calls (the llama.cpp
+   * bi-encoder, {@code LlamaGlinerUniNerStrategy} over a bundle with a label encoder) counts a
+   * label row only on the call that actually encodes it. On a cold cache, the first text of the
+   * batch that runs the model carries every label row and later texts carry their text row
+   * only; on a warm cache no text carries label rows. The same text can therefore report a
+   * different count in a batch than alone, and a different count cold than warm. The ONNX
+   * {@code glinerbi} strategy has no label cache and is not affected.
+   *
    * @param texts the input texts
    * @param threshold minimum confidence (0..1) for span inclusion
    * @return per-text outputs in input order

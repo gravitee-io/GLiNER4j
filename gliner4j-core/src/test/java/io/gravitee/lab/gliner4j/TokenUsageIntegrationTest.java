@@ -36,20 +36,26 @@ import org.junit.jupiter.api.condition.EnabledIf;
 /**
  * Pins {@code inputTokens} against real bundles, one test per architecture: the count must equal
  * the prompt row rebuilt from the bundle's own tokenizer, and a batch must report what each text
- * reports alone. Each test runs only when its bundle is present under {@code models/}.
+ * reports alone. Each test runs only when its bundle is present under the repository-root
+ * {@code models/} directory the Taskfile exports to (resolved as {@code ../models/} from the
+ * module directory Surefire runs in).
  */
 class TokenUsageIntegrationTest {
 
-  private static final Path GLINER2 = Path.of("models/gliner2-base-onnx");
+  private static final Path GLINER2 = Path.of("../models/gliner2-base-onnx");
   private static final Path GLINER2DOT5 = Path.of(
-    "models/gliner2dot5-small-onnx"
+    "../models/gliner2dot5-small-onnx"
   );
-  private static final Path GLINER_UNI = Path.of("models/gliner-pii-base-onnx");
+  private static final Path GLINER_UNI = Path.of(
+    "../models/gliner-pii-base-onnx"
+  );
   private static final Path GLINER_UNI_TOKEN = Path.of(
-    "models/gliner-multitask-large-onnx"
+    "../models/gliner-multitask-large-onnx"
   );
-  private static final Path GLINER_BI = Path.of("models/gliner-bi-small-onnx");
-  private static final Path GLICLASS = Path.of("models/gliclass-edge-onnx");
+  private static final Path GLINER_BI = Path.of(
+    "../models/gliner-bi-small-onnx"
+  );
+  private static final Path GLICLASS = Path.of("../models/gliclass-edge-onnx");
 
   private static final String TEXT =
     "John Smith works at Microsoft in Seattle and emails john@example.com";

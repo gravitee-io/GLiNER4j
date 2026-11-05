@@ -312,7 +312,10 @@ public final class GLiNER4jNER implements AutoCloseable {
    * Extracts entities from multiple texts in batch with a custom threshold, also reporting the
    * tokens the model read per text. Each output's count is what
    * {@link #extractWithUsage(String, float)} reports for that text alone; batch padding is not
-   * counted.
+   * counted. Exception: the llama.cpp bi-encoder caches label embeddings, so its label rows are
+   * counted only on the call that encodes them (on a cold cache, the first text of the batch that
+   * runs the model carries them all); see
+   * {@link NerStrategy#extractBatchWithUsage(List, float)}.
    *
    * @param texts the input texts to analyze
    * @param threshold minimum confidence score (0..1) for span inclusion

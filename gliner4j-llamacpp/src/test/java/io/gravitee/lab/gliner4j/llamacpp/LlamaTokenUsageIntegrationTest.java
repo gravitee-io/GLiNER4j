@@ -135,46 +135,53 @@ class LlamaTokenUsageIntegrationTest {
     var dir = Path.of(bundle);
     var config = GLiNER4jConfig.load(dir);
     var tokenizer = new DjlTokenizerWrapper(dir);
-    var labelsGguf = config.archString("labels_gguf", null);
-    var words = WhitespaceWordSplitter.split(TEXT)
-      .stream()
-      .map(WhitespaceWordSplitter.Word::text)
-      .toList();
-    int textRow = 2;
-    for (var word : words) textRow += tokens(tokenizer, word);
+    int textRow = textRow(tokenizer, TEXT);
 
-    try (var ner = GLiNER4jNER.load(dir, ENTITIES)) {
-      if (labelsGguf == null) {
-        int expected =
-          textRow +
-          tokens(tokenizer, config.archString("sep_token", "<<SEP>>"));
-        for (var entity : ENTITIES) {
-          expected +=
-            tokens(tokenizer, config.archString("ent_token", "<<ENT>>")) +
-            tokens(tokenizer, entity.name());
-        }
+    if (config.archString("labels_gguf", null) == null) {
+      int expected =
+        textRow + tokens(tokenizer, config.archString("sep_token", "<<SEP>>"));
+      for (var entity : ENTITIES) {
+        expected +=
+          tokens(tokenizer, config.archString("ent_token", "<<ENT>>")) +
+          tokens(tokenizer, entity.name());
+      }
+      try (var ner = GLiNER4jNER.load(dir, ENTITIES)) {
         assertThat(ner.extractWithUsage(TEXT, 0.5f).inputTokens()).isEqualTo(
           expected
         );
         assertBatchMatchesSingle(ner);
-      } else {
-        // Bi-encoder: label rows count only on the call that encodes them (label cache).
-        var labelTokenizer = new DjlTokenizerWrapper(
-          dir.resolve("labels_tokenizer")
-        );
-        int labelRows = 0;
-        for (var entity : ENTITIES) {
-          labelRows += labelTokenizer.encodeWithSpecialTokens(
-            entity.name()
-          ).length;
-        }
-        assertThat(ner.extractWithUsage(TEXT, 0.5f).inputTokens()).isEqualTo(
-          textRow + labelRows
-        );
-        assertThat(ner.extractWithUsage(TEXT, 0.5f).inputTokens()).isEqualTo(
-          textRow
-        );
       }
+      return;
+    }
+
+    // Bi-encoder: label embeddings are cached per strategy, so label rows count only on the
+    // call that encodes them.
+    var labelTokenizer = new DjlTokenizerWrapper(
+      dir.resolve("labels_tokenizer")
+    );
+    int labelRows = 0;
+    for (var entity : ENTITIES) {
+      labelRows += labelTokenizer.encodeWithSpecialTokens(entity.name()).length;
+    }
+    int shortRow = textRow(tokenizer, BATCH.get(2));
+    try (var ner = GLiNER4jNER.load(dir, ENTITIES)) {
+      // Cold batch: the first text the model runs carries every label row.
+      assertThat(ner.extractBatchWithUsage(BATCH, 0.5f))
+        .extracting(NerOutput::inputTokens)
+        .containsExactly(textRow + labelRows, 0, shortRow, 0);
+      // Warm batch: no label rows.
+      assertThat(ner.extractBatchWithUsage(BATCH, 0.5f))
+        .extracting(NerOutput::inputTokens)
+        .containsExactly(textRow, 0, shortRow, 0);
+    }
+    try (var ner = GLiNER4jNER.load(dir, ENTITIES)) {
+      // Cold, then warm single call.
+      assertThat(ner.extractWithUsage(TEXT, 0.5f).inputTokens()).isEqualTo(
+        textRow + labelRows
+      );
+      assertThat(ner.extractWithUsage(TEXT, 0.5f).inputTokens()).isEqualTo(
+        textRow
+      );
     }
   }
 
@@ -228,6 +235,15 @@ class LlamaTokenUsageIntegrationTest {
 
   private static int tokens(DjlTokenizerWrapper tokenizer, String word) {
     return tokenizer.tokenizeWithIds(word).ids().length;
+  }
+
+  /** {@code [CLS] word subtokens [SEP]} over the whitespace words of {@code text}. */
+  private static int textRow(DjlTokenizerWrapper tokenizer, String text) {
+    int row = 2;
+    for (var word : WhitespaceWordSplitter.split(text)) {
+      row += tokens(tokenizer, word.text());
+    }
+    return row;
   }
 
   private static void assertBatchMatchesSingle(GLiNER4jNER ner) {

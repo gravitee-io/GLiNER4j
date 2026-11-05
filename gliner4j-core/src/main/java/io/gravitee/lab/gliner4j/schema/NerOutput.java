@@ -26,7 +26,10 @@ import java.util.Map;
  * (schema) tokens are included, padding added to batch rows of unequal length is excluded. Each
  * input text is encoded as exactly one text row (no truncation, no windowing). For a bi-encoder
  * model whose labels go through a separate label encoder, the label rows encoded for this text
- * are added to the text row. A text that is null, blank, has no words, or is not run through the
+ * are added to the text row (the llama.cpp bi-encoder caches label embeddings, so it adds them
+ * only on the call that encodes them; see
+ * {@link io.gravitee.lab.gliner4j.strategy.NerStrategy#extractBatchWithUsage(List, float)}).
+ * A text that is null, blank, has no words, or is not run through the
  * model (for example because no entity types are requested) reports {@code 0}. The exact layout
  * per architecture is documented on
  * {@link io.gravitee.lab.gliner4j.strategy.NerStrategy#extractWithUsage(String, float)}.
