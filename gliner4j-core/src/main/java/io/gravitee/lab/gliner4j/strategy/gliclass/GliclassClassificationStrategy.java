@@ -19,6 +19,7 @@ import io.gravitee.lab.gliner4j.GLiNER4jConfig;
 import io.gravitee.lab.gliner4j.arch.LoadContext;
 import io.gravitee.lab.gliner4j.runtime.GliclassRuntime;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
+import io.gravitee.lab.gliner4j.schema.ClassificationOutput;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.strategy.ClassificationStrategy;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
@@ -122,7 +123,7 @@ public final class GliclassClassificationStrategy
 
   @Override
   public List<ClassificationResult> classify(String text, float threshold) {
-    return classifyWith(text, labels, threshold);
+    return classifyWith(text, labels, threshold).results();
   }
 
   @Override
@@ -131,7 +132,7 @@ public final class GliclassClassificationStrategy
     List<ClassificationLabel> overrideLabels,
     float threshold
   ) {
-    return classifyWith(text, overrideLabels, threshold);
+    return classifyWith(text, overrideLabels, threshold).results();
   }
 
   @Override
@@ -146,6 +147,35 @@ public final class GliclassClassificationStrategy
     // runEncoderBatch + per-row gather) is a follow-up optimization.
     var results = new ArrayList<List<ClassificationResult>>(texts.size());
     for (var text : texts) {
+      results.add(classifyWith(text, labels, threshold).results());
+    }
+    return results;
+  }
+
+  @Override
+  public ClassificationOutput classifyWithUsage(String text, float threshold) {
+    return classifyWith(text, labels, threshold);
+  }
+
+  @Override
+  public ClassificationOutput classifyWithUsage(
+    String text,
+    List<ClassificationLabel> overrideLabels,
+    float threshold
+  ) {
+    return classifyWith(text, overrideLabels, threshold);
+  }
+
+  @Override
+  public List<ClassificationOutput> classifyBatchWithUsage(
+    List<String> texts,
+    float threshold
+  ) {
+    if (texts == null) {
+      return List.of();
+    }
+    var results = new ArrayList<ClassificationOutput>(texts.size());
+    for (var text : texts) {
       results.add(classifyWith(text, labels, threshold));
     }
     return results;
@@ -153,7 +183,7 @@ public final class GliclassClassificationStrategy
 
   // ---- core ----------------------------------------------------------------
 
-  private List<ClassificationResult> classifyWith(
+  private ClassificationOutput classifyWith(
     String text,
     List<ClassificationLabel> activeLabels,
     float threshold
@@ -161,7 +191,7 @@ public final class GliclassClassificationStrategy
     long startNanos = System.nanoTime();
     if (text == null || text.isBlank() || activeLabels.isEmpty()) {
       telemetry.record(0.0, 1, 0);
-      return List.of();
+      return ClassificationOutput.empty();
     }
 
     var prompt = buildPrompt(activeLabels, text);
@@ -180,7 +210,8 @@ public final class GliclassClassificationStrategy
     }
     if (classPositions.isEmpty()) {
       telemetry.record(0.0, 1, 0);
-      return List.of();
+      // The encoder already read the row.
+      return new ClassificationOutput(List.of(), ids.length);
     }
 
     if (classPositions.size() != activeLabels.size()) {
@@ -215,7 +246,8 @@ public final class GliclassClassificationStrategy
 
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
     telemetry.record(durationMs, 1, results.size());
-    return results;
+    // One unpadded row, attention mask all ones: its length is the token count.
+    return new ClassificationOutput(results, ids.length);
   }
 
   private String buildPrompt(

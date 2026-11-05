@@ -19,8 +19,10 @@ import io.gravitee.lab.gliner4j.GLiNER4jConfig;
 import io.gravitee.lab.gliner4j.arch.LoadContext;
 import io.gravitee.lab.gliner4j.postprocess.SpanDecoder;
 import io.gravitee.lab.gliner4j.runtime.GlinerBiNerRuntime;
+import io.gravitee.lab.gliner4j.runtime.GlinerBiSpanRuntime;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
+import io.gravitee.lab.gliner4j.schema.NerOutput;
 import io.gravitee.lab.gliner4j.strategy.NerStrategy;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
@@ -50,7 +52,7 @@ public final class GlinerBiNerStrategy implements NerStrategy {
   private final GLiNER4jConfig config;
   private final DjlTokenizerWrapper tokenizer;
   private final DjlTokenizerWrapper labelTokenizer;
-  private final GlinerBiNerRuntime runtime;
+  private final GlinerBiSpanRuntime runtime;
   private final List<EntityDefinition> entities;
   private final SpanDecoder spanDecoder = new SpanDecoder();
   private final GLiNER4jTelemetry telemetry = new GLiNER4jTelemetry("extract");
@@ -65,7 +67,7 @@ public final class GlinerBiNerStrategy implements NerStrategy {
     GLiNER4jConfig config,
     DjlTokenizerWrapper tokenizer,
     DjlTokenizerWrapper labelTokenizer,
-    GlinerBiNerRuntime runtime,
+    GlinerBiSpanRuntime runtime,
     List<EntityDefinition> entities
   ) {
     this.config = config;
@@ -94,6 +96,19 @@ public final class GlinerBiNerStrategy implements NerStrategy {
     var labelTokenizer = new DjlTokenizerWrapper(
       ctx.modelDir().resolve("labels_tokenizer")
     );
+    return create(ctx, entities, runtime, labelTokenizer);
+  }
+
+  /**
+   * Same, over an already-built span runtime and label-encoder tokenizer (e.g. a fake runtime in
+   * unit tests). The strategy takes ownership of both and closes them.
+   */
+  public static GlinerBiNerStrategy create(
+    LoadContext ctx,
+    List<EntityDefinition> entities,
+    GlinerBiSpanRuntime runtime,
+    DjlTokenizerWrapper labelTokenizer
+  ) {
     return new GlinerBiNerStrategy(
       ctx.config(),
       ctx.tokenizer(),
@@ -107,7 +122,7 @@ public final class GlinerBiNerStrategy implements NerStrategy {
 
   @Override
   public Map<String, List<EntitySpan>> extract(String text, float threshold) {
-    return extractWith(text, entities, threshold);
+    return extractWith(text, entities, threshold).spans();
   }
 
   @Override
@@ -116,7 +131,7 @@ public final class GlinerBiNerStrategy implements NerStrategy {
     List<EntityDefinition> overrideEntities,
     float threshold
   ) {
-    return extractWith(text, overrideEntities, threshold);
+    return extractWith(text, overrideEntities, threshold).spans();
   }
 
   @Override
@@ -129,6 +144,35 @@ public final class GlinerBiNerStrategy implements NerStrategy {
     }
     var out = new ArrayList<Map<String, List<EntitySpan>>>(texts.size());
     for (var text : texts) {
+      out.add(extractWith(text, entities, threshold).spans());
+    }
+    return out;
+  }
+
+  @Override
+  public NerOutput extractWithUsage(String text, float threshold) {
+    return extractWith(text, entities, threshold);
+  }
+
+  @Override
+  public NerOutput extractWithUsage(
+    String text,
+    List<EntityDefinition> overrideEntities,
+    float threshold
+  ) {
+    return extractWith(text, overrideEntities, threshold);
+  }
+
+  @Override
+  public List<NerOutput> extractBatchWithUsage(
+    List<String> texts,
+    float threshold
+  ) {
+    if (texts == null) {
+      return List.of();
+    }
+    var out = new ArrayList<NerOutput>(texts.size());
+    for (var text : texts) {
       out.add(extractWith(text, entities, threshold));
     }
     return out;
@@ -136,7 +180,7 @@ public final class GlinerBiNerStrategy implements NerStrategy {
 
   // ---- core ----------------------------------------------------------------
 
-  private Map<String, List<EntitySpan>> extractWith(
+  private NerOutput extractWith(
     String text,
     List<EntityDefinition> labels,
     float threshold
@@ -144,14 +188,14 @@ public final class GlinerBiNerStrategy implements NerStrategy {
     long startNanos = System.nanoTime();
     if (text == null || text.isBlank() || labels.isEmpty()) {
       telemetry.record(0.0, 1, 0);
-      return Map.of();
+      return NerOutput.empty();
     }
 
     var words = WhitespaceWordSplitter.split(text);
     int textLen = words.size();
     if (textLen == 0) {
       telemetry.record(0.0, 1, 0);
-      return Map.of();
+      return NerOutput.empty();
     }
 
     // 1. Text input: [CLS] w1 ... wN [SEP]. gliner's BaseBiEncoderProcessor.tokenize_inputs feeds
@@ -185,11 +229,13 @@ public final class GlinerBiNerStrategy implements NerStrategy {
     // 3. Label tokens via the label encoder's tokenizer: [CLS] label [SEP], padded to longest.
     var labelEnc = new long[labels.size()][];
     int maxLabelLen = 0;
+    int labelTokens = 0;
     for (int i = 0; i < labels.size(); i++) {
       labelEnc[i] = labelTokenizer.encodeWithSpecialTokens(
         labels.get(i).name()
       );
       maxLabelLen = Math.max(maxLabelLen, labelEnc[i].length);
+      labelTokens += labelEnc[i].length;
     }
     var labelsInputIds = new long[labels.size()][maxLabelLen];
     var labelsAttentionMask = new long[labels.size()][maxLabelLen];
@@ -225,7 +271,12 @@ public final class GlinerBiNerStrategy implements NerStrategy {
 
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
     telemetry.record(durationMs, 1, spans.size());
-    return GlinerNerSupport.groupByType(spans);
+    // Text row (unpadded, all-ones mask) plus each label row's unpadded length: the label
+    // encoder reads every label on every call.
+    return new NerOutput(
+      GlinerNerSupport.groupByType(spans),
+      inputIds.length + labelTokens
+    );
   }
 
   @Override

@@ -21,6 +21,7 @@ import io.gravitee.lab.gliner4j.postprocess.TokenSpanDecoder;
 import io.gravitee.lab.gliner4j.runtime.GlinerUniTokenNerRuntime;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
+import io.gravitee.lab.gliner4j.schema.NerOutput;
 import io.gravitee.lab.gliner4j.strategy.NerStrategy;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
@@ -91,7 +92,7 @@ public final class GlinerUniTokenNerStrategy implements NerStrategy {
 
   @Override
   public Map<String, List<EntitySpan>> extract(String text, float threshold) {
-    return extractWith(text, entities, threshold);
+    return extractWith(text, entities, threshold).spans();
   }
 
   @Override
@@ -100,7 +101,7 @@ public final class GlinerUniTokenNerStrategy implements NerStrategy {
     List<EntityDefinition> overrideEntities,
     float threshold
   ) {
-    return extractWith(text, overrideEntities, threshold);
+    return extractWith(text, overrideEntities, threshold).spans();
   }
 
   @Override
@@ -113,12 +114,41 @@ public final class GlinerUniTokenNerStrategy implements NerStrategy {
     }
     var out = new ArrayList<Map<String, List<EntitySpan>>>(texts.size());
     for (var text : texts) {
+      out.add(extractWith(text, entities, threshold).spans());
+    }
+    return out;
+  }
+
+  @Override
+  public NerOutput extractWithUsage(String text, float threshold) {
+    return extractWith(text, entities, threshold);
+  }
+
+  @Override
+  public NerOutput extractWithUsage(
+    String text,
+    List<EntityDefinition> overrideEntities,
+    float threshold
+  ) {
+    return extractWith(text, overrideEntities, threshold);
+  }
+
+  @Override
+  public List<NerOutput> extractBatchWithUsage(
+    List<String> texts,
+    float threshold
+  ) {
+    if (texts == null) {
+      return List.of();
+    }
+    var out = new ArrayList<NerOutput>(texts.size());
+    for (var text : texts) {
       out.add(extractWith(text, entities, threshold));
     }
     return out;
   }
 
-  private Map<String, List<EntitySpan>> extractWith(
+  private NerOutput extractWith(
     String text,
     List<EntityDefinition> labels,
     float threshold
@@ -126,14 +156,14 @@ public final class GlinerUniTokenNerStrategy implements NerStrategy {
     long startNanos = System.nanoTime();
     if (text == null || text.isBlank() || labels.isEmpty()) {
       telemetry.record(0.0, 1, 0);
-      return Map.of();
+      return NerOutput.empty();
     }
 
     var words = WhitespaceWordSplitter.split(text);
     int textLen = words.size();
     if (textLen == 0) {
       telemetry.record(0.0, 1, 0);
-      return Map.of();
+      return NerOutput.empty();
     }
 
     // [CLS] <<ENT>> t1 <<ENT>> t2 ... <<SEP>> w1 ... [SEP]
@@ -187,7 +217,8 @@ public final class GlinerUniTokenNerStrategy implements NerStrategy {
 
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
     telemetry.record(durationMs, 1, spans.size());
-    return grouped;
+    // One unpadded row, attention mask all ones: its length is the token count.
+    return new NerOutput(grouped, inputIds.length);
   }
 
   @Override

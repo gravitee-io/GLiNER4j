@@ -29,6 +29,7 @@ import io.gravitee.lab.gliner4j.runtime.OnnxGliner2dot5NerRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
+import io.gravitee.lab.gliner4j.schema.NerOutput;
 import io.gravitee.lab.gliner4j.strategy.NerStrategy;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
@@ -64,7 +65,7 @@ public final class Gliner2dot5NerStrategy implements NerStrategy {
   private final BoundaryDecoder decoder;
   private final TextPreprocessing preprocessing;
   private final GLiNER4jTelemetry telemetry = new GLiNER4jTelemetry("extract");
-  private final MicroBatcher<Map<String, List<EntitySpan>>> microBatcher;
+  private final MicroBatcher<NerOutput> microBatcher;
 
   private Gliner2dot5NerStrategy(
     GLiNER4jConfig config,
@@ -94,7 +95,7 @@ public final class Gliner2dot5NerStrategy implements NerStrategy {
       ? new MicroBatcher<>(
         runtimeConfig.getMicroBatchMaxSize(),
         runtimeConfig.getMicroBatchMaxWaitMicros(),
-        this::extractBatch
+        this::extractBatchWithUsage
       )
       : null;
   }
@@ -140,11 +141,16 @@ public final class Gliner2dot5NerStrategy implements NerStrategy {
 
   @Override
   public Map<String, List<EntitySpan>> extract(String text, float threshold) {
+    return extractWithUsage(text, threshold).spans();
+  }
+
+  @Override
+  public NerOutput extractWithUsage(String text, float threshold) {
     if (microBatcher != null) {
       return microBatcher.extract(text, threshold);
     }
     if (text == null || text.isBlank()) {
-      return Map.of();
+      return NerOutput.empty();
     }
     return extractBatchWith(List.of(text), threshold, inputAssembler).get(0);
   }
@@ -155,8 +161,17 @@ public final class Gliner2dot5NerStrategy implements NerStrategy {
     List<EntityDefinition> entities,
     float threshold
   ) {
+    return extractWithUsage(text, entities, threshold).spans();
+  }
+
+  @Override
+  public NerOutput extractWithUsage(
+    String text,
+    List<EntityDefinition> entities,
+    float threshold
+  ) {
     if (text == null || text.isBlank()) {
-      return Map.of();
+      return NerOutput.empty();
     }
     return extractBatchWith(
       List.of(text),
@@ -167,6 +182,17 @@ public final class Gliner2dot5NerStrategy implements NerStrategy {
 
   @Override
   public List<Map<String, List<EntitySpan>>> extractBatch(
+    List<String> texts,
+    float threshold
+  ) {
+    if (texts == null) {
+      return List.of();
+    }
+    return GlinerNerSupport.spansOf(extractBatchWithUsage(texts, threshold));
+  }
+
+  @Override
+  public List<NerOutput> extractBatchWithUsage(
     List<String> texts,
     float threshold
   ) {
@@ -185,7 +211,7 @@ public final class Gliner2dot5NerStrategy implements NerStrategy {
 
   // ---- core ----------------------------------------------------------------
 
-  private List<Map<String, List<EntitySpan>>> extractBatchWith(
+  private List<NerOutput> extractBatchWith(
     List<String> texts,
     float threshold,
     InputAssembler assembler
@@ -195,9 +221,9 @@ public final class Gliner2dot5NerStrategy implements NerStrategy {
     }
     long startNanos = System.nanoTime();
     int batchSize = texts.size();
-    var results = new ArrayList<Map<String, List<EntitySpan>>>(batchSize);
+    var results = new ArrayList<NerOutput>(batchSize);
     for (int i = 0; i < batchSize; i++) {
-      results.add(Map.of());
+      results.add(NerOutput.empty());
     }
 
     // 1. Preprocess: fastino word conventions, shared schema prefix.
@@ -279,7 +305,14 @@ public final class Gliner2dot5NerStrategy implements NerStrategy {
           threshold
         );
         totalEntities += spans.size();
-        results.set(origIdx, GlinerNerSupport.groupByType(spans));
+        // Each row is fed unpadded with an all-ones mask; batch padding is not counted.
+        results.set(
+          origIdx,
+          new NerOutput(
+            GlinerNerSupport.groupByType(spans),
+            in.inputIds().length
+          )
+        );
       }
     }
 

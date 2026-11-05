@@ -18,7 +18,9 @@ package io.gravitee.lab.gliner4j.utils;
 import io.gravitee.lab.gliner4j.postprocess.SpanDecoder;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
+import io.gravitee.lab.gliner4j.schema.NerOutput;
 import io.gravitee.lab.gliner4j.utils.WhitespaceWordSplitter.Word;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -70,6 +72,17 @@ public final class GlinerNerSupport {
       ends[i] = words.get(i).end();
     }
     return new CharOffsets(starts, ends);
+  }
+
+  /** The spans of each output, in order: the plain {@code extractBatch} view of a usage batch. */
+  public static List<Map<String, List<EntitySpan>>> spansOf(
+    List<NerOutput> outputs
+  ) {
+    var spans = new ArrayList<Map<String, List<EntitySpan>>>(outputs.size());
+    for (var output : outputs) {
+      spans.add(output.spans());
+    }
+    return spans;
   }
 
   /** Group decoded spans by entity type, preserving first-seen order. */

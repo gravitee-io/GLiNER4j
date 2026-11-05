@@ -27,6 +27,7 @@ import io.gravitee.lab.gliner4j.processor.TextPreprocessing;
 import io.gravitee.lab.gliner4j.runtime.Gliner2ClassifierRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.ClassificationLabel;
+import io.gravitee.lab.gliner4j.schema.ClassificationOutput;
 import io.gravitee.lab.gliner4j.schema.ClassificationResult;
 import io.gravitee.lab.gliner4j.strategy.ClassificationStrategy;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
@@ -160,7 +161,7 @@ public final class Gliner2ClassificationStrategy
 
   @Override
   public List<ClassificationResult> classify(String text, float threshold) {
-    return classifyMerged(text, inputAssembler, threshold);
+    return classifyMerged(text, inputAssembler, threshold).results();
   }
 
   @Override
@@ -169,11 +170,41 @@ public final class Gliner2ClassificationStrategy
     List<ClassificationLabel> labels,
     float threshold
   ) {
-    return classifyMerged(text, overrideAssembler(labels), threshold);
+    return classifyMerged(text, overrideAssembler(labels), threshold).results();
   }
 
   @Override
   public List<List<ClassificationResult>> classifyBatch(
+    List<String> texts,
+    float threshold
+  ) {
+    if (texts == null) {
+      return List.of();
+    }
+    var outputs = classifyBatchWithUsage(texts, threshold);
+    var results = new ArrayList<List<ClassificationResult>>(outputs.size());
+    for (var output : outputs) {
+      results.add(output.results());
+    }
+    return results;
+  }
+
+  @Override
+  public ClassificationOutput classifyWithUsage(String text, float threshold) {
+    return classifyMerged(text, inputAssembler, threshold);
+  }
+
+  @Override
+  public ClassificationOutput classifyWithUsage(
+    String text,
+    List<ClassificationLabel> labels,
+    float threshold
+  ) {
+    return classifyMerged(text, overrideAssembler(labels), threshold);
+  }
+
+  @Override
+  public List<ClassificationOutput> classifyBatchWithUsage(
     List<String> texts,
     float threshold
   ) {
@@ -191,9 +222,9 @@ public final class Gliner2ClassificationStrategy
     );
     int nonEmptyCount = preproc.nonEmptyCount();
 
-    var results = new ArrayList<List<ClassificationResult>>(batchSize);
+    var results = new ArrayList<ClassificationOutput>(batchSize);
     for (int i = 0; i < batchSize; i++) {
-      results.add(List.of());
+      results.add(ClassificationOutput.empty());
     }
 
     // Short-circuit: all texts are empty
@@ -218,14 +249,21 @@ public final class Gliner2ClassificationStrategy
     );
     for (int s = 0; s < nonEmptyCount; s++) {
       int origIdx = batchIndices[s];
+      // Each row is fed unpadded with an all-ones mask; batch padding is not counted.
       results.set(
         origIdx,
-        thresholdLabelLogits(logits[s], inputs[origIdx], threshold)
+        new ClassificationOutput(
+          thresholdLabelLogits(logits[s], inputs[origIdx], threshold),
+          inputs[origIdx].inputIds().length
+        )
       );
     }
 
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
-    long totalLabels = results.stream().mapToLong(List::size).sum();
+    long totalLabels = results
+      .stream()
+      .mapToLong(o -> o.results().size())
+      .sum();
     telemetry.record(durationMs, batchSize, totalLabels);
     return results;
   }
@@ -310,7 +348,7 @@ public final class Gliner2ClassificationStrategy
    * Single-text classification through the merged graph as a batch of one — the graph
    * embeds the encoder, so the load-time and override assemblers take the exact same path.
    */
-  private List<ClassificationResult> classifyMerged(
+  private ClassificationOutput classifyMerged(
     String text,
     InputAssembler assembler,
     float threshold
@@ -318,12 +356,12 @@ public final class Gliner2ClassificationStrategy
     long startNanos = System.nanoTime();
     if (text == null || text.isBlank()) {
       telemetry.record(0.0, 1, 0);
-      return List.of();
+      return ClassificationOutput.empty();
     }
     var textEncoder = preprocessing.encode(text);
     if (textEncoder.getTextLen() == 0) {
       telemetry.record(0.0, 1, 0);
-      return List.of();
+      return ClassificationOutput.empty();
     }
 
     var input = assembler.assemble(textEncoder);
@@ -337,7 +375,8 @@ public final class Gliner2ClassificationStrategy
     var result = thresholdLabelLogits(logits[0], input, threshold);
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
     telemetry.record(durationMs, 1, result.size());
-    return result;
+    // One unpadded row, attention mask all ones: its length is the token count.
+    return new ClassificationOutput(result, input.inputIds().length);
   }
 
   /** The [L] label-marker positions of {@code input} (drops index 0, which holds [P]). */

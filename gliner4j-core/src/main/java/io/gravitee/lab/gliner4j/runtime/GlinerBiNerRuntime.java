@@ -42,7 +42,7 @@ import lombok.extern.slf4j.Slf4j;
  * cache (the bi-encoder's headline fast-path) is a later optimization.
  */
 @Slf4j
-public final class GlinerBiNerRuntime implements ArchitectureRuntime {
+public final class GlinerBiNerRuntime implements GlinerBiSpanRuntime {
 
   private final OrtEnvironment env;
   private final OrtSession session;
@@ -128,6 +128,7 @@ public final class GlinerBiNerRuntime implements ArchitectureRuntime {
    * @param labelsAttentionMask label attention mask [numLabels][labelSeqLen]
    * @return logits [textLen][maxWidth][numClasses]
    */
+  @Override
   public float[][][] run(
     long[] inputIds,
     long[] wordsMask,

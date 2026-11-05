@@ -31,6 +31,7 @@ import io.gravitee.lab.gliner4j.runtime.MicroBatcher;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
+import io.gravitee.lab.gliner4j.schema.NerOutput;
 import io.gravitee.lab.gliner4j.strategy.NerStrategy;
 import io.gravitee.lab.gliner4j.telemetry.GLiNER4jTelemetry;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
@@ -66,7 +67,7 @@ public final class Gliner2NerStrategy
   private static final long SCORING_COUNT_INSTANCES = 1;
 
   private final SpanDecoder spanDecoder;
-  private final MicroBatcher<Map<String, List<EntitySpan>>> microBatcher;
+  private final MicroBatcher<NerOutput> microBatcher;
 
   private Gliner2NerStrategy(
     GLiNER4jConfig config,
@@ -88,7 +89,7 @@ public final class Gliner2NerStrategy
       ? new MicroBatcher<>(
         runtimeConfig.getMicroBatchMaxSize(),
         runtimeConfig.getMicroBatchMaxWaitMicros(),
-        this::extractBatch
+        this::extractBatchWithUsage
       )
       : null;
   }
@@ -137,13 +138,18 @@ public final class Gliner2NerStrategy
 
   @Override
   public Map<String, List<EntitySpan>> extract(String text, float threshold) {
+    return extractWithUsage(text, threshold).spans();
+  }
+
+  @Override
+  public NerOutput extractWithUsage(String text, float threshold) {
     if (microBatcher != null) {
       return microBatcher.extract(text, threshold);
     }
     if (text == null || text.isBlank()) {
-      return Map.of();
+      return NerOutput.empty();
     }
-    return extractBatch(List.of(text), threshold).get(0);
+    return extractBatchWithUsage(List.of(text), threshold).get(0);
   }
 
   @Override
@@ -159,8 +165,17 @@ public final class Gliner2NerStrategy
     List<EntityDefinition> entities,
     float threshold
   ) {
+    return extractWithUsage(text, entities, threshold).spans();
+  }
+
+  @Override
+  public NerOutput extractWithUsage(
+    String text,
+    List<EntityDefinition> entities,
+    float threshold
+  ) {
     if (text == null || text.isBlank()) {
-      return Map.of();
+      return NerOutput.empty();
     }
     return extractBatchWith(
       List.of(text),
@@ -174,6 +189,17 @@ public final class Gliner2NerStrategy
     List<String> texts,
     float threshold
   ) {
+    if (texts == null) {
+      return List.of();
+    }
+    return GlinerNerSupport.spansOf(extractBatchWithUsage(texts, threshold));
+  }
+
+  @Override
+  public List<NerOutput> extractBatchWithUsage(
+    List<String> texts,
+    float threshold
+  ) {
     return extractBatchWith(texts, threshold, inputAssembler);
   }
 
@@ -181,7 +207,7 @@ public final class Gliner2NerStrategy
    * Merged-graph batch extraction with an explicit assembler — the load-time one for the
    * standard paths, a per-call one for schema overrides.
    */
-  private List<Map<String, List<EntitySpan>>> extractBatchWith(
+  private List<NerOutput> extractBatchWith(
     List<String> texts,
     float threshold,
     InputAssembler assembler
@@ -196,9 +222,9 @@ public final class Gliner2NerStrategy
     var preproc = BatchPreprocessor.preprocess(texts, assembler);
     int nonEmptyCount = preproc.nonEmptyCount();
 
-    var results = new ArrayList<Map<String, List<EntitySpan>>>(batchSize);
+    var results = new ArrayList<NerOutput>(batchSize);
     for (int i = 0; i < batchSize; i++) {
-      results.add(Map.of());
+      results.add(NerOutput.empty());
     }
 
     // Short-circuit: all texts are empty
@@ -211,9 +237,17 @@ public final class Gliner2NerStrategy
     var inputs = preproc.inputs();
     var batchIndices = preproc.batchIndices();
 
+    // Every non-empty slot is fed to the graph as its own unpadded, all-ones-mask row; padding
+    // is added per bucket by the runtime and not counted. Slots whose count head decodes no
+    // span keep their token count with no spans.
     var textLens = new int[nonEmptyCount];
     for (int s = 0; s < nonEmptyCount; s++) {
-      textLens[s] = inputs[batchIndices[s]].textLen();
+      var input = inputs[batchIndices[s]];
+      textLens[s] = input.textLen();
+      results.set(
+        batchIndices[s],
+        new NerOutput(Map.of(), input.inputIds().length)
+      );
     }
 
     // 2. Bucketed full-graph scoring: schema gathers happen in-graph from marker positions
@@ -269,7 +303,13 @@ public final class Gliner2NerStrategy
               textLens[si],
               threshold
             );
-            results.set(origIdx, GlinerNerSupport.groupByType(spans));
+            results.set(
+              origIdx,
+              new NerOutput(
+                GlinerNerSupport.groupByType(spans),
+                input.inputIds().length
+              )
+            );
           }
         }
       }
@@ -283,7 +323,7 @@ public final class Gliner2NerStrategy
     double durationMs = (System.nanoTime() - startNanos) / 1_000_000.0;
     long totalEntities = results
       .stream()
-      .mapToLong(m -> m.values().stream().mapToLong(List::size).sum())
+      .mapToLong(o -> o.spans().values().stream().mapToLong(List::size).sum())
       .sum();
     telemetry.record(durationMs, batchSize, totalEntities);
     return results;

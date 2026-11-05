@@ -21,6 +21,7 @@ import io.gravitee.lab.gliner4j.runtime.BaseRuntime;
 import io.gravitee.lab.gliner4j.runtime.RuntimeConfig;
 import io.gravitee.lab.gliner4j.schema.EntityDefinition;
 import io.gravitee.lab.gliner4j.schema.EntitySpan;
+import io.gravitee.lab.gliner4j.schema.NerOutput;
 import io.gravitee.lab.gliner4j.strategy.NerStrategy;
 import io.gravitee.lab.gliner4j.tokenizer.DjlTokenizerWrapper;
 import java.nio.file.Path;
@@ -229,6 +230,106 @@ public final class GLiNER4jNER implements AutoCloseable {
       return List.of();
     }
     return strategy.extractBatch(texts, threshold);
+  }
+
+  /**
+   * Extracts entities using the default threshold, also reporting the tokens the model read.
+   *
+   * @param text the input text to analyze
+   * @return the spans of {@link #extract(String)} and the input token count
+   * @see NerStrategy#extractWithUsage(String, float) for the exact token count definition
+   */
+  public NerOutput extractWithUsage(String text) {
+    return strategy.extractWithUsage(text, config.getDefaultThreshold());
+  }
+
+  /**
+   * Extracts entities with a custom threshold, also reporting the tokens the model read.
+   *
+   * @param text the input text to analyze
+   * @param threshold minimum confidence score (0..1) for span inclusion
+   * @return the spans of {@link #extract(String, float)} and the input token count
+   * @see NerStrategy#extractWithUsage(String, float) for the exact token count definition
+   */
+  public NerOutput extractWithUsage(String text, float threshold) {
+    return strategy.extractWithUsage(text, threshold);
+  }
+
+  /**
+   * Extracts entities using per-call entity definitions and the default threshold, also
+   * reporting the tokens the model read.
+   *
+   * @param text the input text to analyze
+   * @param entities the entity types to extract (overrides the entities provided at load time)
+   * @return the spans of {@link #extract(String, List)} and the input token count
+   * @see NerStrategy#extractWithUsage(String, float) for the exact token count definition
+   */
+  public NerOutput extractWithUsage(
+    String text,
+    List<EntityDefinition> entities
+  ) {
+    return strategy.extractWithUsage(
+      text,
+      entities,
+      config.getDefaultThreshold()
+    );
+  }
+
+  /**
+   * Extracts entities using per-call entity definitions and a custom threshold, also reporting
+   * the tokens the model read.
+   *
+   * @param text the input text to analyze
+   * @param entities the entity types to extract (overrides the entities provided at load time)
+   * @param threshold minimum confidence score (0..1) for span inclusion
+   * @return the spans of {@link #extract(String, List, float)} and the input token count
+   * @see NerStrategy#extractWithUsage(String, float) for the exact token count definition
+   */
+  public NerOutput extractWithUsage(
+    String text,
+    List<EntityDefinition> entities,
+    float threshold
+  ) {
+    return strategy.extractWithUsage(text, entities, threshold);
+  }
+
+  /**
+   * Extracts entities from multiple texts in batch using the default threshold, also reporting
+   * the tokens the model read per text.
+   *
+   * @param texts the input texts to analyze
+   * @return one output per input text (same order); empty list for a null input
+   * @see NerStrategy#extractBatchWithUsage(List, float) for the exact token count definition
+   */
+  public List<NerOutput> extractBatchWithUsage(List<String> texts) {
+    if (texts == null) {
+      return List.of();
+    }
+    return strategy.extractBatchWithUsage(texts, config.getDefaultThreshold());
+  }
+
+  /**
+   * Extracts entities from multiple texts in batch with a custom threshold, also reporting the
+   * tokens the model read per text. Each output's count is what
+   * {@link #extractWithUsage(String, float)} reports for that text alone; batch padding is not
+   * counted. Exception: the llama.cpp bi-encoder caches label embeddings, so its label rows are
+   * counted only on the call that encodes them (on a cold cache, the first text of the batch that
+   * runs the model carries them all); see
+   * {@link NerStrategy#extractBatchWithUsage(List, float)}.
+   *
+   * @param texts the input texts to analyze
+   * @param threshold minimum confidence score (0..1) for span inclusion
+   * @return one output per input text (same order); empty list for a null input
+   * @see NerStrategy#extractBatchWithUsage(List, float) for the exact token count definition
+   */
+  public List<NerOutput> extractBatchWithUsage(
+    List<String> texts,
+    float threshold
+  ) {
+    if (texts == null) {
+      return List.of();
+    }
+    return strategy.extractBatchWithUsage(texts, threshold);
   }
 
   @Override
